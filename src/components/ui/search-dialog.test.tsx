@@ -60,7 +60,7 @@ describe('SearchDialog', () => {
 
   it('calls onClose when overlay is clicked', async () => {
     render(<SearchDialog onClose={onClose} />)
-    const overlay = document.querySelector('.fixed.inset-0.bg-overlay')!
+    const overlay = document.querySelector('.fixed.inset-0')!
     await userEvent.click(overlay)
     expect(onClose).toHaveBeenCalledOnce()
   })
