@@ -29,7 +29,7 @@ function syncThemeColorMeta(color: string) {
   metas.forEach(meta => { meta.content = color })
 }
 
-function notifyEmbeddingParent(themeName: string, isDark: boolean) {
+function notifyEmbeddingParent(themeName: string, isDark: boolean, colors: Record<string, string>) {
   if (window.parent === window) return
 
   const referrer = document.referrer
@@ -43,7 +43,24 @@ function notifyEmbeddingParent(themeName: string, isDark: boolean) {
   }
 
   // Notify embedding parents so outer demo chrome can match the active theme.
-  window.parent.postMessage({ type: 'theme-changed', theme: themeName, isDark }, targetOrigin)
+  window.parent.postMessage({
+    type: 'theme-changed',
+    theme: themeName,
+    isDark,
+    colors: {
+      bg: colors['--color-bg'],
+      sidebar: colors['--color-bg-sidebar'],
+      header: colors['--color-bg-header'],
+      input: colors['--color-bg-input'],
+      subtle: colors['--color-bg-subtle'],
+      text: colors['--color-text'],
+      muted: colors['--color-muted'],
+      accent: colors['--color-accent'],
+      accentText: colors['--color-accent-text'],
+      border: colors['--color-border'],
+      hover: colors['--color-hover'],
+    },
+  }, targetOrigin)
 }
 
 function applyTheme(themeName: string, isDark: boolean) {
@@ -63,7 +80,7 @@ function applyTheme(themeName: string, isDark: boolean) {
     syncThemeColorMeta(bg)
   }
 
-  notifyEmbeddingParent(theme.name, isDark)
+  notifyEmbeddingParent(theme.name, isDark, colors)
 }
 
 export function useTheme(isDark: boolean) {

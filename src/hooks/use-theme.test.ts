@@ -79,9 +79,27 @@ describe('useTheme', () => {
 
     const { result } = renderHook(() => useTheme(false))
     act(() => result.current.setTheme('tokyo-night'))
+    const theme = themes.find(t => t.name === 'tokyo-night')!
 
     expect(postMessage).toHaveBeenLastCalledWith(
-      { type: 'theme-changed', theme: 'tokyo-night', isDark: false },
+      {
+        type: 'theme-changed',
+        theme: 'tokyo-night',
+        isDark: false,
+        colors: {
+          bg: theme.colors.light['--color-bg'],
+          sidebar: theme.colors.light['--color-bg-sidebar'],
+          header: theme.colors.light['--color-bg'],
+          input: theme.colors.light['--color-bg'],
+          subtle: theme.colors.light['--color-bg-subtle'],
+          text: theme.colors.light['--color-text'],
+          muted: theme.colors.light['--color-muted'],
+          accent: theme.colors.light['--color-accent'],
+          accentText: theme.colors.light['--color-accent-text'],
+          border: theme.colors.light['--color-border'],
+          hover: theme.colors.light['--color-hover'],
+        },
+      },
       'https://oksskolten.com',
     )
   })
