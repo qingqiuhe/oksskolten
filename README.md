@@ -1,7 +1,15 @@
 <p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://assets.babarot.dev/files/2026/03/aeeb41766d888243.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://assets.babarot.dev/files/2026/03/c11e0ce04f0d06e6.png">
+    <img alt="Inbox" src="https://assets.babarot.dev/files/2026/03/c11e0ce04f0d06e6.png" alt="Oksskolten — The AI-native RSS reader">
+  </picture>
+</p>
+<!--
+<p align="center">
   <img src="./public/og-image.png" alt="Oksskolten — The AI-native RSS reader" width="640" />
 </p>
-
+-->
 
 <p align="center">
   <a href="https://github.com/babarot/reader/actions/workflows/test.yaml"><img src="https://github.com/babarot/reader/actions/workflows/test.yaml/badge.svg" alt="Tests" /></a>
@@ -15,31 +23,28 @@ Most RSS readers just show what the feed gives you — a title and maybe a summa
 
 ## See it in action
 
-**🕺 Live Demo → [demo.oksskolten.com](https://demo.oksskolten.com)**
+🕺 Live Demo → [demo.oksskolten.com](https://demo.oksskolten.com)
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/home-default-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/home-default-light.png">
-    <img alt="Home" src="docs/screenshots/home-default-dark.png" width="800">
+    <img alt="Home" src="docs/screenshots/home-default-dark.png" width="49%">
   </picture>
-</p>
-
-<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/inbox-default-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/inbox-default-light.png">
-    <img alt="Inbox" src="docs/screenshots/inbox-default-dark.png" width="32%">
+    <img alt="Inbox" src="docs/screenshots/inbox-default-dark.png" width="49%">
   </picture>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/article-chat-default-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/article-chat-default-light.png">
-    <img alt="Article" src="docs/screenshots/article-chat-default-dark.png" width="32%">
+    <img alt="Article" src="docs/screenshots/article-chat-default-dark.png" width="49%">
   </picture>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/appearance-default-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/appearance-default-light.png">
-    <img alt="Appearance" src="docs/screenshots/appearance-default-dark.png" width="32%">
+    <img alt="Appearance" src="docs/screenshots/appearance-default-dark.png" width="49%">
   </picture>
 </p>
 
