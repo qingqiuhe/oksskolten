@@ -155,6 +155,29 @@ export function updateFeed(
   return updatedFeed
 }
 
+export function bulkMoveFeedsToCategory(feedIds: number[], categoryId: number | null): void {
+  if (feedIds.length === 0) return
+  const placeholders = feedIds.map(() => '?').join(',')
+  getDb().transaction(() => {
+    getDb().prepare(`UPDATE feeds SET category_id = ? WHERE id IN (${placeholders})`).run(categoryId, ...feedIds)
+    getDb().prepare(`UPDATE articles SET category_id = ? WHERE feed_id IN (${placeholders})`).run(categoryId, ...feedIds)
+  })()
+
+  // Sync Meilisearch index for each affected feed
+  for (const feedId of feedIds) {
+    const docs = getDb().prepare(`
+      SELECT id, feed_id, category_id, title,
+             COALESCE(full_text, '') AS full_text,
+             COALESCE(full_text_ja, '') AS full_text_ja,
+             lang,
+             COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
+             COALESCE(score, 0) AS score
+      FROM articles WHERE feed_id = ?
+    `).all(feedId) as MeiliArticleDoc[]
+    syncArticlesByFeedToSearch(docs)
+  }
+}
+
 export function deleteFeed(id: number): boolean {
   // Collect article IDs and delete feed atomically (CASCADE deletes articles)
   const { articleIds, deleted } = getDb().transaction(() => {

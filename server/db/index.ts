@@ -1,6 +1,6 @@
 export { getDb, _resetDb, runMigrations, bindNamedParams, runNamed, getNamed, allNamed } from './connection.js'
 export type { Category, Feed, FeedWithCounts, Article, ArticleListItem, ArticleDetail, Conversation, ChatMessage } from './types.js'
-export { getFeeds, getFeedById, getFeedByUrl, getEnabledFeeds, ensureClipFeed, getClipFeed, createFeed, updateFeed, deleteFeed, updateFeedError, updateFeedRateLimit, updateFeedRssUrl, updateFeedCacheHeaders, updateFeedSchedule, getFeedMetrics } from './feeds.js'
+export { getFeeds, getFeedById, getFeedByUrl, getEnabledFeeds, ensureClipFeed, getClipFeed, createFeed, updateFeed, deleteFeed, bulkMoveFeedsToCategory, updateFeedError, updateFeedRateLimit, updateFeedRssUrl, updateFeedCacheHeaders, updateFeedSchedule, getFeedMetrics } from './feeds.js'
 export { getArticles, getArticleByUrl, getArticleById, getArticlesByIds, checkArticleIds, markArticleSeen, markArticlesSeen, markAllSeenByFeed, markArticleBookmarked, getBookmarkCount, markArticleLiked, getLikeCount, recordArticleRead, insertArticle, updateArticleContent, getExistingArticleUrls, getRetryArticles, searchArticles, getReadingStats, markImagesArchived, clearImagesArchived, deleteArticle, updateScore, recalculateScores } from './articles.js'
 export { getCategories, getCategoryById, createCategory, updateCategory, deleteCategory, markAllSeenByCategory } from './categories.js'
 export { getSetting, upsertSetting, deleteSetting, getOrCreateJwtSecret } from './settings.js'

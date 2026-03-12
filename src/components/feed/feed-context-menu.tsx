@@ -100,6 +100,71 @@ export function FeedContextMenu({
   )
 }
 
+interface MultiSelectMenuProps {
+  children: ReactNode
+  selectedCount: number
+  categories: Array<{ id: number; name: string }>
+  onMoveToCategory: (categoryId: number | null) => void
+  onMarkAllRead: () => void
+  onFetch: () => void
+  onDelete: () => void
+}
+
+export function MultiSelectContextMenu({
+  children,
+  selectedCount,
+  categories,
+  onMoveToCategory,
+  onMarkAllRead,
+  onFetch,
+  onDelete,
+}: MultiSelectMenuProps) {
+  const { t } = useI18n()
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        {children}
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <div className="px-2 py-1.5 text-[11px] text-muted">
+          {t('feeds.selectedCount', { count: String(selectedCount) })}
+        </div>
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <FolderInput size={16} strokeWidth={1.5} />
+            {t('feeds.bulkMoveToCategory')}
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            <ContextMenuItem onSelect={() => onMoveToCategory(null)}>
+              {t('category.uncategorized')}
+            </ContextMenuItem>
+            {categories.map(cat => (
+              <ContextMenuItem key={cat.id} onSelect={() => onMoveToCategory(cat.id)}>
+                {cat.name}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuItem onSelect={onMarkAllRead}>
+          <CheckCheck size={16} strokeWidth={1.5} />
+          {t('feeds.bulkMarkAllRead')}
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={onFetch}>
+          <RefreshCw size={16} strokeWidth={1.5} />
+          {t('feeds.bulkFetch')}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={onDelete} className="text-error">
+          <Trash2 size={16} strokeWidth={1.5} />
+          {t('feeds.bulkDelete', { count: String(selectedCount) })}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}
+
 interface CategoryMenuProps {
   children: ReactNode
   onRename: () => void

@@ -5,6 +5,7 @@ import type { FeedWithCounts } from '../../shared/types'
 
 vi.mock('../lib/fetcher', () => ({
   apiPatch: vi.fn().mockResolvedValue(undefined),
+  apiPost: vi.fn().mockResolvedValue(undefined),
 }))
 
 import { apiPatch } from '../lib/fetcher'
@@ -77,7 +78,7 @@ describe('useFeedDragDrop', () => {
 
     expect(result.current.isDragging).toBe(true)
     expect(event.dataTransfer.effectAllowed).toBe('move')
-    expect(event.dataTransfer.getData('text/plain')).toBe('1')
+    expect(event.dataTransfer.getData('application/x-feed-ids')).toBe(JSON.stringify([1]))
   })
 
   it('handleDragOver sets dropEffect and dragOverTarget', () => {
@@ -138,7 +139,7 @@ describe('useFeedDragDrop', () => {
 
     // Build drop event reusing the same dataTransfer
     const dropEvent = makeDragEvent()
-    dropEvent.dataTransfer.setData('text/plain', '1')
+    dropEvent.dataTransfer.setData('application/x-feed-ids', JSON.stringify([1]))
 
     await act(async () => {
       await result.current.handleDrop(dropEvent, 5)
@@ -154,7 +155,7 @@ describe('useFeedDragDrop', () => {
   it('handleDrop skips if feed already in same category', async () => {
     const { result } = renderHook(() => useFeedDragDrop({ feeds, mutateFeeds }))
     const dropEvent = makeDragEvent()
-    dropEvent.dataTransfer.setData('text/plain', '2')
+    dropEvent.dataTransfer.setData('application/x-feed-ids', JSON.stringify([2]))
 
     await act(async () => {
       await result.current.handleDrop(dropEvent, 3) // feed 2 already in category 3
@@ -180,7 +181,7 @@ describe('useFeedDragDrop', () => {
     vi.mocked(apiPatch).mockRejectedValueOnce(new Error('Network error'))
     const { result } = renderHook(() => useFeedDragDrop({ feeds, mutateFeeds }))
     const dropEvent = makeDragEvent()
-    dropEvent.dataTransfer.setData('text/plain', '1')
+    dropEvent.dataTransfer.setData('application/x-feed-ids', JSON.stringify([1]))
 
     await act(async () => {
       await result.current.handleDrop(dropEvent, 5)
@@ -205,7 +206,7 @@ describe('useFeedDragDrop', () => {
   it('optimistic updater correctly maps feed category', async () => {
     const { result } = renderHook(() => useFeedDragDrop({ feeds, mutateFeeds }))
     const dropEvent = makeDragEvent()
-    dropEvent.dataTransfer.setData('text/plain', '1')
+    dropEvent.dataTransfer.setData('application/x-feed-ids', JSON.stringify([1]))
 
     await act(async () => {
       await result.current.handleDrop(dropEvent, 7)

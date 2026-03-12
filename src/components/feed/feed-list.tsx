@@ -1,7 +1,7 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import useSWR from 'swr'
-import { fetcher } from '../../lib/fetcher'
+import { fetcher, apiPost, apiDelete } from '../../lib/fetcher'
 import { useI18n } from '../../lib/i18n'
 import { MD_BREAKPOINT } from '../../lib/breakpoints'
 import { Inbox, Plus, ChevronRight, Bookmark, ThumbsUp, Clock, Paperclip, Search, Command, AlertTriangle, MessagesSquare } from 'lucide-react'
@@ -11,10 +11,11 @@ import { useFetchProgressContext } from '../../contexts/fetch-progress-context'
 import { toast } from 'sonner'
 import { useFeedActions } from '../../hooks/use-feed-actions'
 import { useFeedDragDrop } from '../../hooks/use-feed-drag-drop'
+import { useFeedSelection } from '../../hooks/use-feed-selection'
 import { useClipFeedId } from '../../hooks/use-clip-feed-id'
 import { FeedModal } from './feed-modal'
 import { ConfirmDialog } from '../ui/confirm-dialog'
-import { FeedContextMenu, CategoryContextMenu } from './feed-context-menu'
+import { FeedContextMenu, MultiSelectContextMenu, CategoryContextMenu } from './feed-context-menu'
 import { SidebarMenu } from '../layout/sidebar-menu'
 import { SidebarNavItem } from '../layout/sidebar-nav-item'
 import { FeedListHeader } from './feed-list-header'
@@ -130,6 +131,44 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
     return { categorized: catMap, uncategorized: uncat, clipFeedData: clip }
   }, [feeds])
 
+  // Flat ordered list of feed IDs matching render order (for shift-click range selection)
+  const orderedFeedIds = useMemo(() => {
+    const ids: number[] = []
+    for (const cat of categories) {
+      const catFeeds = categorized.get(cat.id) ?? []
+      for (const f of catFeeds) ids.push(f.id)
+    }
+    for (const f of uncategorized) ids.push(f.id)
+    return ids
+  }, [categories, categorized, uncategorized])
+
+  const {
+    selectedFeedIds: multiSelectedIds,
+    selectedCount: multiSelectedCount,
+    toggleSelect,
+    clearSelection,
+    isSelected: isMultiSelected,
+  } = useFeedSelection({ orderedFeedIds })
+
+  // For contiguous selection group border: determine if prev/next in render order is also selected
+  function selectionGroupPos(feedId: number) {
+    const idx = orderedFeedIds.indexOf(feedId)
+    const prevSelected = idx > 0 && multiSelectedIds.has(orderedFeedIds[idx - 1])
+    const nextSelected = idx < orderedFeedIds.length - 1 && multiSelectedIds.has(orderedFeedIds[idx + 1])
+    return { isFirst: !prevSelected, isLast: !nextSelected }
+  }
+
+  // Escape key clears multi-selection
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape' && multiSelectedCount > 0) {
+        clearSelection()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [multiSelectedCount, clearSelection])
+
   const {
     renaming, setRenaming,
     confirm, setConfirm,
@@ -160,6 +199,79 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
     handleDragStart, handleDragOver, handleDragLeave, handleDrop, handleDragEnd,
   } = useFeedDragDrop({ feeds, mutateFeeds })
 
+  // Clear selection after a successful drop
+  const origHandleDrop = handleDrop
+  const handleDropWithClear = async (e: React.DragEvent, categoryId: number | null) => {
+    await origHandleDrop(e, categoryId)
+    clearSelection()
+  }
+
+  // --- Bulk actions for multi-select ---
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+
+  const getSelectedFeeds = useCallback(
+    () => feeds.filter(f => multiSelectedIds.has(f.id) && f.type !== 'clip'),
+    [feeds, multiSelectedIds],
+  )
+
+  const handleBulkMoveToCategory = useCallback(async (categoryId: number | null) => {
+    const selected = getSelectedFeeds()
+    const toMove = selected.filter(f => f.category_id !== categoryId)
+    if (toMove.length === 0) return
+    const ids = toMove.map(f => f.id)
+    void mutateFeeds(
+      prev => prev ? { ...prev, feeds: prev.feeds.map(f => ids.includes(f.id) ? { ...f, category_id: categoryId } : f) } : prev,
+      { revalidate: false },
+    )
+    clearSelection()
+    try {
+      await apiPost('/api/feeds/bulk-move', { feed_ids: ids, category_id: categoryId })
+    } catch {
+      void mutateFeeds()
+    }
+  }, [getSelectedFeeds, mutateFeeds, clearSelection])
+
+  const handleBulkMarkAllRead = useCallback(async () => {
+    const selected = getSelectedFeeds()
+    clearSelection()
+    await Promise.all(selected.map(f => apiPost(`/api/feeds/${f.id}/mark-all-seen`)))
+    void mutateFeeds()
+    onMarkAllRead?.()
+  }, [getSelectedFeeds, mutateFeeds, clearSelection, onMarkAllRead])
+
+  const handleBulkFetch = useCallback(async () => {
+    const selected = getSelectedFeeds().filter(f => !f.disabled)
+    clearSelection()
+    for (const feed of selected) {
+      const result = await startFeedFetch(feed.id)
+      const name = feed.name
+      if (result.error) toast.error(t('toast.fetchError', { name }))
+      else if (result.totalNew > 0) toast.success(t('toast.fetchedArticles', { count: String(result.totalNew), name }))
+    }
+  }, [getSelectedFeeds, clearSelection, startFeedFetch, t])
+
+  const handleBulkDelete = useCallback(() => {
+    setBulkDeleteConfirm(true)
+  }, [])
+
+  const handleBulkDeleteConfirm = useCallback(async () => {
+    const selected = getSelectedFeeds()
+    const ids = selected.map(f => f.id)
+    void mutateFeeds(
+      prev => prev ? { ...prev, feeds: prev.feeds.filter(f => !ids.includes(f.id)) } : prev,
+      { revalidate: false },
+    )
+    setBulkDeleteConfirm(false)
+    clearSelection()
+    try {
+      await Promise.all(ids.map(id => apiDelete(`/api/feeds/${id}`)))
+    } catch {
+      // partial failure
+    }
+    void mutateFeeds()
+    if (feedId && ids.includes(Number(feedId))) void navigate('/inbox')
+  }, [getSelectedFeeds, mutateFeeds, clearSelection, feedId, navigate])
+
   const { settings } = useAppLayout()
   const showFeedActivity = settings.showFeedActivity
 
@@ -179,7 +291,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
     onClose()
   }
 
-  async function handleFeedClick(feed: FeedWithCounts) {
+  function handleFeedClick(e: React.MouseEvent, feed: FeedWithCounts) {
     if (suppressClick.current) {
       suppressClick.current = false
       return
@@ -188,6 +300,14 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
       setConfirm({ type: 'enable-feed', feed })
       return
     }
+    // Multi-select with Cmd/Ctrl or Shift
+    if (e.metaKey || e.ctrlKey || e.shiftKey) {
+      e.preventDefault()
+      toggleSelect(feed.id, e.metaKey || e.ctrlKey, e.shiftKey)
+      return
+    }
+    // Normal click — navigate and clear selection
+    clearSelection()
     selectFeed(feed.id)
   }
 
@@ -213,6 +333,87 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
       )
     }
 
+    const useMultiMenu = isMultiSelected(feed.id) && multiSelectedCount > 1
+
+    const button = (
+      <button
+        draggable={!isRenaming}
+        onDragStart={e => handleDragStart(e, feed, multiSelectedIds)}
+        onDragEnd={handleDragEnd}
+        onClick={e => handleFeedClick(e, feed)}
+        className={`w-full text-left ${indent ? 'pl-7' : 'pl-2'} pr-2 py-1.5 text-sm flex items-center justify-between outline-none transition-colors hover:bg-hover-sidebar ${
+          isMultiSelected(feed.id)
+            ? ''
+            : 'rounded-lg'
+        } ${
+          feed.disabled
+            ? 'text-muted'
+            : selectedFeedId === feed.id && multiSelectedCount === 0
+              ? 'font-medium text-accent'
+              : 'text-text'
+        }`}
+        style={isMultiSelected(feed.id) ? (() => {
+          const { isFirst, isLast } = selectionGroupPos(feed.id)
+          return {
+            backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)',
+            borderLeft: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
+            borderRight: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
+            borderTop: isFirst ? '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)' : 'none',
+            borderBottom: isLast ? '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)' : 'none',
+            borderRadius: `${isFirst ? '8px' : '0'} ${isFirst ? '8px' : '0'} ${isLast ? '8px' : '0'} ${isLast ? '8px' : '0'}`,
+          }
+        })() : undefined}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {(() => {
+            const domain = extractDomain(feed.url)
+            if (!domain) return null
+            return (
+              <img
+                src={`https://www.google.com/s2/favicons?sz=16&domain=${domain}`}
+                alt=""
+                width={16}
+                height={16}
+                className="shrink-0 opacity-70"
+              />
+            )
+          })()}
+          <span className="truncate">
+            {feed.disabled ? '⚠ ' : null}
+            {feed.name}
+          </span>
+          {!feed.disabled && feed.last_error && feed.article_count === 0 && (
+            <AlertTriangle size={13} className="text-warning shrink-0" />
+          )}
+          {showFeedActivity === 'on' && !feed.disabled && isFeedInactive(feed) && (
+            <span className="text-[10px] text-muted ml-1 shrink-0">inactive</span>
+          )}
+        </div>
+        {(() => {
+          const fp = progress.get(feed.id)
+          if (fp && fp.total > 0) return <FetchBadge fetched={fp.fetched} total={fp.total} />
+          if (feed.unread_count > 0 && !feed.disabled) return <UnreadBadge count={feed.unread_count} />
+          return null
+        })()}
+      </button>
+    )
+
+    if (useMultiMenu) {
+      return (
+        <MultiSelectContextMenu
+          key={feed.id}
+          selectedCount={multiSelectedCount}
+          categories={categories}
+          onMoveToCategory={handleBulkMoveToCategory}
+          onMarkAllRead={handleBulkMarkAllRead}
+          onFetch={handleBulkFetch}
+          onDelete={handleBulkDelete}
+        >
+          {button}
+        </MultiSelectContextMenu>
+      )
+    }
+
     return (
       <FeedContextMenu
         key={feed.id}
@@ -225,51 +426,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
         onFetch={() => handleFetchFeed(feed)}
         onReDetect={() => handleReDetectFeed(feed)}
       >
-        <button
-          draggable={!isRenaming}
-          onDragStart={e => handleDragStart(e, feed)}
-          onDragEnd={handleDragEnd}
-          onClick={() => handleFeedClick(feed)}
-          className={`w-full text-left ${indent ? 'pl-7' : 'pl-2'} pr-2 py-1.5 rounded-lg text-sm flex items-center justify-between outline-none transition-colors hover:bg-hover-sidebar ${
-            feed.disabled
-              ? 'text-muted'
-              : selectedFeedId === feed.id
-                ? 'font-medium text-accent'
-                : 'text-text'
-          }`}
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            {(() => {
-              const domain = extractDomain(feed.url)
-              if (!domain) return null
-              return (
-                <img
-                  src={`https://www.google.com/s2/favicons?sz=16&domain=${domain}`}
-                  alt=""
-                  width={16}
-                  height={16}
-                  className="shrink-0 opacity-70"
-                />
-              )
-            })()}
-            <span className="truncate">
-              {feed.disabled ? '⚠ ' : null}
-              {feed.name}
-            </span>
-            {!feed.disabled && feed.last_error && feed.article_count === 0 && (
-              <AlertTriangle size={13} className="text-warning shrink-0" />
-            )}
-            {showFeedActivity === 'on' && !feed.disabled && isFeedInactive(feed) && (
-              <span className="text-[10px] text-muted ml-1 shrink-0">inactive</span>
-            )}
-          </div>
-          {(() => {
-            const fp = progress.get(feed.id)
-            if (fp && fp.total > 0) return <FetchBadge fetched={fp.fetched} total={fp.total} />
-            if (feed.unread_count > 0 && !feed.disabled) return <UnreadBadge count={feed.unread_count} />
-            return null
-          })()}
-        </button>
+        {button}
       </FeedContextMenu>
     )
   }
@@ -307,7 +464,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
         key={category.id}
         onDragOver={e => handleDragOver(e, category.id)}
         onDragLeave={handleDragLeave}
-        onDrop={e => handleDrop(e, category.id)}
+        onDrop={e => handleDropWithClear(e, category.id)}
         className={`rounded-lg transition-colors ${dragOverTarget === category.id ? 'bg-hover-sidebar' : ''}`}
       >
         <CategoryContextMenu
@@ -418,7 +575,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
           <div
             onDragOver={e => handleDragOver(e, 'uncategorized')}
             onDragLeave={handleDragLeave}
-            onDrop={e => handleDrop(e, null)}
+            onDrop={e => handleDropWithClear(e, null)}
             className={`rounded-lg transition-colors ${dragOverTarget === 'uncategorized' ? 'bg-hover-sidebar' : ''}`}
           >
             {feedsData && uncategorized.length > 0
@@ -449,6 +606,17 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
       )}
 
       {searchOpen && <SearchDialog onClose={() => setSearchOpen(false)} />}
+
+      {bulkDeleteConfirm && (
+        <ConfirmDialog
+          title={t('feeds.bulkDelete', { count: String(multiSelectedCount) })}
+          message={t('feeds.bulkDeleteConfirm', { count: String(multiSelectedCount) })}
+          confirmLabel={t('feeds.delete')}
+          danger
+          onConfirm={handleBulkDeleteConfirm}
+          onCancel={() => setBulkDeleteConfirm(false)}
+        />
+      )}
 
       {confirm && (
         <ConfirmDialog

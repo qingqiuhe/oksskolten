@@ -324,6 +324,17 @@ const dict = {
   'category.moveToCategory': { ja: 'カテゴリに移動', en: 'Move to category' },
   'category.uncategorized': { ja: 'トップ', en: 'Top' },
 
+  // Multi-select
+  'feeds.selectedCount': { ja: '${count} 件選択中', en: '${count} feeds selected' },
+  'feeds.bulkMarkAllRead': { ja: 'すべて既読にする', en: 'Mark all as read' },
+  'feeds.bulkMoveToCategory': { ja: 'カテゴリに移動', en: 'Move to category' },
+  'feeds.bulkFetch': { ja: 'フェッチ', en: 'Fetch articles' },
+  'feeds.bulkDelete': { ja: '${count} 件削除', en: 'Delete ${count} feeds' },
+  'feeds.bulkDeleteConfirm': {
+    ja: '${count} 件のフィードを削除しますか？紐づく記事もすべて削除されます。',
+    en: 'Delete ${count} feeds? All associated articles will also be deleted.',
+  },
+
   // Highlight theme
   'settings.highlightTheme': { ja: 'コードハイライト', en: 'Code Highlighting' },
   'settings.highlightThemeDesc': { ja: '記事内のコードブロックに適用される配色です。「自動」は配色テーマに合わせて切り替わります', en: 'Applied to code blocks in articles. "Auto" switches based on the color theme' },

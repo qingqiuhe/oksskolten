@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { apiPatch } from '../lib/fetcher'
+import { apiPatch, apiPost } from '../lib/fetcher'
 import type { FeedWithCounts } from '../../shared/types'
 import type { KeyedMutator } from 'swr'
 
@@ -11,11 +11,27 @@ interface UseFeedDragDropOpts {
 export function useFeedDragDrop({ feeds, mutateFeeds }: UseFeedDragDropOpts) {
   const [dragOverTarget, setDragOverTarget] = useState<number | 'uncategorized' | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const [draggingCount, setDraggingCount] = useState(0)
 
-  function handleDragStart(e: React.DragEvent, feed: FeedWithCounts) {
-    e.dataTransfer.setData('text/plain', String(feed.id))
+  function handleDragStart(e: React.DragEvent, feed: FeedWithCounts, selectedFeedIds?: Set<number>) {
+    const feedIds = selectedFeedIds && selectedFeedIds.size > 1 && selectedFeedIds.has(feed.id)
+      ? Array.from(selectedFeedIds)
+      : [feed.id]
+
+    e.dataTransfer.setData('application/x-feed-ids', JSON.stringify(feedIds))
     e.dataTransfer.effectAllowed = 'move'
     setIsDragging(true)
+    setDraggingCount(feedIds.length)
+
+    // Custom drag image for multi-select
+    if (feedIds.length > 1) {
+      const ghost = document.createElement('div')
+      ghost.textContent = `${feedIds.length} feeds`
+      ghost.style.cssText = 'position:fixed;top:-1000px;left:-1000px;padding:4px 10px;border-radius:6px;font-size:12px;color:var(--color-text);background:var(--color-bg-sidebar);border:1px solid var(--color-border);pointer-events:none;white-space:nowrap;'
+      document.body.appendChild(ghost)
+      e.dataTransfer.setDragImage(ghost, 0, 0)
+      requestAnimationFrame(() => document.body.removeChild(ghost))
+    }
   }
 
   function handleDragOver(e: React.DragEvent, target: number | 'uncategorized') {
@@ -35,16 +51,47 @@ export function useFeedDragDrop({ feeds, mutateFeeds }: UseFeedDragDropOpts) {
     e.preventDefault()
     setDragOverTarget(null)
     setIsDragging(false)
-    const feedId = Number(e.dataTransfer.getData('text/plain'))
-    if (!feedId) return
-    const feed = feeds.find(f => f.id === feedId)
-    if (!feed || feed.category_id === categoryId) return
+    setDraggingCount(0)
+
+    let feedIds: number[]
+    const raw = e.dataTransfer.getData('application/x-feed-ids')
+    if (raw) {
+      try {
+        feedIds = JSON.parse(raw)
+      } catch {
+        return
+      }
+    } else {
+      // Fallback for legacy single-feed drag (shouldn't happen, but safe)
+      const plainId = Number(e.dataTransfer.getData('text/plain'))
+      if (!plainId) return
+      feedIds = [plainId]
+    }
+
+    // Filter out feeds already in the target category
+    const feedsToMove = feedIds.filter(id => {
+      const f = feeds.find(feed => feed.id === id)
+      return f && f.category_id !== categoryId
+    })
+    if (feedsToMove.length === 0) return
+
+    // Optimistic update
     void mutateFeeds(
-      prev => prev ? { ...prev, feeds: prev.feeds.map(f => f.id === feedId ? { ...f, category_id: categoryId } : f) } : prev,
+      prev => prev ? {
+        ...prev,
+        feeds: prev.feeds.map(f =>
+          feedsToMove.includes(f.id) ? { ...f, category_id: categoryId } : f,
+        ),
+      } : prev,
       { revalidate: false },
     )
+
     try {
-      await apiPatch(`/api/feeds/${feedId}`, { category_id: categoryId })
+      if (feedsToMove.length === 1) {
+        await apiPatch(`/api/feeds/${feedsToMove[0]}`, { category_id: categoryId })
+      } else {
+        await apiPost('/api/feeds/bulk-move', { feed_ids: feedsToMove, category_id: categoryId })
+      }
     } catch {
       void mutateFeeds()
     }
@@ -53,11 +100,13 @@ export function useFeedDragDrop({ feeds, mutateFeeds }: UseFeedDragDropOpts) {
   function handleDragEnd() {
     setDragOverTarget(null)
     setIsDragging(false)
+    setDraggingCount(0)
   }
 
   return {
     dragOverTarget,
     isDragging,
+    draggingCount,
     handleDragStart,
     handleDragOver,
     handleDragLeave,

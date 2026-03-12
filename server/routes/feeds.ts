@@ -9,6 +9,7 @@ import {
   createFeed,
   updateFeed,
   deleteFeed,
+  bulkMoveFeedsToCategory,
   markAllSeenByFeed,
   getBookmarkCount,
   getLikeCount,
@@ -169,6 +170,22 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       const feeds = getFeeds()
       const withCounts = feeds.find(f => f.id === feed.id)
       reply.send(withCounts || feed)
+    },
+  )
+
+  const BulkMoveBody = z.object({
+    feed_ids: z.array(z.number()).min(1, 'feed_ids must not be empty'),
+    category_id: z.number().nullable(),
+  })
+
+  api.post(
+    '/api/feeds/bulk-move',
+    { preHandler: [requireJson] },
+    async (request, reply) => {
+      const body = parseOrBadRequest(BulkMoveBody, request.body, reply)
+      if (!body) return
+      bulkMoveFeedsToCategory(body.feed_ids, body.category_id)
+      reply.status(204).send()
     },
   )
 
