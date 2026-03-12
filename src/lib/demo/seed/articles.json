@@ -17,7 +17,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-2d23h",
-    "created_at": "-2d23h"
+    "created_at": "-2d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 2,
@@ -37,7 +38,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-9d23h",
-    "created_at": "-9d23h"
+    "created_at": "-9d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 3,
@@ -57,7 +59,8 @@
     "bookmarked_at": "-18d20h",
     "liked_at": null,
     "fetched_at": "-18d23h",
-    "created_at": "-18d23h"
+    "created_at": "-18d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 4,
@@ -77,7 +80,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-29d23h",
-    "created_at": "-29d23h"
+    "created_at": "-29d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 5,
@@ -97,7 +101,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-37d23h",
-    "created_at": "-37d23h"
+    "created_at": "-37d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 6,
@@ -117,7 +122,8 @@
     "bookmarked_at": null,
     "liked_at": "-46d20h",
     "fetched_at": "-46d23h",
-    "created_at": "-46d23h"
+    "created_at": "-46d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 7,
@@ -137,7 +143,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-56d23h",
-    "created_at": "-56d23h"
+    "created_at": "-56d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 8,
@@ -157,7 +164,8 @@
     "bookmarked_at": "-66d20h",
     "liked_at": null,
     "fetched_at": "-66d23h",
-    "created_at": "-66d23h"
+    "created_at": "-66d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 9,
@@ -177,7 +185,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-76d23h",
-    "created_at": "-76d23h"
+    "created_at": "-76d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 10,
@@ -197,7 +206,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-84d23h",
-    "created_at": "-84d23h"
+    "created_at": "-84d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 11,
@@ -217,7 +227,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-0d23h",
-    "created_at": "-0d23h"
+    "created_at": "-0d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 12,
@@ -237,7 +248,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-27d23h",
-    "created_at": "-27d23h"
+    "created_at": "-27d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 13,
@@ -257,7 +269,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-40d23h",
-    "created_at": "-40d23h"
+    "created_at": "-40d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 14,
@@ -277,7 +290,8 @@
     "bookmarked_at": null,
     "liked_at": "-48d20h",
     "fetched_at": "-48d23h",
-    "created_at": "-48d23h"
+    "created_at": "-48d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 15,
@@ -297,7 +311,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-56d23h",
-    "created_at": "-56d23h"
+    "created_at": "-56d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 16,
@@ -317,7 +332,8 @@
     "bookmarked_at": "-66d20h",
     "liked_at": null,
     "fetched_at": "-66d23h",
-    "created_at": "-66d23h"
+    "created_at": "-66d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 17,
@@ -337,7 +353,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-76d23h",
-    "created_at": "-76d23h"
+    "created_at": "-76d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 18,
@@ -357,7 +374,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-82d23h",
-    "created_at": "-82d23h"
+    "created_at": "-82d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 19,
@@ -377,7 +395,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-12d23h",
-    "created_at": "-12d23h"
+    "created_at": "-12d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 20,
@@ -397,7 +416,8 @@
     "bookmarked_at": "-21d20h",
     "liked_at": null,
     "fetched_at": "-21d23h",
-    "created_at": "-21d23h"
+    "created_at": "-21d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 21,
@@ -417,7 +437,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-31d23h",
-    "created_at": "-31d23h"
+    "created_at": "-31d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 22,
@@ -437,7 +458,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-37d23h",
-    "created_at": "-37d23h"
+    "created_at": "-37d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 23,
@@ -457,7 +479,8 @@
     "bookmarked_at": null,
     "liked_at": "-48d20h",
     "fetched_at": "-48d23h",
-    "created_at": "-48d23h"
+    "created_at": "-48d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 24,
@@ -477,7 +500,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-54d23h",
-    "created_at": "-54d23h"
+    "created_at": "-54d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 25,
@@ -497,7 +521,8 @@
     "bookmarked_at": "-66d20h",
     "liked_at": null,
     "fetched_at": "-66d23h",
-    "created_at": "-66d23h"
+    "created_at": "-66d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 26,
@@ -517,7 +542,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-76d23h",
-    "created_at": "-76d23h"
+    "created_at": "-76d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 27,
@@ -537,7 +563,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-82d23h",
-    "created_at": "-82d23h"
+    "created_at": "-82d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 28,
@@ -557,7 +584,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-3d23h",
-    "created_at": "-3d23h"
+    "created_at": "-3d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 29,
@@ -577,7 +605,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-11d23h",
-    "created_at": "-11d23h"
+    "created_at": "-11d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 30,
@@ -597,7 +626,8 @@
     "bookmarked_at": "-20d20h",
     "liked_at": null,
     "fetched_at": "-20d23h",
-    "created_at": "-20d23h"
+    "created_at": "-20d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 31,
@@ -617,7 +647,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-28d23h",
-    "created_at": "-28d23h"
+    "created_at": "-28d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 32,
@@ -637,7 +668,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-38d23h",
-    "created_at": "-38d23h"
+    "created_at": "-38d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 33,
@@ -657,7 +689,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-55d23h",
-    "created_at": "-55d23h"
+    "created_at": "-55d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 34,
@@ -677,7 +710,8 @@
     "bookmarked_at": "-65d20h",
     "liked_at": null,
     "fetched_at": "-65d23h",
-    "created_at": "-65d23h"
+    "created_at": "-65d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 35,
@@ -697,7 +731,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-73d23h",
-    "created_at": "-73d23h"
+    "created_at": "-73d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 36,
@@ -717,7 +752,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-82d23h",
-    "created_at": "-82d23h"
+    "created_at": "-82d23h",
+    "translated_lang": "ja"
   },
   {
     "id": 37,
@@ -737,7 +773,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-4d3h",
-    "created_at": "-4d3h"
+    "created_at": "-4d3h",
+    "translated_lang": "ja"
   },
   {
     "id": 38,
@@ -757,7 +794,8 @@
     "bookmarked_at": "-18d20h",
     "liked_at": null,
     "fetched_at": "-4d7h",
-    "created_at": "-4d7h"
+    "created_at": "-4d7h",
+    "translated_lang": "ja"
   },
   {
     "id": 39,
@@ -777,7 +815,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-6d5h",
-    "created_at": "-6d5h"
+    "created_at": "-6d5h",
+    "translated_lang": "ja"
   },
   {
     "id": 40,
@@ -797,7 +836,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-6d7h",
-    "created_at": "-6d7h"
+    "created_at": "-6d7h",
+    "translated_lang": "ja"
   },
   {
     "id": 41,
@@ -817,7 +857,8 @@
     "bookmarked_at": null,
     "liked_at": "-47d20h",
     "fetched_at": "-7d7h",
-    "created_at": "-7d7h"
+    "created_at": "-7d7h",
+    "translated_lang": "ja"
   },
   {
     "id": 42,
@@ -837,7 +878,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-10d8h",
-    "created_at": "-10d8h"
+    "created_at": "-10d8h",
+    "translated_lang": "ja"
   },
   {
     "id": 43,
@@ -857,7 +899,8 @@
     "bookmarked_at": "-67d20h",
     "liked_at": null,
     "fetched_at": "-11d3h",
-    "created_at": "-11d3h"
+    "created_at": "-11d3h",
+    "translated_lang": "ja"
   },
   {
     "id": 44,
@@ -877,7 +920,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-13d8h",
-    "created_at": "-13d8h"
+    "created_at": "-13d8h",
+    "translated_lang": "ja"
   },
   {
     "id": 45,
@@ -897,7 +941,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-18d7h",
-    "created_at": "-18d7h"
+    "created_at": "-18d7h",
+    "translated_lang": "ja"
   },
   {
     "id": 46,
@@ -917,7 +962,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 47,
@@ -937,7 +983,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 48,
@@ -957,7 +1004,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 49,
@@ -977,7 +1025,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 50,
@@ -997,7 +1046,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 51,
@@ -1017,7 +1067,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 52,
@@ -1037,7 +1088,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 53,
@@ -1057,7 +1109,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 54,
@@ -1077,7 +1130,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 55,
@@ -1097,7 +1151,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 56,
@@ -1117,7 +1172,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 57,
@@ -1137,7 +1193,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 58,
@@ -1157,7 +1214,8 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   },
   {
     "id": 59,
@@ -1177,6 +1235,7 @@
     "bookmarked_at": null,
     "liked_at": null,
     "fetched_at": "-268d",
-    "created_at": "-268d"
+    "created_at": "-268d",
+    "translated_lang": "ja"
   }
 ]
