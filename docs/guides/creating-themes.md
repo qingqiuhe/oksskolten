@@ -1,6 +1,9 @@
 # Creating Themes
 
-This document explains how the color theme system works and how to create new themes.
+This document explains how the color theme system works and how to create new themes. There are two ways to add themes:
+
+1. **Custom themes (JSON import)** — Create a JSON file and import it via Settings. No code changes needed.
+2. **Built-in themes** — Add a theme definition to `src/data/themes.ts` (for themes shipped with the app).
 
 ## How It Works
 
@@ -12,6 +15,7 @@ Themes are defined as objects in the `themes` array in `src/data/themes.ts`. Eac
 |---|---|
 | `src/data/themes.ts` | Theme definitions (`Theme` interface, `themes` array) |
 | `src/data/highlightThemes.ts` | Code highlight theme definitions (families, preview colors, CSS resolution) |
+| `src/lib/theme-json.ts` | Custom theme JSON parsing, validation, and property name mapping |
 | `src/hooks/use-theme.ts` | Theme switching logic (localStorage, CSS variable application) |
 | `src/index.css` | CSS custom property initial values (fallback before theme is applied) |
 | `tailwind.config.ts` | Maps CSS variables to Tailwind color utilities |
@@ -65,11 +69,98 @@ These tokens can be omitted. When omitted, `--color-bg` is used automatically vi
 | `--color-bg-header` | `bg-bg-header` | Sticky header | `--color-bg` |
 | `--color-bg-input` | `bg-bg-input` | Text inputs, selects | `--color-bg` |
 
-## Adding a New Theme
+## Creating a Custom Theme (JSON Import)
 
-### 1. Add a theme definition
+Users can create and import custom themes without modifying the source code. Themes are defined as JSON and imported via the Settings > Appearance page.
 
-Add a new theme object to the end of the `themes` array in `src/data/themes.ts`.
+### JSON Format
+
+```json
+{
+  "name": "my-theme",
+  "label": "My Theme",
+  "colors": {
+    "light": {
+      "background": "#ffffff",
+      "background.sidebar": "#f0f0f2",
+      "background.subtle": "#f5f5f5",
+      "background.avatar": "#d8d8dc",
+      "text": "#1a1a1a",
+      "text.muted": "#6b7280",
+      "accent": "#2563eb",
+      "accent.text": "#ffffff",
+      "error": "#dc2626",
+      "border": "#e5e7eb",
+      "hover": "rgba(0, 0, 0, 0.04)",
+      "overlay": "rgba(0, 0, 0, 0.3)"
+    },
+    "dark": {
+      "background": "#111111",
+      "background.sidebar": "#080808",
+      "background.subtle": "#1a1a1a",
+      "background.avatar": "#2a2a2a",
+      "text": "#e8e8e8",
+      "text.muted": "#6b7280",
+      "accent": "#60a5fa",
+      "accent.text": "#ffffff",
+      "error": "#f87171",
+      "border": "#2a2a2a",
+      "hover": "rgba(255, 255, 255, 0.05)",
+      "overlay": "rgba(0, 0, 0, 0.5)"
+    }
+  }
+}
+```
+
+Both `light` and `dark` are required. Optional properties (`background.input`, `background.card`, `background.header`, `text.code`) can be omitted — they inherit from the base values via `resolveColors()`.
+
+### Property Name Mapping
+
+The JSON uses human-friendly names that are converted to CSS custom properties internally.
+
+| JSON key | CSS custom property | Required |
+|---|---|---|
+| `background` | `--color-bg` | Yes |
+| `background.sidebar` | `--color-bg-sidebar` | Yes |
+| `background.subtle` | `--color-bg-subtle` | Yes |
+| `background.avatar` | `--color-bg-avatar` | Yes |
+| `background.input` | `--color-bg-input` | No |
+| `background.card` | `--color-bg-card` | No |
+| `background.header` | `--color-bg-header` | No |
+| `text` | `--color-text` | Yes |
+| `text.muted` | `--color-muted` | Yes |
+| `text.code` | `--color-code` | No |
+| `accent` | `--color-accent` | Yes |
+| `accent.text` | `--color-accent-text` | Yes |
+| `error` | `--color-error` | Yes |
+| `border` | `--color-border` | Yes |
+| `hover` | `--color-hover` | Yes |
+| `overlay` | `--color-overlay` | Yes |
+
+### Importing
+
+1. Go to **Settings > Appearance**
+2. Scroll to the theme grid and click **"Choose File"** (to upload a `.json` file) or **"Paste JSON"** (to paste directly)
+3. The theme is validated, saved, and immediately applied
+
+Custom themes appear after the built-in themes with a delete button on hover. Up to 20 custom themes are allowed. Themes are stored in the database and synced across sessions.
+
+### Validation Rules
+
+- `name`: Required. Lowercase alphanumeric, hyphens, and underscores only (`/^[a-z0-9_-]+$/`). Must not conflict with built-in or existing custom theme names.
+- `label`: Required. Display name (max 50 characters).
+- `colors`: Both `light` and `dark` must be provided with all required properties.
+
+### Optional Fields
+
+- `indicatorStyle`: `"dot"` (default) or `"line"` — controls unread indicator shape
+- `highlight`: Code highlight theme family key (default: `"github"`) — see [Code Highlight Themes](#code-highlight-themes)
+
+---
+
+## Adding a Built-in Theme
+
+To add a theme to the built-in set (shipped with the app), add a theme object to the `themes` array in `src/data/themes.ts`.
 
 Minimal example (required tokens only):
 

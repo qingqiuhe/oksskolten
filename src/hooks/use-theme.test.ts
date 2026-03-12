@@ -36,7 +36,7 @@ describe('useTheme', () => {
 
   it('returns themes array', () => {
     const { result } = renderHook(() => useTheme(false))
-    expect(result.current.themes).toBe(themes)
+    expect(result.current.themes).toStrictEqual(themes)
   })
 
   it('applies CSS custom properties to document root', () => {

@@ -345,6 +345,22 @@ const dict = {
   'settings.highlightThemeAuto': { ja: '自動（テーマ連動）', en: 'Auto (follows theme)' },
   'settings.highlightThemeNone': { ja: 'なし', en: 'None' },
 
+  // Custom themes
+  'settings.customThemes': { ja: 'カスタムテーマ', en: 'Custom Themes' },
+  'settings.customThemesDesc': { ja: 'JSON ファイルまたはテキストからテーマをインポートできます', en: 'Import themes from a JSON file or text' },
+  'settings.importTheme': { ja: 'テーマをインポート', en: 'Import Theme' },
+  'settings.importFromFile': { ja: 'ファイルを選択', en: 'Choose File' },
+  'settings.importFromText': { ja: 'JSON を貼り付け', en: 'Paste JSON' },
+  'settings.importButton': { ja: 'インポート', en: 'Import' },
+  'settings.deleteTheme': { ja: 'テーマを削除', en: 'Delete theme' },
+  'settings.deleteThemeConfirm': { ja: 'このカスタムテーマを削除しますか？', en: 'Delete this custom theme?' },
+  'settings.themeImported': { ja: 'テーマをインポートしました', en: 'Theme imported successfully' },
+  'settings.themeDeleted': { ja: 'テーマを削除しました', en: 'Theme deleted' },
+  'settings.themeUpdated': { ja: 'テーマを更新しました', en: 'Theme updated successfully' },
+  'settings.editTheme': { ja: 'テーマを編集', en: 'Edit theme' },
+  'settings.updateButton': { ja: '更新', en: 'Update' },
+  'settings.themeLimit': { ja: 'カスタムテーマは最大20個までです', en: 'Maximum 20 custom themes allowed' },
+
   // Mascot
   'settings.mascot': { ja: 'マスコット', en: 'Mascot' },
   'settings.mascotDesc': { ja: '記事を全て読み終えたときに表示されるピクセルアートのマスコットです', en: 'Pixel art mascot shown when all articles are read' },

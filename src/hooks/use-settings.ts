@@ -15,6 +15,7 @@ import { useArticleFont } from './use-article-font'
 import { useLayout } from './use-layout'
 import { useMascot, type MascotChoice } from './use-mascot'
 import type { LayoutName } from '../data/layouts'
+import type { Theme } from '../data/themes'
 import { fetcher, apiPatch, authHeaders } from '../lib/fetcher'
 
 /** Debounce delay (ms) before syncing settings to backend */
@@ -40,11 +41,18 @@ interface Prefs {
   'summary.model': string | null
   'translate.provider': string | null
   'translate.model': string | null
+  'custom_themes': string | null
 }
 
 export function useSettings() {
   const { isDark, colorMode, setColorMode } = useDarkMode()
-  const { themeName, setTheme, themes } = useTheme(isDark)
+  const [customThemes, setCustomThemesState] = useState<Theme[]>(() => {
+    try {
+      const stored = localStorage.getItem('custom-themes')
+      return stored ? JSON.parse(stored) : []
+    } catch { return [] }
+  })
+  const { themeName, setTheme, themes } = useTheme(isDark, customThemes)
   const { dateMode, setDateMode } = useDateMode()
   const { autoMarkRead, setAutoMarkRead } = useAutoMarkRead()
   const { showUnreadIndicator, setShowUnreadIndicator } = useUnreadIndicator()
@@ -160,6 +168,19 @@ export function useSettings() {
     }
   }, [prefs, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setLayout, setMascot, setHighlightTheme, setArticleFont])
 
+  // Hydrate custom themes from DB
+  useEffect(() => {
+    if (!prefs) return
+    const raw = prefs['custom_themes']
+    if (raw && !dirtyKeysRef.current.has('custom_themes')) {
+      try {
+        const parsed = JSON.parse(raw) as Theme[]
+        setCustomThemesState(parsed)
+        localStorage.setItem('custom-themes', raw)
+      } catch { /* ignore malformed */ }
+    }
+  }, [prefs])
+
   // Flush pending changes immediately via fetch keepalive (survives page unload)
   const flushNow = useCallback(() => {
     if (timerRef.current) {
@@ -274,6 +295,19 @@ export function useSettings() {
     scheduleSave()
   }, [setHighlightTheme, scheduleSave])
 
+  // Custom themes setter: updates local state + syncs JSON blob to DB
+  const setCustomThemes = useCallback((updater: (prev: Theme[]) => Theme[]) => {
+    setCustomThemesState(prev => {
+      const next = updater(prev)
+      const json = JSON.stringify(next)
+      localStorage.setItem('custom-themes', json)
+      dirtyKeysRef.current.add('custom_themes')
+      pendingRef.current['custom_themes'] = json
+      scheduleSave()
+      return next
+    })
+  }, [scheduleSave])
+
   return {
     isDark,
     colorMode,
@@ -307,6 +341,8 @@ export function useSettings() {
     mascot,
     setMascot: syncedSetMascot,
     indicatorStyle,
+    customThemes,
+    setCustomThemes,
     chatProvider,
     setChatProvider: syncedSetChatProvider,
     chatModel,

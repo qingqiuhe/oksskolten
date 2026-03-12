@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { themes } from '../data/themes'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { themes as builtinThemes, type Theme } from '../data/themes'
 
 function getInitialTheme(): string {
   return localStorage.getItem('color-theme') || 'default'
@@ -63,8 +63,8 @@ function notifyEmbeddingParent(themeName: string, isDark: boolean, colors: Recor
   }, targetOrigin)
 }
 
-function applyTheme(themeName: string, isDark: boolean) {
-  const theme = themes.find(t => t.name === themeName) ?? themes[0]
+function applyTheme(themeName: string, isDark: boolean, allThemes: Theme[]) {
+  const theme = allThemes.find(t => t.name === themeName) ?? allThemes[0]
   const colors = resolveColors(isDark ? theme.colors.dark : theme.colors.light)
   const root = document.documentElement
   for (const [key, value] of Object.entries(colors)) {
@@ -83,12 +83,17 @@ function applyTheme(themeName: string, isDark: boolean) {
   notifyEmbeddingParent(theme.name, isDark, colors)
 }
 
-export function useTheme(isDark: boolean) {
+export function useTheme(isDark: boolean, customThemes: Theme[] = []) {
   const [themeName, setThemeName] = useState(getInitialTheme)
 
+  const themes = useMemo(
+    () => [...builtinThemes, ...customThemes],
+    [customThemes],
+  )
+
   useEffect(() => {
-    applyTheme(themeName, isDark)
-  }, [themeName, isDark])
+    applyTheme(themeName, isDark, themes)
+  }, [themeName, isDark, themes])
 
   const setTheme = useCallback((name: string) => {
     setThemeName(name)

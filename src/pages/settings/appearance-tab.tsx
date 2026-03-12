@@ -1,13 +1,17 @@
-import { useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useI18n } from '../../lib/i18n'
 import { highlightThemeFamilies } from '../../data/highlightThemes'
 import { articleFonts, FONT_SAMPLE_EN, FONT_SAMPLE_LOCALIZED, getSystemFontLabel } from '../../data/articleFonts'
 import { layouts, type LayoutName } from '../../data/layouts'
+import { themes as builtinThemes } from '../../data/themes'
 import { PreviewCard } from '../../components/settings/preview-card'
 import { useAppLayout } from '../../app'
 import { Separator } from '@/components/ui/separator'
 import { PixelDreamPuff, PixelSleepyGiant } from '../../components/ui/mascot'
 import type { MascotChoice } from '../../hooks/use-mascot'
+import { parseThemeJson, themeToJson } from '../../lib/theme-json'
+import type { Theme } from '../../data/themes'
+import { toast } from 'sonner'
 
 /** Derive preview colors from a theme's color definitions */
 function previewColorsFromTheme(colors: Record<string, string>) {
@@ -33,8 +37,10 @@ export function AppearanceTab() {
     layout, setLayout,
     mascot, setMascot,
     autoMarkRead,
+    customThemes, setCustomThemes,
   } = settings
   const { t, locale } = useI18n()
+  const [editingTheme, setEditingTheme] = useState<Theme | null>(null)
   const currentTheme = themes.find(th => th.name === themeName) ?? themes[0]
   const previewLight = previewColorsFromTheme(currentTheme.colors.light)
   const previewDark = previewColorsFromTheme(currentTheme.colors.dark)
@@ -245,7 +251,7 @@ export function AppearanceTab() {
         <h2 className="text-base font-semibold text-text mb-1">{t('settings.colorTheme')}</h2>
         <p className="text-xs text-muted mb-3">{t('settings.themeDesc')}</p>
         <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-          {themes.map(theme => {
+          {builtinThemes.map(theme => {
             const c = theme.colors[isDark ? 'dark' : 'light']
             return (
               <PreviewCard
@@ -269,7 +275,81 @@ export function AppearanceTab() {
               </PreviewCard>
             )
           })}
+
+          {/* Custom themes in the same grid */}
+          {customThemes.length > 0 && (
+            <h3 className="col-span-full text-sm font-medium text-text mt-2">{t('settings.customThemes')}</h3>
+          )}
+          {customThemes.map(theme => {
+            const c = theme.colors[isDark ? 'dark' : 'light']
+            return (
+              <div key={theme.name} className="relative group w-full">
+                <PreviewCard
+                  selected={themeName === theme.name}
+                  onClick={() => setTheme(theme.name)}
+                  label={theme.label}
+                  className="w-full"
+                >
+                  <div style={{ background: c['--color-bg'] }} className="w-full h-full flex">
+                    <div style={{ background: c['--color-bg-sidebar'] }} className="w-[30%] h-full p-2 space-y-1.5">
+                      <div style={{ background: c['--color-muted'] }} className="w-full h-1.5 rounded-full opacity-40" />
+                      <div style={{ background: c['--color-muted'] }} className="w-3/4 h-1.5 rounded-full opacity-40" />
+                    </div>
+                    <div className="flex-1 p-2 space-y-2">
+                      <div style={{ background: c['--color-muted'] }} className="w-full h-1.5 rounded-full opacity-30" />
+                      <div style={{ background: c['--color-muted'] }} className="w-3/4 h-1.5 rounded-full opacity-30" />
+                      <div className="flex-1" />
+                      <div style={{ background: c['--color-accent'] }} className="w-2 h-2 rounded-full" />
+                    </div>
+                  </div>
+                </PreviewCard>
+                <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    type="button"
+                    className="w-6 h-6 rounded-md bg-bg border border-border text-muted flex items-center justify-center hover:text-text transition-colors"
+                    title={t('settings.editTheme')}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setEditingTheme(theme)
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className="w-6 h-6 rounded-md bg-bg border border-border text-muted flex items-center justify-center hover:text-error transition-colors"
+                    title={t('settings.deleteTheme')}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (!confirm(t('settings.deleteThemeConfirm'))) return
+                      const deletedName = theme.name
+                      setCustomThemes(prev => prev.filter(ct => ct.name !== deletedName))
+                      if (themeName === deletedName) setTheme('default')
+                      if (editingTheme?.name === deletedName) setEditingTheme(null)
+                      toast.success(t('settings.themeDeleted'))
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
+
+        {/* Import */}
+        <CustomThemeImport
+          customThemes={customThemes}
+          setCustomThemes={setCustomThemes}
+          setTheme={setTheme}
+          editingTheme={editingTheme}
+          setEditingTheme={setEditingTheme}
+        />
       </section>
 
       <Separator />
@@ -417,5 +497,166 @@ export function AppearanceTab() {
       </section>
 
     </>
+  )
+}
+
+const MAX_CUSTOM_THEMES = 20
+
+function CustomThemeImport({
+  customThemes,
+  setCustomThemes,
+  setTheme,
+  editingTheme,
+  setEditingTheme,
+}: {
+  customThemes: Theme[]
+  setCustomThemes: (updater: (prev: Theme[]) => Theme[]) => void
+  setTheme: (name: string) => void
+  editingTheme: Theme | null
+  setEditingTheme: (theme: Theme | null) => void
+}) {
+  const { t } = useI18n()
+  const [jsonText, setJsonText] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [showTextArea, setShowTextArea] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const isEditing = editingTheme !== null
+
+  // When editingTheme changes, populate the text area
+  useEffect(() => {
+    if (editingTheme) {
+      setJsonText(JSON.stringify(themeToJson(editingTheme), null, 2))
+      setShowTextArea(true)
+      setError(null)
+    }
+  }, [editingTheme])
+
+  const doImport = useCallback((raw: string) => {
+    setError(null)
+    if (!isEditing && customThemes.length >= MAX_CUSTOM_THEMES) {
+      setError(t('settings.themeLimit'))
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      setError('Invalid JSON')
+      return
+    }
+    // When editing, allow the same name as the theme being edited
+    const existingNames = new Set(
+      customThemes
+        .filter(ct => !isEditing || ct.name !== editingTheme?.name)
+        .map(ct => ct.name),
+    )
+    const result = parseThemeJson(parsed, existingNames)
+    if ('error' in result) {
+      setError(result.error)
+      return
+    }
+    if (isEditing) {
+      // Replace the existing theme
+      setCustomThemes(prev =>
+        prev.map(ct => ct.name === editingTheme?.name ? result.theme : ct),
+      )
+      toast.success(t('settings.themeUpdated'))
+    } else {
+      setCustomThemes(prev => [...prev, result.theme])
+      toast.success(t('settings.themeImported'))
+    }
+    setTheme(result.theme.name)
+    setJsonText('')
+    setShowTextArea(false)
+    setEditingTheme(null)
+  }, [customThemes, setCustomThemes, setTheme, isEditing, editingTheme, setEditingTheme, t])
+
+  const handleFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') doImport(reader.result)
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }, [doImport])
+
+  const cancelEdit = useCallback(() => {
+    setEditingTheme(null)
+    setJsonText('')
+    setShowTextArea(false)
+    setError(null)
+  }, [setEditingTheme])
+
+  return (
+    <div className="mt-4 space-y-2">
+      {!isEditing && (
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={handleFile}
+          />
+          <button
+            type="button"
+            className="text-xs px-3 py-1.5 rounded-md border border-border text-text hover:bg-hover transition-colors"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {t('settings.importFromFile')}
+          </button>
+          <button
+            type="button"
+            className="text-xs px-3 py-1.5 rounded-md border border-border text-text hover:bg-hover transition-colors"
+            onClick={() => setShowTextArea(v => !v)}
+          >
+            {t('settings.importFromText')}
+          </button>
+        </div>
+      )}
+
+      {isEditing && (
+        <p className="text-xs text-muted">
+          {t('settings.editTheme')}: <span className="font-medium text-text">{editingTheme.label}</span>
+        </p>
+      )}
+
+      {showTextArea && (
+        <div className="space-y-2">
+          <textarea
+            className="w-full h-48 rounded-md border border-border bg-bg-input text-text text-xs font-mono p-2 resize-y focus:outline-none focus:ring-1 focus:ring-accent"
+            placeholder='{ "name": "my-theme", "label": "My Theme", "colors": { ... } }'
+            value={jsonText}
+            onChange={e => { setJsonText(e.target.value); setError(null) }}
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="text-xs px-3 py-1.5 rounded-md bg-accent text-accent-text hover:opacity-90 transition-opacity disabled:opacity-50"
+              disabled={!jsonText.trim()}
+              onClick={() => doImport(jsonText)}
+            >
+              {isEditing ? t('settings.updateButton') : t('settings.importButton')}
+            </button>
+            {isEditing && (
+              <button
+                type="button"
+                className="text-xs px-3 py-1.5 rounded-md border border-border text-muted hover:text-text hover:bg-hover transition-colors"
+                onClick={cancelEdit}
+              >
+                {t('settings.cancel')}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <p className="text-xs text-error">{error}</p>
+      )}
+    </div>
   )
 }
