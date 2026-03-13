@@ -4,12 +4,13 @@ import { Send } from 'lucide-react'
 import useSWR from 'swr'
 import { useChat } from '../hooks/use-chat'
 import { ChatPanel } from '../components/chat/chat-panel'
-import { useI18n } from '../lib/i18n'
+import { useI18n, isMessageKey } from '../lib/i18n'
+import type { TranslateFn } from '../lib/i18n'
 import { fetcher } from '../lib/fetcher'
 
 const RANDOM_GREETING_COUNT = 5
 
-function getGreeting(t: (key: any) => string, name: string): string {
+function getGreeting(t: TranslateFn, name: string): string {
   const hour = new Date().getHours()
 
   // Narrow greeting windows with name
@@ -20,7 +21,8 @@ function getGreeting(t: (key: any) => string, name: string): string {
   // Outside greeting windows — rotate hourly (deterministic, no storage needed)
   const epochHour = Math.floor(Date.now() / (1000 * 60 * 60))
   const idx = epochHour % RANDOM_GREETING_COUNT
-  return t(`home.greeting.random.${idx}`)
+  const key = `home.greeting.random.${idx}`
+  return isMessageKey(key) ? t(key) : ''
 }
 
 export function HomePage() {
@@ -34,7 +36,7 @@ export function HomePage() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   // Reset chat when logo is clicked (navigates to / with reset state)
-  const resetKey = (location.state as any)?.reset
+  const resetKey = (location.state as { reset?: number } | null)?.reset
   const lastResetRef = useRef<number | undefined>(undefined)
   useEffect(() => {
     if (resetKey && resetKey !== lastResetRef.current) {
@@ -61,7 +63,7 @@ export function HomePage() {
   const suggestions = useMemo(() =>
     suggestionsData?.suggestions?.map(s => {
       const params = s.params ? Object.fromEntries(Object.entries(s.params).map(([k, v]) => [k, String(v)])) : undefined
-      return { text: t(s.key as any, params), key: s.key }
+      return { text: isMessageKey(s.key) ? t(s.key, params) : s.key, key: s.key }
     }) ?? [
       { text: t('chat.suggestion.home.recommend'), key: 'recommend' },
       { text: t('chat.suggestion.home.unread'), key: 'unread' },

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import useSWR from 'swr'
 import { fetcher } from '../../lib/fetcher'
-import { useI18n } from '../../lib/i18n'
+import { useI18n, isMessageKey } from '../../lib/i18n'
 
 const ROTATION_INTERVAL = 3000
 
@@ -38,7 +38,7 @@ export function ChatPromptSuggestion({ context, onSelect }: ChatPromptSuggestion
   const prompts = useMemo(
     () => data?.suggestions?.map(s => {
       const params = s.params ? Object.fromEntries(Object.entries(s.params).map(([k, v]) => [k, String(v)])) : undefined
-      return { text: t(s.key as any, params), key: s.key }
+      return { text: isMessageKey(s.key) ? t(s.key, params) : s.key, key: s.key }
     }) ?? fallback,
     [data, fallback, t],
   )

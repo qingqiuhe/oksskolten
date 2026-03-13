@@ -143,12 +143,12 @@ export function useChat(articleId?: number, context?: 'home') {
       const content = JSON.parse(msg.content)
       if (msg.role === 'user') {
         // Find text content (skip tool_result)
-        const textBlock = content.find((b: any) => b.type === 'text')
+        const textBlock = content.find((b: { type: string; text?: string }) => b.type === 'text')
         if (textBlock) {
           displayMessages.push({ role: 'user', text: textBlock.text })
         }
       } else if (msg.role === 'assistant') {
-        const textBlock = content.find((b: any) => b.type === 'text')
+        const textBlock = content.find((b: { type: string; text?: string }) => b.type === 'text')
         if (textBlock) {
           displayMessages.push({ role: 'assistant', text: textBlock.text })
         }

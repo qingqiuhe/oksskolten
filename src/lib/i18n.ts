@@ -739,6 +739,11 @@ export const LocaleContext = createContext<LocaleContextValue>({
 
 export type TranslateFn = (key: MessageKey, params?: Record<string, string>) => string
 
+/** Check whether a string is a valid i18n message key. */
+export function isMessageKey(key: string): key is MessageKey {
+  return key in dict
+}
+
 export function useI18n() {
   const { locale, setLocale } = useContext(LocaleContext)
   const t = (key: MessageKey, params?: Record<string, string>): string => {
