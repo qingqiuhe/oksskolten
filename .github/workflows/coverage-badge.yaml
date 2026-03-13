@@ -44,15 +44,6 @@ jobs:
           generate_badge "server" artifacts/server/coverage-summary.json > /tmp/server-coverage.json
           generate_badge "client" artifacts/client/coverage-summary.json > /tmp/client-coverage.json
 
-      # TODO: public化したらこのステップを削除
-      # - name: Update Gist badges
-      #   env:
-      #     GH_TOKEN: ${{ secrets.GIST_TOKEN }}
-      #   run: |
-      #     gh gist edit 75622e092006ac0a17da48ef4a173028 -f server-coverage.json /tmp/server-coverage.json
-      #     gh gist edit 75622e092006ac0a17da48ef4a173028 -f client-coverage.json /tmp/client-coverage.json
-
-      # Public repo: push to badges branch
       - name: Push badge data to badges branch
         run: |
           git config user.name "github-actions[bot]"

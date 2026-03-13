@@ -12,7 +12,7 @@
 -->
 
 <p align="center">
-  <a href="https://github.com/babarot/reader/actions/workflows/test.yaml"><img src="https://github.com/babarot/reader/actions/workflows/test.yaml/badge.svg" alt="Tests" /></a>
+  <a href="https://github.com/babarot/oksskolten/actions/workflows/test.yaml"><img src="https://github.com/babarot/oksskolten/actions/workflows/test.yaml/badge.svg" alt="Tests" /></a>
   <a href="https://gist.github.com/babarot/75622e092006ac0a17da48ef4a173028#file-server-coverage-json"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/babarot/75622e092006ac0a17da48ef4a173028/raw/server-coverage.json&cacheSeconds=300" alt="Server Coverage" /></a>
   <a href="https://gist.github.com/babarot/75622e092006ac0a17da48ef4a173028#file-client-coverage-json"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/babarot/75622e092006ac0a17da48ef4a173028/raw/client-coverage.json&cacheSeconds=300" alt="Client Coverage" /></a>
 </p>
