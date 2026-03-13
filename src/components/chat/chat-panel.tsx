@@ -295,16 +295,16 @@ export function ChatPanel({ variant, chatState: externalChatState, articleId, co
   // Full variant (HomePage / ChatPage)
   return (
     <div className="flex flex-col h-full">
-      {linkedArticle && (
-        <ChatLinkedArticle
-          title={linkedArticle.title}
-          url={linkedArticle.url}
-          ogImage={linkedArticle.ogImage}
-        />
-      )}
       {/* Messages */}
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto overscroll-contain">
         <div className="max-w-2xl mx-auto px-4 py-4 space-y-3">
+          {linkedArticle && (
+            <ChatLinkedArticle
+              title={linkedArticle.title}
+              url={linkedArticle.url}
+              ogImage={linkedArticle.ogImage}
+            />
+          )}
           {messagesContent}
         </div>
       </div>
