@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, memo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useI18n } from '../../lib/i18n'
 import { isReadInSession } from '../../lib/readTracker'
@@ -344,7 +344,7 @@ function CompactCard({ article, dateMode, indicatorStyle, showUnreadIndicator, o
   )
 }
 
-export function ArticleCard(props: ArticleCardProps) {
+export const ArticleCard = memo(function ArticleCard(props: ArticleCardProps) {
   const { layout = 'list', isFeatured } = props
 
   switch (layout) {
@@ -358,4 +358,4 @@ export function ArticleCard(props: ArticleCardProps) {
     default:
       return <ListCard {...props} />
   }
-}
+})

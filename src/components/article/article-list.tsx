@@ -61,12 +61,12 @@ export const ArticleList = forwardRef<ArticleListHandle, object>(function Articl
   const readOnly = isHistory
   const { autoMarkRead, dateMode, indicatorStyle, layout, articleOpenMode } = settings
   const [overlayUrl, setOverlayUrl] = useState<string | null>(null)
-  const displayConfig: ArticleDisplayConfig = {
+  const displayConfig: ArticleDisplayConfig = useMemo(() => ({
     dateMode,
     indicatorStyle,
     showUnreadIndicator: settings.showUnreadIndicator === 'on',
     showThumbnails: settings.showThumbnails === 'on',
-  }
+  }), [dateMode, indicatorStyle, settings.showUnreadIndicator, settings.showThumbnails])
   const isGridLayout = layout === 'card' || layout === 'magazine'
   const { t } = useI18n()
   const { progress, startFeedFetch } = useFetchProgressContext()
