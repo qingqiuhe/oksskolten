@@ -355,12 +355,19 @@ Floor determination logic:
 The **oldest date** among three candidates is chosen as the floor, maximizing the number of displayed items.
 
 1. **Last 7 days**: `now - 7 days`
-2. **Latest 20 items**: The `published_at` of the 20th newest article (all if fewer than 20)
+2. **Latest 20 items**: The `published_at` of the 20th newest article
 3. **Oldest unread article**: If there are unread articles, their `MIN(published_at)`
+
+If fewer than 20 articles exist for the given scope, the floor is skipped entirely and all articles are returned.
 
 In other words, `max(7 days worth, 20 items)` is the base, and if unread articles go further back, the range extends to cover them. Conversely, if the unread range is narrower than 7 days or 20 items, the base takes precedence.
 
-`total` and `has_more` are based on the post-floor count. Articles with `published_at IS NULL` are always included regardless of the floor. The floor is not applied in Inbox (`unread=1`), Bookmarks, Likes, or History views.
+`total` and `has_more` are based on the post-floor count. When the floor hides articles, the response includes `total_without_floor` (the unfiltered total count) so the frontend can offer a "show older articles" action. Articles with `published_at IS NULL` are always included regardless of the floor.
+
+The floor is **not applied** in:
+- Inbox (`unread=1`), Bookmarks, Likes, History views
+- Clip feed views (saved articles should always be visible)
+- When `no_floor=1` query parameter is specified (used by the "show older articles" button)
 
 
 **GET /api/articles/search** — Article search (Meilisearch full-text search)
@@ -519,7 +526,9 @@ Batch response (without `stream` parameter):
 
 **POST /api/articles/:id/translate** — Article translation (on-demand)
 
-Returns the cached translation if `full_text_ja` already exists. Returns `400` if `full_text` is NULL. Returns `400` if `lang` is `"ja"`.
+Translates the article into the user's configured language (`general.language` setting). Returns the cached translation if `full_text_translated` exists and `translated_lang` matches the current language. If the language setting changes, stale translations are treated as absent and re-translated on next request.
+
+Returns `400` if `full_text` is NULL. Returns `400` if the article is already in the user's language.
 
 Query parameter `stream=1` for SSE streaming response (same format as summarize).
 

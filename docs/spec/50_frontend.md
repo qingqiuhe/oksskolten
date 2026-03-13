@@ -39,7 +39,8 @@ Paths ending with `.md` are treated as Markdown source view pages (`ArticleRawPa
 |---|---|
 | Library | SWR |
 | Pagination | Infinite scroll (`useSWRInfinite`, `limit=20` per page) |
-| Display range limit | Smart Floor — For feed/category views, adopts whichever range contains the most articles among three candidates: "last 1 week", "latest 20 articles", and "up to the oldest unread". Not applied to Inbox/Bookmarks/Likes/History |
+| Display range limit | Smart Floor — For feed/category views, adopts whichever range contains the most articles among three candidates: "last 1 week", "latest 20 articles", and "up to the oldest unread". Skipped if fewer than 20 articles exist. Not applied to Inbox/Bookmarks/Likes/History/Clips |
+| Show older articles | When Smart Floor hides articles, a "show older articles (N)" button appears at the end of the list. Clicking it re-fetches with `no_floor=1` to show all articles |
 | Scroll stop condition | Stops when response `has_more === false` |
 | Loading | Skeleton UI |
 | Error | Inline message + retry button |
@@ -116,3 +117,39 @@ Progressive Web App support via `vite-plugin-pwa`.
 | Cache strategy (General API) | NetworkFirst (24 hours, 5s timeout) |
 | Cache strategy (Images) | CacheFirst (30 days) |
 | Offline queue | Accumulates unsynced read IDs in IndexedDB (`reader-offline` DB) and batch-syncs via `POST /api/articles/batch-seen` when back online |
+| Update notification | When a new service worker is available, a persistent toast ("New version available") with a reload button is displayed via `sonner`. Clicking reload activates the new worker and refreshes the page |
+
+### Custom Theme Import
+
+Users can import custom color themes via JSON in `/settings/appearance`.
+
+| Item | Detail |
+|---|---|
+| Import method | Paste JSON into syntax-highlighted editor dialog, or load from file |
+| Sample theme | "Sample" button loads an Everforest theme as a starting point |
+| Edit | Previously imported custom themes can be edited via the same dialog |
+| Validation | Theme name must match `[a-z0-9_-]+`, cannot override builtin names, must include both `light` and `dark` variants with all required color keys |
+| Max custom themes | 20 |
+| Persistence | localStorage + DB sync |
+| Required color keys | `background`, `background.sidebar`, `background.subtle`, `background.avatar`, `text`, `text.muted`, `accent`, `accent.text`, `error`, `border`, `hover`, `overlay` |
+| Optional fields | `indicatorStyle` (`'line'` / `'dot'`), `highlight` (code block theme, default: `'github'`) |
+
+### Feed Multi-Select and Bulk Actions
+
+Multiple feeds can be selected in the sidebar for bulk operations.
+
+| Item | Detail |
+|---|---|
+| Select | Cmd/Ctrl + Click to toggle individual feed, Shift + Click for range selection |
+| Deselect | Escape key clears selection |
+| Exclusion | Clip feeds are excluded from multi-select |
+| Context menu | Right-click on selection to open bulk action menu |
+
+Supported bulk actions:
+
+| Action | Behavior |
+|---|---|
+| Move to Category | `POST /api/feeds/bulk-move` — moves selected feeds to a category |
+| Mark All Read | Calls `POST /api/feeds/:id/mark-all-seen` for each feed |
+| Fetch | Fetches each selected enabled feed sequentially |
+| Delete | Requires confirmation dialog. Deletes each feed via `DELETE /api/feeds/:id` |

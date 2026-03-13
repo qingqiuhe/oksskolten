@@ -22,6 +22,7 @@ Clipped articles belong to a special singleton feed called the "clip feed." This
 | Sidebar placement | Feed list section (with categories) | Special section (alongside Inbox, Bookmarks, and Likes) |
 | Global unread count | Included | Not included |
 | Category | Can belong to one | Not allowed |
+| Smart Floor | Applied | Not applied (all saved articles always visible) |
 | Article deletion | Not allowed (403) | Allowed (`DELETE /api/articles/:id`) |
 | Feed deletion | Allowed | Not allowed (403) |
 | Icon | Domain favicon | Archive icon |

@@ -355,12 +355,19 @@ GitHub OAuth の設定は `settings` テーブルに保存される（追加 env
 3つの候補日のうち **最も古い日付** をフロアとして採用し、表示件数が最大になるようにする。
 
 1. **直近1週間**: `now - 7 days`
-2. **最新20件**: 新しい方から20番目の記事の `published_at`（20件未満ならすべて）
+2. **最新20件**: 新しい方から20番目の記事の `published_at`
 3. **最古の未読記事**: 未読記事がある場合、その `MIN(published_at)`
+
+対象スコープの記事が20件未満の場合、フロアはスキップされ全件が返される。
 
 つまり `max(1週間分の件数, 20件)` をベースとし、未読がさらに古くまで遡る場合はそこまで拡張する。逆に未読の範囲が1週間や20件より狭い場合はベースが優先される。
 
-`total` と `has_more` はフロア適用後の件数に基づく。`published_at IS NULL` の記事はフロアに関係なく常に含まれる。Inbox（`unread=1`）、Bookmarks、Likes、History ビューではフロアは適用されない。
+`total` と `has_more` はフロア適用後の件数に基づく。フロアにより非表示の記事がある場合、レスポンスに `total_without_floor`（フロアなしの総件数）が含まれ、フロントエンドで「もっと読む」を提供できる。`published_at IS NULL` の記事はフロアに関係なく常に含まれる。
+
+フロアが**適用されない**ケース:
+- Inbox（`unread=1`）、Bookmarks、Likes、History ビュー
+- Clip フィードビュー（保存した記事は常に表示）
+- `no_floor=1` クエリパラメータ指定時（「もっと読む」ボタンで使用）
 
 
 **GET /api/articles/search** — 記事検索（Meilisearch 全文検索）
@@ -519,7 +526,9 @@ data: {"type":"done","summary":"...", "usage":{"input_tokens":1234,"output_token
 
 **POST /api/articles/:id/translate** — 記事翻訳（オンデマンド）
 
-既に `full_text_ja` がある場合はキャッシュを返す。`full_text` が NULL の場合は `400`。`lang` が `"ja"` の場合は `400`。
+ユーザーの設定言語（`general.language`）に翻訳する。`full_text_translated` が存在し `translated_lang` が現在の言語と一致する場合はキャッシュを返す。言語設定が変更された場合、古い翻訳は無効扱いとなり次回リクエスト時に再翻訳される。
+
+`full_text` が NULL の場合は `400`。記事が既にユーザーの言語の場合は `400`。
 
 クエリパラメータ `stream=1` でSSEストリーミング応答（形式は summarize と同様）。
 
