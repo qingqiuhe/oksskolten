@@ -50,7 +50,7 @@ export default defineConfig(({ mode }) => {
           name: 'Oksskolten',
           short_name: 'Oksskolten',
           description: 'Personal RSS Reader',
-          lang: 'ja',
+          lang: 'en',
           theme_color: '#ffffff',
           background_color: '#4D6782',
           display: 'standalone',
