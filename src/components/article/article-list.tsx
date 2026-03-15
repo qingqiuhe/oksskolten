@@ -56,7 +56,7 @@ export const ArticleList = forwardRef<ArticleListHandle, object>(function Articl
   const feedId = feedIdParam ? Number(feedIdParam) : (isClips && clipFeedId ? clipFeedId : undefined)
   const currentFeed = feedId && feedsData ? feedsData.feeds.find(f => f.id === feedId) : undefined
   const categoryId = categoryIdParam ? Number(categoryIdParam) : undefined
-  const unreadOnly = isInbox
+  const unreadOnly = isInbox || (!!categoryId && settings.categoryUnreadOnly === 'on')
   const bookmarkedOnly = isBookmarks
   const likedOnly = isLikes
   const readOnly = isHistory

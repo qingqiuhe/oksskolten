@@ -10,6 +10,7 @@ export function ReadingSection() {
     showUnreadIndicator, setShowUnreadIndicator,
     indicatorStyle,
     internalLinks, setInternalLinks,
+    categoryUnreadOnly, setCategoryUnreadOnly,
     showThumbnails, setShowThumbnails,
     showFeedActivity, setShowFeedActivity,
     chatPosition, setChatPosition,
@@ -359,6 +360,20 @@ export function ReadingSection() {
           ]}
           value={internalLinks}
           onChange={setInternalLinks}
+        />
+      </div>
+
+      <div className="mt-6">
+        <p className="text-sm text-text mb-1">{t('settings.categoryUnreadOnly')}</p>
+        <p className="text-xs text-muted mb-3">{t('settings.categoryUnreadOnlyDesc')}</p>
+        <RadioGroup
+          name="categoryUnreadOnly"
+          options={[
+            { value: 'on' as const, label: t('settings.categoryUnreadOnlyOn') },
+            { value: 'off' as const, label: t('settings.categoryUnreadOnlyOff') },
+          ]}
+          value={categoryUnreadOnly}
+          onChange={setCategoryUnreadOnly}
         />
       </div>
 

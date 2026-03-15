@@ -10,6 +10,7 @@ import { useShowThumbnails } from './use-show-thumbnails'
 import { useShowFeedActivity } from './use-show-feed-activity'
 import { useChatPosition } from './use-chat-position'
 import { useArticleOpenMode, type ArticleOpenMode } from './use-article-open-mode'
+import { useCategoryUnreadOnly } from './use-category-unread-only'
 import { useHighlightTheme } from './use-highlight-theme'
 import { useArticleFont } from './use-article-font'
 import { useLayout } from './use-layout'
@@ -33,6 +34,7 @@ interface Prefs {
   'appearance.font_family': string | null
   'reading.chat_position': string | null
   'reading.article_open_mode': string | null
+  'reading.category_unread_only': string | null
   'appearance.list_layout': string | null
   'appearance.mascot': string | null
   'chat.provider': string | null
@@ -66,6 +68,7 @@ export function useSettings() {
   const { showFeedActivity, setShowFeedActivity } = useShowFeedActivity()
   const { chatPosition, setChatPosition } = useChatPosition()
   const { articleOpenMode, setArticleOpenMode } = useArticleOpenMode()
+  const { categoryUnreadOnly, setCategoryUnreadOnly } = useCategoryUnreadOnly()
   const { layout, setLayout } = useLayout()
   const { mascot, setMascot } = useMascot()
   const [chatProvider, setChatProviderState] = useState<string | null>(null)
@@ -106,6 +109,8 @@ export function useSettings() {
   chatPositionRef.current = chatPosition
   const articleOpenModeRef = useRef(articleOpenMode)
   articleOpenModeRef.current = articleOpenMode
+  const categoryUnreadOnlyRef = useRef(categoryUnreadOnly)
+  categoryUnreadOnlyRef.current = categoryUnreadOnly
   const layoutRef = useRef(layout)
   layoutRef.current = layout
   const mascotRef = useRef(mascot)
@@ -140,6 +145,8 @@ export function useSettings() {
         validate: v => v === 'fab' || v === 'inline' },
       { key: 'reading.article_open_mode', setter: setArticleOpenMode, backfillRef: articleOpenModeRef,
         validate: v => v === 'page' || v === 'overlay' },
+      { key: 'reading.category_unread_only', setter: setCategoryUnreadOnly, backfillRef: categoryUnreadOnlyRef,
+        validate: v => v === 'on' || v === 'off' },
       { key: 'appearance.list_layout', setter: setLayout, backfillRef: layoutRef,
         validate: v => v === 'list' || v === 'card' || v === 'magazine' || v === 'compact' },
       { key: 'appearance.mascot', setter: setMascot, backfillRef: mascotRef,
@@ -169,7 +176,7 @@ export function useSettings() {
     if (Object.keys(backfill).length > 0) {
       apiPatch('/api/settings/preferences', backfill).catch(() => {})
     }
-  }, [prefs, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setLayout, setMascot, setHighlightTheme, setArticleFont])
+  }, [prefs, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setCategoryUnreadOnly, setLayout, setMascot, setHighlightTheme, setArticleFont])
 
   // Hydrate custom themes from DB
   useEffect(() => {
@@ -239,6 +246,7 @@ export function useSettings() {
     syncedSetShowFeedActivity,
     syncedSetChatPosition,
     syncedSetArticleOpenMode,
+    syncedSetCategoryUnreadOnly,
     syncedSetLayout,
     syncedSetArticleFont,
     syncedSetMascot,
@@ -266,6 +274,7 @@ export function useSettings() {
       syncedSetShowFeedActivity: make<'on' | 'off'>('reading.show_feed_activity', setShowFeedActivity),
       syncedSetChatPosition: make<'fab' | 'inline'>('reading.chat_position', setChatPosition),
       syncedSetArticleOpenMode: make<ArticleOpenMode>('reading.article_open_mode', setArticleOpenMode),
+      syncedSetCategoryUnreadOnly: make<'on' | 'off'>('reading.category_unread_only', setCategoryUnreadOnly),
       syncedSetLayout: make<LayoutName>('appearance.list_layout', setLayout),
       syncedSetArticleFont: make<string>('appearance.font_family', setArticleFont),
       syncedSetMascot: make<MascotChoice>('appearance.mascot', setMascot),
@@ -279,7 +288,7 @@ export function useSettings() {
     }
     // scheduleSave and dirtyKeysRef are stable refs; remaining setters are useState/useCallback-stable
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setLayout, setArticleFont, setMascot])
+  }, [setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setCategoryUnreadOnly, setLayout, setArticleFont, setMascot])
 
   // Special: theme setter updates 2 keys + resets highlight
   const syncedSetTheme = useCallback((name: string) => {
@@ -336,6 +345,8 @@ export function useSettings() {
     setChatPosition: syncedSetChatPosition,
     articleOpenMode,
     setArticleOpenMode: syncedSetArticleOpenMode,
+    categoryUnreadOnly,
+    setCategoryUnreadOnly: syncedSetCategoryUnreadOnly,
     layout,
     setLayout: syncedSetLayout,
     highlightTheme,

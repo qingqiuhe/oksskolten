@@ -295,6 +295,13 @@ const dict = {
   },
   'settings.internalLinksOn': { ja: 'オン', en: 'On' },
   'settings.internalLinksOff': { ja: 'オフ', en: 'Off' },
+  'settings.categoryUnreadOnly': { ja: 'カテゴリで未読のみ表示', en: 'Show Only Unread In Categories' },
+  'settings.categoryUnreadOnlyDesc': {
+    ja: 'カテゴリビューで未読記事のみを表示します（Inboxと同様の動作）',
+    en: 'Show only unread articles in category views (same behavior as Inbox)',
+  },
+  'settings.categoryUnreadOnlyOn': { ja: 'オン', en: 'On' },
+  'settings.categoryUnreadOnlyOff': { ja: 'オフ', en: 'Off' },
 
   // Language
   'settings.language': { ja: '言語', en: 'Language' },
