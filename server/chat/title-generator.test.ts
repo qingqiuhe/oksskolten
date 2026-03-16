@@ -49,7 +49,7 @@ describe('generateConversationTitle', () => {
     expect(mockCreateMessage).not.toHaveBeenCalled()
   })
 
-  it('uses anthropic provider for claude-code', async () => {
+  it('uses claude-code provider directly for claude-code', async () => {
     createConversation({ id: 'conv-4', article_id: null })
 
     mockCreateMessage.mockResolvedValue({ text: 'タイトル', inputTokens: 50, outputTokens: 10 })
@@ -71,5 +71,17 @@ describe('generateConversationTitle', () => {
 
     const conv = getConversationById('conv-5')
     expect(conv?.title).toBe('original')
+  })
+
+  it('does not update if generated title is too short', async () => {
+    createConversation({ id: 'conv-6', article_id: null })
+    updateConversation('conv-6', { title: 'ハーネスエンジニアリングのブログ出して。' })
+
+    mockCreateMessage.mockResolvedValue({ text: 'ハー', inputTokens: 50, outputTokens: 10 })
+
+    await generateConversationTitle('conv-6', 'test', 'response', 'anthropic')
+
+    const conv = getConversationById('conv-6')
+    expect(conv?.title).toBe('ハーネスエンジニアリングのブログ出して。')
   })
 })

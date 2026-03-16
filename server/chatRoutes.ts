@@ -70,7 +70,7 @@ export function registerChatApi(app: FastifyInstance): void {
 
       // Restore and repair previous messages so both backends see a valid history.
       const dbMessages = getChatMessages(conversationId)
-      const backend = getSetting('chat.provider') || 'anthropic'
+      const backend = getSetting('chat.provider') || TASK_DEFAULTS.chat.provider
       const repairedHistory = repairStoredConversation(dbMessages)
       if (repairedHistory.changed) {
         replaceChatMessages(

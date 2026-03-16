@@ -3,6 +3,7 @@ import { getProvider } from '../providers/llm/index.js'
 import { updateConversation } from '../db.js'
 
 const TITLE_MAX_LENGTH = 50
+const TITLE_MIN_LENGTH = 4
 
 /**
  * Generate a conversation title using the sub-agent (cheapest) model for the current provider.
@@ -17,9 +18,7 @@ export async function generateConversationTitle(
   const model = SUB_AGENT_MODELS[providerName]
   if (!model) return
 
-  // For claude-code, use anthropic provider with the sub-agent model
-  const effectiveProvider = providerName === 'claude-code' ? 'anthropic' : providerName
-  const provider = getProvider(effectiveProvider)
+  const provider = getProvider(providerName)
 
   const result = await provider.createMessage({
     model,
@@ -31,7 +30,7 @@ export async function generateConversationTitle(
   })
 
   const title = result.text.trim().slice(0, TITLE_MAX_LENGTH)
-  if (title) {
+  if (title.length >= TITLE_MIN_LENGTH) {
     updateConversation(conversationId, { title })
   }
 }
