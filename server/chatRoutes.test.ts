@@ -8,7 +8,6 @@ import {
   upsertSetting,
   getDb,
   getConversationById,
-  getConversations,
   getChatMessages,
   insertChatMessage,
 } from './db.js'
