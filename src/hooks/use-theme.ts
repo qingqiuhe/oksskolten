@@ -29,7 +29,23 @@ function syncThemeColorMeta(color: string) {
   metas.forEach(meta => { meta.content = color })
 }
 
-function notifyEmbeddingParent(themeName: string, isDark: boolean, colors: Record<string, string>) {
+function extractPalette(colors: Record<string, string>) {
+  return {
+    bg: colors['--color-bg'],
+    sidebar: colors['--color-bg-sidebar'],
+    header: colors['--color-bg-header'],
+    input: colors['--color-bg-input'],
+    subtle: colors['--color-bg-subtle'],
+    text: colors['--color-text'],
+    muted: colors['--color-muted'],
+    accent: colors['--color-accent'],
+    accentText: colors['--color-accent-text'],
+    border: colors['--color-border'],
+    hover: colors['--color-hover'],
+  }
+}
+
+function notifyEmbeddingParent(themeName: string, isDark: boolean, colors: Record<string, string>, theme: Theme) {
   if (window.parent === window) return
 
   const referrer = document.referrer
@@ -42,24 +58,17 @@ function notifyEmbeddingParent(themeName: string, isDark: boolean, colors: Recor
     return
   }
 
-  // Notify embedding parents so outer demo chrome can match the active theme.
+  // Send both light and dark palettes so the parent can switch on OS theme change.
+  const lightColors = resolveColors(theme.colors.light)
+  const darkColors = resolveColors(theme.colors.dark)
+
   window.parent.postMessage({
     type: 'theme-changed',
     theme: themeName,
     isDark,
-    colors: {
-      bg: colors['--color-bg'],
-      sidebar: colors['--color-bg-sidebar'],
-      header: colors['--color-bg-header'],
-      input: colors['--color-bg-input'],
-      subtle: colors['--color-bg-subtle'],
-      text: colors['--color-text'],
-      muted: colors['--color-muted'],
-      accent: colors['--color-accent'],
-      accentText: colors['--color-accent-text'],
-      border: colors['--color-border'],
-      hover: colors['--color-hover'],
-    },
+    colors: extractPalette(colors),
+    light: extractPalette(lightColors),
+    dark: extractPalette(darkColors),
   }, targetOrigin)
 }
 
@@ -80,7 +89,7 @@ function applyTheme(themeName: string, isDark: boolean, allThemes: Theme[]) {
     syncThemeColorMeta(bg)
   }
 
-  notifyEmbeddingParent(theme.name, isDark, colors)
+  notifyEmbeddingParent(theme.name, isDark, colors, theme)
 }
 
 export function useTheme(isDark: boolean, customThemes: Theme[] = []) {

@@ -81,24 +81,32 @@ describe('useTheme', () => {
     act(() => result.current.setTheme('tokyo-night'))
     const theme = themes.find(t => t.name === 'tokyo-night')!
 
+    const extractPalette = (colors: Record<string, string>) => ({
+      bg: colors['--color-bg'],
+      sidebar: colors['--color-bg-sidebar'] ?? colors['--color-bg'],
+      header: colors['--color-bg-header'] ?? colors['--color-bg'],
+      input: colors['--color-bg-input'] ?? colors['--color-bg'],
+      subtle: colors['--color-bg-subtle'],
+      text: colors['--color-text'],
+      muted: colors['--color-muted'],
+      accent: colors['--color-accent'],
+      accentText: colors['--color-accent-text'],
+      border: colors['--color-border'],
+      hover: colors['--color-hover'],
+    })
+
+    // resolveColors fills in defaults, so use the resolved light colors for the active palette
+    const resolvedLight = { '--color-bg-card': theme.colors.light['--color-bg'], '--color-bg-sidebar': theme.colors.light['--color-bg'], '--color-bg-header': theme.colors.light['--color-bg'], '--color-bg-input': theme.colors.light['--color-bg'], '--color-code': theme.colors.light['--color-text'], ...theme.colors.light }
+    const resolvedDark = { '--color-bg-card': theme.colors.dark['--color-bg'], '--color-bg-sidebar': theme.colors.dark['--color-bg'], '--color-bg-header': theme.colors.dark['--color-bg'], '--color-bg-input': theme.colors.dark['--color-bg'], '--color-code': theme.colors.dark['--color-text'], ...theme.colors.dark }
+
     expect(postMessage).toHaveBeenLastCalledWith(
       {
         type: 'theme-changed',
         theme: 'tokyo-night',
         isDark: false,
-        colors: {
-          bg: theme.colors.light['--color-bg'],
-          sidebar: theme.colors.light['--color-bg-sidebar'],
-          header: theme.colors.light['--color-bg'],
-          input: theme.colors.light['--color-bg'],
-          subtle: theme.colors.light['--color-bg-subtle'],
-          text: theme.colors.light['--color-text'],
-          muted: theme.colors.light['--color-muted'],
-          accent: theme.colors.light['--color-accent'],
-          accentText: theme.colors.light['--color-accent-text'],
-          border: theme.colors.light['--color-border'],
-          hover: theme.colors.light['--color-hover'],
-        },
+        colors: extractPalette(resolvedLight),
+        light: extractPalette(resolvedLight),
+        dark: extractPalette(resolvedDark),
       },
       'https://oksskolten.com',
     )
