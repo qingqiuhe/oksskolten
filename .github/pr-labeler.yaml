@@ -1,0 +1,8 @@
+changelog/skip:
+  - all:
+    - changed-files:
+      - all-globs-to-all-files:
+        - '!server/**'
+        - '!src/**'
+        - '!shared/**'
+        - '!migrations/**'
