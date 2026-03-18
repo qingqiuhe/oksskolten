@@ -12,8 +12,44 @@ permissions:
   actions: read
 
 jobs:
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      client: ${{ steps.filter.outputs.client }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+        with:
+          filters: |
+            server:
+              - 'server/**'
+              - 'shared/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.json'
+              - 'vitest.config.ts'
+              - 'eslint.config.js'
+            client:
+              - 'src/**'
+              - 'shared/**'
+              - 'vite.config.ts'
+              - 'tailwind.config.ts'
+              - 'postcss.config.js'
+              - 'index.html'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.json'
+              - 'vitest.config.ts'
+              - 'eslint.config.js'
+
   check:
     name: Typecheck & Lint
+    needs: detect-changes
+    if: needs.detect-changes.outputs.server == 'true' || needs.detect-changes.outputs.client == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -34,6 +70,8 @@ jobs:
 
   server-test:
     name: Server Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.server == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -87,6 +125,8 @@ jobs:
 
   client-test:
     name: Client Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.client == 'true'
     runs-on: ubuntu-latest
 
     steps:
