@@ -4,6 +4,7 @@ import { fetcher, apiPost } from '../../../lib/fetcher'
 import { PROVIDER_LABELS, LLM_API_PROVIDERS, TRANSLATE_SERVICE_PROVIDERS } from '../../../data/aiModels'
 import { Input } from '@/components/ui/input'
 import { FormField } from '@/components/ui/form-field'
+import { ExternalLink, CircleDot, CircleCheck, CircleSlash } from 'lucide-react'
 import type { Settings } from '../../../hooks/use-settings'
 
 type TFunc = (key: any, params?: Record<string, string>) => string
@@ -220,30 +221,45 @@ function ClaudeCodeCard({ t }: { t: TFunc }) {
       </div>
       <div className="rounded-md bg-bg-subtle px-3 py-2 text-xs text-muted select-none">
         <p>{t('chat.authNote')}</p>
-        <div className="mt-1.5 space-y-0.5">
-          <code className="block text-[11px] text-muted/70">{t('chat.authHowToLogin')}</code>
-          <code className="block text-[11px] text-muted/70">{t('chat.authHowToLogout')}</code>
+        <div className="mt-1.5 space-y-0.5 text-[11px] text-muted/70">
+          <div className="flex gap-1">
+            <span className="w-[5.5em] shrink-0">{t('chat.authHowToLoginLabel')}</span>
+            <code>claude auth login</code>
+          </div>
+          <div className="flex gap-1">
+            <span className="w-[5.5em] shrink-0">{t('chat.authHowToLogoutLabel')}</span>
+            <code>claude auth logout</code>
+          </div>
         </div>
-        <p className="mt-1.5 text-[11px] text-muted/70">
-          {t('chat.authNoteIssue')}
-          <a
-            href="https://github.com/anthropics/claude-code/issues/7100"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-muted"
-          >
-            #7100
-          </a>
-          {' / '}
-          <a
-            href="https://github.com/anthropics/claude-code/issues/22992"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-muted"
-          >
-            #22992
-          </a>
-        </p>
+        <details className="mt-1.5">
+          <summary className="text-[11px] text-muted/70 cursor-pointer select-none hover:text-muted">
+            {t('chat.authNoteIssue')}
+          </summary>
+          <div className="mt-1 ml-3 space-y-0.5 text-[11px] text-muted/70">
+            {([
+              { id: 228, title: 'OAuth 2.0 Device Authorization Grant', status: 'not_planned' },
+              { id: 7100, title: 'Headless/Remote Authentication', status: 'not_planned' },
+              { id: 22992, title: 'Device Code Flow (RFC 8628)', status: 'open' },
+              { id: 33269, title: 'OAuth login fails due to Cloudflare race condition', status: 'open' },
+              { id: 34575, title: 'MCP connector sync + setup-token', status: 'open' },
+            ] as { id: number; title: string; status: 'open' | 'completed' | 'not_planned' }[]).map(({ id, title, status }) => (
+              <a
+                key={id}
+                href={`https://github.com/anthropics/claude-code/issues/${id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 pl-2 hover:text-muted underline"
+              >
+                {status === 'open' && <CircleDot size={10} className="shrink-0 text-success" />}
+                {status === 'completed' && <CircleCheck size={10} className="shrink-0 text-purple-500" />}
+                {status === 'not_planned' && <CircleSlash size={10} className="shrink-0 text-muted/50" />}
+                <span className="tabular-nums w-[6ch] shrink-0">#{id}</span>
+                <span>{title}</span>
+                <ExternalLink size={10} className="shrink-0" />
+              </a>
+            ))}
+          </div>
+        </details>
       </div>
     </div>
   )
