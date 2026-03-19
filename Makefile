@@ -35,7 +35,9 @@ lint: ## Run ESLint
 
 lint-spec: ## Lint spec documents (structure policy)
 	conftest verify --policy policy/spec
-	bash scripts/test-spec-policy.sh
+	@echo
+	@echo conftest test --policy policy/spec
+	@bash scripts/test-spec-policy.sh
 
 build-demo: ## Build demo site (catches demo-mode export mismatches)
 	@npx vite build --mode demo 2>&1 \

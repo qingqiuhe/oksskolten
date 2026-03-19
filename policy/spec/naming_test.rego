@@ -8,24 +8,28 @@ import rego.v1
 
 h(depth, text) := {"type": "heading", "depth": depth, "children": [{"type": "text", "value": text}]}
 
-named_doc(filename, children) := {"type": "root", "children": children, "metadata": {"filename": filename, "all_filenames": []}}
+bto := {"type": "blockquote", "children": [{"type": "paragraph", "children": [{"type": "link", "url": "./01_overview.md", "children": [{"type": "text", "value": "Back to Overview"}]}]}]}
 
-named_doc_with_all(filename, all, children) := {"type": "root", "children": children, "metadata": {"filename": filename, "all_filenames": all}}
+named_doc(filename, children) := {"type": "root", "children": _inject_bto(filename, children), "metadata": {"filename": filename}}
+
+# Inject back-to-overview blockquote after H1 for non-overview files
+_inject_bto(filename, children) := result if {
+	filename == "01_overview.md"
+	result := children
+}
+
+_inject_bto(filename, children) := result if {
+	filename != "01_overview.md"
+	count(children) > 0
+	result := array.concat([children[0], bto], array.slice(children, 1, count(children)))
+}
 
 # ---------------------------------------------------------------------------
-# Rule 6: Filename format
+# Rule 7: Filename format
 # ---------------------------------------------------------------------------
 
 test_filename_valid_en if {
 	count(deny) == 0 with input as named_doc("80_feature_clip.md", [h(1, "Oksskolten Spec — Clip")])
-}
-
-test_filename_valid_ja if {
-	count(deny) == 0 with input as named_doc_with_all(
-		"80_feature_clip.ja.md",
-		["80_feature_clip.md", "80_feature_clip.ja.md"],
-		[h(1, "Oksskolten 実装仕様書 — クリップ")],
-	)
 }
 
 test_filename_valid_core if {
@@ -33,43 +37,19 @@ test_filename_valid_core if {
 }
 
 test_filename_invalid_no_prefix if {
-	"Filename must match {NN}_{snake_case}.md or .ja.md, got: 'overview.md'" in deny with input as named_doc("overview.md", [h(1, "Oksskolten Spec — Overview")])
+	"Filename must match {NN}_{snake_case}.md, got: 'overview.md'" in deny with input as named_doc("overview.md", [h(1, "Oksskolten Spec — Overview")])
 }
 
 test_filename_invalid_uppercase if {
-	"Filename must match {NN}_{snake_case}.md or .ja.md, got: '80_Feature_Clip.md'" in deny with input as named_doc("80_Feature_Clip.md", [h(1, "Oksskolten Spec — Clip")])
+	"Filename must match {NN}_{snake_case}.md, got: '80_Feature_Clip.md'" in deny with input as named_doc("80_Feature_Clip.md", [h(1, "Oksskolten Spec — Clip")])
 }
 
 test_filename_invalid_hyphen if {
-	"Filename must match {NN}_{snake_case}.md or .ja.md, got: '80_feature-clip.md'" in deny with input as named_doc("80_feature-clip.md", [h(1, "Oksskolten Spec — Clip")])
+	"Filename must match {NN}_{snake_case}.md, got: '80_feature-clip.md'" in deny with input as named_doc("80_feature-clip.md", [h(1, "Oksskolten Spec — Clip")])
 }
 
-# ---------------------------------------------------------------------------
-# Rule 7: .ja.md must have corresponding .md
-# ---------------------------------------------------------------------------
-
-test_ja_with_en_pair if {
-	count(deny) == 0 with input as named_doc_with_all(
-		"80_feature_clip.ja.md",
-		["80_feature_clip.md", "80_feature_clip.ja.md"],
-		[h(1, "Oksskolten 実装仕様書 — クリップ")],
-	)
-}
-
-test_ja_without_en_pair if {
-	"Japanese spec '99_orphan.ja.md' has no corresponding English version '99_orphan.md'" in deny with input as named_doc_with_all(
-		"99_orphan.ja.md",
-		["99_orphan.ja.md"],
-		[h(1, "Oksskolten 実装仕様書 — Orphan")],
-	)
-}
-
-test_en_only_is_ok if {
-	count(deny) == 0 with input as named_doc_with_all(
-		"84_feature_keyboard_navigation.md",
-		["84_feature_keyboard_navigation.md"],
-		[h(1, "Oksskolten Spec — Keyboard Navigation")],
-	)
+test_filename_ja_rejected if {
+	"Filename must match {NN}_{snake_case}.md, got: '80_feature_clip.ja.md'" in deny with input as named_doc("80_feature_clip.ja.md", [h(1, "Oksskolten Spec — Clip")])
 }
 
 # ---------------------------------------------------------------------------

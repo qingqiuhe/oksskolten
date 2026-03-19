@@ -15,6 +15,9 @@ Typical RSS readers only display the title and summary provided by the feed, req
 > - [81_feature_images.md](./81_feature_images.md) — Image Archive
 > - [82_feature_chat.md](./82_feature_chat.md) — Chat
 > - [83_feature_similarity.md](./83_feature_similarity.md) — Similar Article Detection
+> - [84_feature_keyboard_navigation.md](./84_feature_keyboard_navigation.md) — Keyboard Navigation
+> - [90_perf_retry_backoff.md](./90_perf_retry_backoff.md) — Exponential Backoff for Article Retry
+> - [91_perf_score_recalculation.md](./91_perf_score_recalculation.md) — Score Recalculation Optimization
 
 ## Tech Stack
 
