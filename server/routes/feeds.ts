@@ -27,12 +27,18 @@ import { queryRssBridge, inferCssSelectorBridge } from '../rss-bridge.js'
 import { parseOpml, generateOpml } from '../opml.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 
+const httpsUrl = z
+  .string({ error: 'url is required' })
+  .min(1, 'url is required')
+  .url('must be a valid URL')
+  .refine((u) => u.startsWith('https://'), { message: 'Only https:// URLs are allowed' })
+
 const DiscoverTitleQuery = z.object({
-  url: z.string({ error: 'url is required' }).min(1, 'url is required'),
+  url: httpsUrl,
 })
 
 const CreateFeedBody = z.object({
-  url: z.string({ error: 'url is required' }).min(1, 'url is required'),
+  url: httpsUrl,
   name: z.string().optional(),
   category_id: z.number().nullable().optional(),
 })

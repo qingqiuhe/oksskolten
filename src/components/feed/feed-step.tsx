@@ -15,6 +15,7 @@ type TranslateFn = ReturnType<typeof useI18n>['t']
 function localizeServerError(raw: string, t: TranslateFn): string {
   if (raw.includes('RSS could not be detected')) return t('modal.errorRssNotDetected')
   if (raw.includes('already exists')) return t('modal.errorAlreadyExists')
+  if (raw.includes('https://')) return t('modal.errorHttpsOnly')
   return raw || t('modal.genericError')
 }
 

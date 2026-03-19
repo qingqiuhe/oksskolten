@@ -225,7 +225,7 @@ describe('POST /api/feeds — RSS discovery pipeline', () => {
       method: 'POST',
       url: '/api/feeds',
       headers: json,
-      payload: { url: 'not-a-url' },
+      payload: { url: 'https://example.com/crash' },
     })
 
     // Feed is still created (the discovery error is caught inside step 1)
@@ -233,6 +233,28 @@ describe('POST /api/feeds — RSS discovery pipeline', () => {
     const events = parseSSE(res.body)
     const hasErrorOrDone = events.some(e => e.type === 'error' || e.type === 'done')
     expect(hasErrorOrDone).toBe(true)
+  })
+
+  it('rejects http:// URLs', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds',
+      headers: json,
+      payload: { url: 'http://example.com/feed' },
+    })
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('rejects invalid URLs', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds',
+      headers: json,
+      payload: { url: 'not-a-url' },
+    })
+
+    expect(res.statusCode).toBe(400)
   })
 
   it('fires fetchSingleFeed for feeds with rss_url', async () => {
