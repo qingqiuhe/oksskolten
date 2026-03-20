@@ -51,7 +51,7 @@ Command palette groups:
 - **Feeds** — Dynamic list from SWR, shown only when search input is non-empty (clip feeds excluded)
 - **Appearance** — Theme, layout, and color mode switching
 
-All items include English `keywords` for cross-language matching (e.g., typing "chat" matches "チャット" in Japanese locale).
+All items include English `keywords` for cross-language matching (e.g., typing "chat" matches the localized label in Japanese locale).
 
 Global shortcuts are managed by `useGlobalShortcuts` hook in `src/hooks/use-global-shortcuts.ts` and registered in `FeedList`.
 

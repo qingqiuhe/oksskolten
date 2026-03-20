@@ -354,7 +354,7 @@ Query parameters:
       "url": "https://blog.cloudflare.com/new-features-2025",
       "published_at": "2025-02-26T00:00:00Z",
       "lang": "en",
-      "summary": "AIエージェント向けに...",
+      "summary": "Markdown features designed for AI agents...",
       "excerpt": "This article explains...",
       "og_image": "https://blog.cloudflare.com/content/images/...",
       "seen_at": null,
@@ -425,10 +425,10 @@ The floor is **not applied** in:
   "url": "https://blog.cloudflare.com/new-features-2025",
   "published_at": "2025-02-26T00:00:00Z",
   "lang": "en",
-  "summary": "AIエージェント向けに...",
+  "summary": "Markdown features designed for AI agents...",
   "og_image": "https://blog.cloudflare.com/content/images/...",
   "full_text": "# Markdown for Agents\n\n...",
-  "full_text_ja": "# エージェント向けMarkdown\n\n...",
+  "full_text_ja": "# Markdown for Agents (translated)\n\n...",
   "seen_at": null,
   "read_at": null,
   "bookmarked_at": null,
@@ -535,8 +535,8 @@ Returns the cached summary if one already exists. Returns `400` if `full_text` i
 Query parameter `stream=1` for SSE streaming response:
 
 ```
-data: {"type":"delta","text":"AIエージェント..."}
-data: {"type":"delta","text":"向けに..."}
+data: {"type":"delta","text":"Markdown features"}
+data: {"type":"delta","text":" designed for AI agents..."}
 data: {"type":"done","summary":"...", "usage":{"input_tokens":1234,"output_tokens":456}}
 ```
 
@@ -544,7 +544,7 @@ Batch response (without `stream` parameter):
 
 ```json
 // Response: 200
-{ "text": "AIエージェント向けに...", "usage": { "input_tokens": 1234, "output_tokens": 456 } }
+{ "text": "Markdown features designed for AI agents...", "usage": { "input_tokens": 1234, "output_tokens": 456 } }
 ```
 
 

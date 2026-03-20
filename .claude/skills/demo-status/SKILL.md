@@ -30,8 +30,8 @@ npx wrangler deployments list
 If Cloudflare Builds fails with "build token has been deleted or rolled":
 
 1. Go to Cloudflare Dashboard → Workers → `oksskolten-demo` → Settings → Builds
-2. Click the edit icon next to "API トークン"
-3. Select "新しいトークンを作成する" to create a new token
+2. Click the edit icon next to "API Token"
+3. Select "Create a new token" to create a new token
 4. Save and retry the build
 
 This is often caused by Cloudflare API incidents rather than actual token expiry.
