@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.4.1](https://github.com/babarot/oksskolten/compare/v0.4.0...v0.4.1) - 2026-03-23
+### Bug fixes
+- Fix multibyte URL lookup returning 404 by @babarot in https://github.com/babarot/oksskolten/pull/31
+
 ## [v0.4.0](https://github.com/babarot/oksskolten/compare/v0.3.0...v0.4.0) - 2026-03-20
 ### New Features
 - Add Ollama as a self-hosted LLM provider by @asonas in https://github.com/babarot/oksskolten/pull/25
