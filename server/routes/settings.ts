@@ -37,6 +37,7 @@ const PREF_KEYS = [
   'reading.article_open_mode',
   'reading.category_unread_only',
   'reading.keyboard_navigation',
+  'reading.keybindings',
   'appearance.mascot',
   'appearance.highlight_theme',
   'appearance.font_family',
@@ -69,6 +70,7 @@ const PREF_ALLOWED: Record<PrefKey, string[] | null> = {
   'reading.article_open_mode': ['page', 'overlay'],
   'reading.category_unread_only': ['on', 'off'],
   'reading.keyboard_navigation': ['on', 'off'],
+  'reading.keybindings': null,
   'appearance.mascot': ['off', 'dream-puff', 'sleepy-giant'],
   'appearance.highlight_theme': null,
   'appearance.font_family': null,
@@ -181,6 +183,33 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
       const value = String(body[key])
       if (value === '') {
         deleteSetting(key)
+        updated = true
+        continue
+      }
+      // Custom validation for keybindings JSON
+      if (key === 'reading.keybindings') {
+        try {
+          const parsed = JSON.parse(value)
+          const validKeys = new Set(['next', 'prev', 'bookmark', 'openExternal'])
+          const keys = Object.keys(parsed)
+          if (keys.length !== 4 || !keys.every(k => validKeys.has(k))) {
+            reply.status(400).send({ error: 'Invalid keybindings: keys must be next, prev, bookmark, openExternal' })
+            return
+          }
+          const vals = Object.values(parsed) as string[]
+          if (!vals.every(v => typeof v === 'string' && v.length === 1)) {
+            reply.status(400).send({ error: 'Invalid keybindings: values must be single characters' })
+            return
+          }
+          if (new Set(vals).size !== vals.length) {
+            reply.status(400).send({ error: 'Invalid keybindings: duplicate key assignments are not allowed' })
+            return
+          }
+        } catch {
+          reply.status(400).send({ error: 'Invalid keybindings: must be valid JSON' })
+          return
+        }
+        upsertSetting(key, value)
         updated = true
         continue
       }

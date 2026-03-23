@@ -4,7 +4,7 @@
 
 ## Overview
 
-Vim-like keyboard navigation for the article list. Enables reading and performing actions on articles without using a mouse. Always enabled; no setting to disable.
+Vim-like keyboard navigation for the article list. Enables reading and performing actions on articles without using a mouse. Can be toggled on/off in Settings → Reading. Key bindings are customizable per action.
 
 ## Motivation
 
@@ -23,7 +23,7 @@ Managed state:
 
 ### Initial Focus
 
-When `focusedItemId` is `null` and `j` or `k` is pressed, focus moves to the first item in the list.
+When `focusedItemId` is `null` and the next or prev key is pressed, focus moves to the first item in the list.
 
 ## Design
 
@@ -59,10 +59,12 @@ Keyboard navigation behavior depends on the "Article Open Mode" setting (`articl
 
 #### Page Navigation Mode (`articleOpenMode === 'page'`)
 
+Default key bindings (customizable via Settings → Reading → Key Bindings):
+
 | Shortcut | Action |
 |---|---|
-| `j` | Move focus to the next article (does not open the article) |
-| `k` | Move focus to the previous article (does not open the article) |
+| `j` (default) | Move focus to the next article (does not open the article) |
+| `k` (default) | Move focus to the previous article (does not open the article) |
 | `Enter` | Open the focused article as a full page (`useNavigate` route transition) |
 | `Escape` | Clear focus |
 
@@ -70,8 +72,8 @@ Keyboard navigation behavior depends on the "Article Open Mode" setting (`articl
 
 | Shortcut | Action |
 |---|---|
-| `j` | Move focus to the next article and display it in the existing ArticleOverlay |
-| `k` | Move focus to the previous article and display it in the existing ArticleOverlay |
+| `j` (default) | Move focus to the next article and display it in the existing ArticleOverlay |
+| `k` (default) | Move focus to the previous article and display it in the existing ArticleOverlay |
 | `Escape` | If the overlay is open, close it (focus is preserved). Press Escape again to clear focus |
 
 In overlay mode, `Enter` is not used. Articles are automatically displayed in the overlay when focus moves via j/k.
@@ -80,8 +82,46 @@ In overlay mode, `Enter` is not used. Articles are automatically displayed in th
 
 | Shortcut | Action |
 |---|---|
-| `l` | Read Later (toggle bookmark: add if not bookmarked, remove if bookmarked) |
-| `;` | Open the original article in a new browser tab (`window.open(url, '_blank')`) |
+| `b` (default) | Read Later (toggle bookmark: add if not bookmarked, remove if bookmarked) |
+| `;` (default) | Open the original article in a new browser tab (`window.open(url, '_blank')`) |
+
+### Custom Key Bindings
+
+Users can reassign the four navigation/action keys via Settings → Reading → Key Bindings (visible only when keyboard navigation is enabled).
+
+#### KeyBindings Interface
+
+```typescript
+interface KeyBindings {
+  next: string       // default: 'j'
+  prev: string       // default: 'k'
+  bookmark: string   // default: 'b'
+  openExternal: string // default: ';'
+}
+```
+
+#### Constraints
+
+- Each value must be a single character
+- Duplicate key assignments are not allowed — the UI shows a warning and does not persist changes until duplicates are resolved
+- Invalid or incomplete data falls back to defaults
+
+#### Storage
+
+- **Client:** `localStorage` key `keybindings` (JSON string)
+- **Server:** `reading.keybindings` preference key (JSON string, validated on write)
+
+The `useKeybindingsSetting` hook manages local state and localStorage persistence. Server sync follows the same dual-storage pattern as other settings (see [ADR-001](../adr/001-settings-dual-storage.md)).
+
+#### Server Validation
+
+`PATCH /api/settings/preferences` validates `reading.keybindings`:
+
+- Must be valid JSON
+- Must contain exactly 4 keys: `next`, `prev`, `bookmark`, `openExternal`
+- Each value must be a single character string
+
+Returns `400` with a descriptive error if validation fails.
 
 ### Visual Feedback
 
@@ -101,12 +141,12 @@ Minimal ARIA attributes are applied:
 
 ### Boundary Behavior
 
-- Pressing `k` at the top of the list: no action (stays at the top)
-- Pressing `j` at the bottom of the list: no action (stays at the bottom). Does not trigger infinite scroll page loading
+- Pressing the prev key at the top of the list: no action (stays at the top)
+- Pressing the next key at the bottom of the list: no action (stays at the bottom). Does not trigger infinite scroll page loading
 
 ### Scroll Control
 
-When focus moves to an off-screen item via `j`/`k`, `scrollIntoView({ behavior: 'smooth', block: 'nearest' })` scrolls minimally to bring the focused item into view.
+When focus moves to an off-screen item via the next/prev key, `scrollIntoView({ behavior: 'smooth', block: 'nearest' })` scrolls minimally to bring the focused item into view.
 
 ### Read Status
 
@@ -125,11 +165,11 @@ const isInput =
   ) || (e.target as HTMLElement).isContentEditable
 ```
 
-j/k/l/; shortcuts are disabled when an input field is focused.
+Navigation and action shortcuts (default: j/k/b/;) are disabled when an input field is focused.
 
 #### Modals, Dialogs, and Command Palette
 
-Keyboard navigation is disabled while the command palette (`Cmd+K`), search dialog, or other modals are open. However, ArticleOverlay (marked with the `data-keyboard-nav-passthrough` attribute) is an exception — j/k article navigation remains active while the overlay is displayed.
+Keyboard navigation is disabled while the command palette (`Cmd+K`), search dialog, or other modals are open. However, ArticleOverlay (marked with the `data-keyboard-nav-passthrough` attribute) is an exception — next/prev article navigation remains active while the overlay is displayed.
 
 ### Mouse Coexistence
 
@@ -137,18 +177,21 @@ When an article is clicked with the mouse, the keyboard focus is updated to that
 
 ### Focus Persistence
 
-Focus state is not automatically reset on page navigation. After pressing Escape to close the overlay in overlay mode, focus is preserved, and pressing j/k resumes from that article. To explicitly clear focus, press Escape when the overlay is closed.
+Focus state is not automatically reset on page navigation. After pressing Escape to close the overlay in overlay mode, focus is preserved, and pressing the next/prev key resumes from that article. To explicitly clear focus, press Escape when the overlay is closed.
 
 ### Empty List
 
-When the article list is empty (no articles), pressing j/k does nothing.
+When the article list is empty (no articles), pressing the next/prev key does nothing.
 
 ### Key Files
 
 | File | Description |
 |---|---|
 | `src/contexts/keyboard-navigation-context.tsx` | KeyboardNavigationContext and Provider |
-| `src/hooks/use-keyboard-navigation.ts` | Key event handling and focus movement logic |
+| `src/hooks/use-keyboard-navigation.ts` | Key event handling and focus movement logic (accepts optional `keyBindings`) |
+| `src/hooks/use-keybindings-setting.ts` | Custom key bindings state management and localStorage persistence |
+| `src/hooks/use-keybindings-setting.test.ts` | Tests for keybindings setting hook |
 | `src/components/layout/page-layout.tsx` | Provider placement |
 | `src/components/article/article-list.tsx` | Article list keyboard nav integration, visual feedback, overlay coordination |
 | `src/components/article/article-overlay.tsx` | `data-keyboard-nav-passthrough` attribute for j/k passthrough |
+| `src/pages/settings/sections/reading-section.tsx` | KeybindingsEditor UI (shown when keyboard navigation is on) |

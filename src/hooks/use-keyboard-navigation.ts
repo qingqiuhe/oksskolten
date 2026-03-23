@@ -1,5 +1,19 @@
 import { useEffect, useRef } from 'react'
 
+export interface KeyBindings {
+  next: string
+  prev: string
+  bookmark: string
+  openExternal: string
+}
+
+const DEFAULT_KEY_BINDINGS: KeyBindings = {
+  next: 'j',
+  prev: 'k',
+  bookmark: 'b',
+  openExternal: ';',
+}
+
 interface UseKeyboardNavigationOptions {
   items: string[]
   focusedItemId: string | null
@@ -9,6 +23,7 @@ interface UseKeyboardNavigationOptions {
   onBookmarkToggle?: (id: string) => void
   onOpenExternal?: (id: string) => void
   enabled: boolean
+  keyBindings?: KeyBindings
 }
 
 export function useKeyboardNavigation(options: UseKeyboardNavigationOptions) {
@@ -21,7 +36,8 @@ export function useKeyboardNavigation(options: UseKeyboardNavigationOptions) {
     if (!options.enabled) return
 
     function handleKeyDown(e: KeyboardEvent) {
-      const { items, focusedItemId, onFocusChange, onEnter, onEscape, onBookmarkToggle, onOpenExternal } = optionsRef.current
+      const { items, focusedItemId, onFocusChange, onEnter, onEscape, onBookmarkToggle, onOpenExternal, keyBindings } = optionsRef.current
+      const bindings = keyBindings ?? DEFAULT_KEY_BINDINGS
 
       const target = e.target as HTMLElement
       const isInput =
@@ -37,7 +53,7 @@ export function useKeyboardNavigation(options: UseKeyboardNavigationOptions) {
 
       const { key } = e
 
-      if (key === 'j' || key === 'k') {
+      if (key === bindings.next || key === bindings.prev) {
         if (items.length === 0) return
 
         if (focusedItemId === null) {
@@ -51,7 +67,7 @@ export function useKeyboardNavigation(options: UseKeyboardNavigationOptions) {
           return
         }
 
-        if (key === 'j') {
+        if (key === bindings.next) {
           const nextIndex = currentIndex + 1
           if (nextIndex < items.length) {
             onFocusChange(items[nextIndex])
@@ -77,12 +93,12 @@ export function useKeyboardNavigation(options: UseKeyboardNavigationOptions) {
         return
       }
 
-      if (key === 'b' && focusedItemId && onBookmarkToggle) {
+      if (key === bindings.bookmark && focusedItemId && onBookmarkToggle) {
         onBookmarkToggle(focusedItemId)
         return
       }
 
-      if (key === ';' && focusedItemId && onOpenExternal) {
+      if (key === bindings.openExternal && focusedItemId && onOpenExternal) {
         onOpenExternal(focusedItemId)
         return
       }

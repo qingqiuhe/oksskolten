@@ -16,6 +16,7 @@ import { useArticleFont } from './use-article-font'
 import { useLayout } from './use-layout'
 import { useMascot, type MascotChoice } from './use-mascot'
 import { useKeyboardNavSetting } from './use-keyboard-nav-setting'
+import { useKeybindingsSetting } from './use-keybindings-setting'
 import type { LayoutName } from '../data/layouts'
 import type { Theme } from '../data/themes'
 import { fetcher, apiPatch, authHeaders } from '../lib/fetcher'
@@ -39,6 +40,7 @@ interface Prefs {
   'appearance.list_layout': string | null
   'appearance.mascot': string | null
   'reading.keyboard_navigation': string | null
+  'reading.keybindings': string | null
   'chat.provider': string | null
   'chat.model': string | null
   'summary.provider': string | null
@@ -74,6 +76,7 @@ export function useSettings() {
   const { layout, setLayout } = useLayout()
   const { mascot, setMascot } = useMascot()
   const { keyboardNavigation, setKeyboardNavigation } = useKeyboardNavSetting()
+  const { keybindings, setKeybindings } = useKeybindingsSetting()
   const [chatProvider, setChatProviderState] = useState<string | null>(null)
   const [chatModel, setChatModelState] = useState<string | null>(null)
   const [summaryProvider, setSummaryProviderState] = useState<string | null>(null)
@@ -158,6 +161,9 @@ export function useSettings() {
         validate: v => v === 'off' || v === 'dream-puff' || v === 'sleepy-giant' },
       { key: 'reading.keyboard_navigation', setter: setKeyboardNavigation, backfillRef: keyboardNavigationRef,
         validate: v => v === 'on' || v === 'off' },
+      { key: 'reading.keybindings', setter: (v: string) => {
+        try { const parsed = JSON.parse(v); setKeybindings(parsed) } catch { /* ignore invalid JSON */ }
+      } },
       { key: 'appearance.highlight_theme', setter: setHighlightTheme },
       { key: 'appearance.font_family', setter: setArticleFont },
       { key: 'chat.provider', setter: setChatProviderState },
@@ -183,7 +189,7 @@ export function useSettings() {
     if (Object.keys(backfill).length > 0) {
       apiPatch('/api/settings/preferences', backfill).catch(() => {})
     }
-  }, [prefs, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setCategoryUnreadOnly, setLayout, setMascot, setHighlightTheme, setArticleFont, setKeyboardNavigation])
+  }, [prefs, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setCategoryUnreadOnly, setLayout, setMascot, setHighlightTheme, setArticleFont, setKeyboardNavigation, setKeybindings])
 
   // Hydrate custom themes from DB
   useEffect(() => {
@@ -299,6 +305,14 @@ export function useSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setCategoryUnreadOnly, setLayout, setArticleFont, setMascot])
 
+  // Special: keybindings setter serializes to JSON
+  const syncedSetKeybindings = useCallback((value: import('./use-keyboard-navigation').KeyBindings) => {
+    dirtyKeysRef.current.add('reading.keybindings')
+    setKeybindings(value)
+    pendingRef.current['reading.keybindings'] = JSON.stringify(value)
+    scheduleSave()
+  }, [setKeybindings, scheduleSave])
+
   // Special: theme setter updates 2 keys + resets highlight
   const syncedSetTheme = useCallback((name: string) => {
     dirtyKeysRef.current.add('appearance.color_theme')
@@ -384,6 +398,8 @@ export function useSettings() {
     setTranslateTargetLang: syncedSetTranslateTargetLang,
     keyboardNavigation,
     setKeyboardNavigation: syncedSetKeyboardNavigation,
+    keybindings,
+    setKeybindings: syncedSetKeybindings,
   }
 }
 

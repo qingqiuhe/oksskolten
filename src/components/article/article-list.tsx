@@ -67,7 +67,7 @@ export const ArticleList = forwardRef<ArticleListHandle, object>(function Articl
   const bookmarkedOnly = isBookmarks
   const likedOnly = isLikes
   const readOnly = isHistory
-  const { autoMarkRead, dateMode, indicatorStyle, layout, articleOpenMode, keyboardNavigation } = settings
+  const { autoMarkRead, dateMode, indicatorStyle, layout, articleOpenMode, keyboardNavigation, keybindings } = settings
   const [overlayUrl, setOverlayUrl] = useState<string | null>(null)
   const [noFloor, setNoFloor] = useState(false)
   const displayConfig: ArticleDisplayConfig = useMemo(() => ({
@@ -186,6 +186,7 @@ export const ArticleList = forwardRef<ArticleListHandle, object>(function Articl
       if (article?.url) window.open(article.url, '_blank')
     },
     enabled: isKeyboardNavEnabled,
+    keyBindings: keybindings,
   })
 
   // ---------------------------------------------------------------------------

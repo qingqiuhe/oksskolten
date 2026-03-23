@@ -362,4 +362,91 @@ describe('useKeyboardNavigation', () => {
       expect(onFocusChange).not.toHaveBeenCalled()
     })
   })
+
+  describe('custom keyBindings', () => {
+    it('calls onFocusChange when custom next key is pressed', () => {
+      const onFocusChange = vi.fn()
+      renderHook(() => useKeyboardNavigation({
+        items: ['a', 'b', 'c'],
+        focusedItemId: 'a',
+        onFocusChange,
+        enabled: true,
+        keyBindings: { next: 'n', prev: 'p', bookmark: 'm', openExternal: 'o' },
+      }))
+
+      fireKey('n')
+      expect(onFocusChange).toHaveBeenCalledWith('b')
+    })
+
+    it('does not respond to default j when custom next key is set', () => {
+      const onFocusChange = vi.fn()
+      renderHook(() => useKeyboardNavigation({
+        items: ['a', 'b', 'c'],
+        focusedItemId: 'a',
+        onFocusChange,
+        enabled: true,
+        keyBindings: { next: 'n', prev: 'p', bookmark: 'm', openExternal: 'o' },
+      }))
+
+      fireKey('j')
+      expect(onFocusChange).not.toHaveBeenCalled()
+    })
+
+    it('uses custom prev key', () => {
+      const onFocusChange = vi.fn()
+      renderHook(() => useKeyboardNavigation({
+        items: ['a', 'b', 'c'],
+        focusedItemId: 'b',
+        onFocusChange,
+        enabled: true,
+        keyBindings: { next: 'n', prev: 'p', bookmark: 'm', openExternal: 'o' },
+      }))
+
+      fireKey('p')
+      expect(onFocusChange).toHaveBeenCalledWith('a')
+    })
+
+    it('uses custom bookmark key', () => {
+      const onBookmarkToggle = vi.fn()
+      renderHook(() => useKeyboardNavigation({
+        items: ['a', 'b'],
+        focusedItemId: 'a',
+        onFocusChange: vi.fn(),
+        onBookmarkToggle,
+        enabled: true,
+        keyBindings: { next: 'n', prev: 'p', bookmark: 'm', openExternal: 'o' },
+      }))
+
+      fireKey('m')
+      expect(onBookmarkToggle).toHaveBeenCalledWith('a')
+    })
+
+    it('uses custom openExternal key', () => {
+      const onOpenExternal = vi.fn()
+      renderHook(() => useKeyboardNavigation({
+        items: ['a', 'b'],
+        focusedItemId: 'a',
+        onFocusChange: vi.fn(),
+        onOpenExternal,
+        enabled: true,
+        keyBindings: { next: 'n', prev: 'p', bookmark: 'm', openExternal: 'o' },
+      }))
+
+      fireKey('o')
+      expect(onOpenExternal).toHaveBeenCalledWith('a')
+    })
+
+    it('falls back to defaults when keyBindings is not provided', () => {
+      const onFocusChange = vi.fn()
+      renderHook(() => useKeyboardNavigation({
+        items: ['a', 'b', 'c'],
+        focusedItemId: 'a',
+        onFocusChange,
+        enabled: true,
+      }))
+
+      fireKey('j')
+      expect(onFocusChange).toHaveBeenCalledWith('b')
+    })
+  })
 })
