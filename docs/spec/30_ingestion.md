@@ -115,6 +115,16 @@ flowchart TD
 
 The fetch + fallback + language detection logic is encapsulated in a single exported function `fetchArticleContent()` in `server/fetcher.ts`. Both the Cron pipeline (`processArticle`) and the clip save endpoint (`POST /api/articles/from-url`) call this function, ensuring identical behavior for full-text retrieval, FlareSolverr fallback, bot-block detection, and language detection. See [Clip spec](./80_feature_clip.md#shared-fetch-pipeline-with-rss-feeds) for the option differences between RSS and clip invocations.
 
+**RSS Content Fallback**: When page-level extraction fails or returns insufficient content, `fetchArticleContent` falls back to the RSS feed's inline content (`<description>` / `<content:encoded>`). The fallback triggers when any of the following conditions are met:
+
+1. `fullText` is `null` (fetch completely failed)
+2. `fullText` matches bot-block patterns (e.g., "checking your browser")
+3. `fullText` is shorter than `MIN_EXTRACTED_LENGTH` (200 chars)
+
+When the fallback triggers, the RSS content is only used if it is more substantial (by character count) than whatever was extracted from the page. RSS HTML content is converted to Markdown via `convertHtmlToMarkdown()` in `server/fetcher/markdown-utils.ts`, which auto-detects HTML vs plain text/Markdown and only applies Turndown for HTML input.
+
+This addresses SPA sites where even FlareSolverr returns rendered HTML but `preClean` removes `display: none` elements, leaving Readability with an effectively empty DOM — while the RSS feed itself often contains the full article content (as used by readers like Feedly).
+
 ### Full-Text Retrieval and Markdown Conversion Pipeline
 
 End-to-end flow from article URL to Markdown text. A multi-stage pipeline combining HTML cleaning (defuddle-based) and Readability that removes noise such as ads, navigation, and tracking attributes before converting to Markdown. Runs entirely locally with no external API dependencies.
@@ -130,12 +140,12 @@ Main Thread (Event Loop)                Worker Thread (piscina, max 2)
 └─ health check <- unaffected
 ```
 
-**Implementation files**: `server/fetcher/content.ts` (HTTP fetching + pool invocation), `server/fetcher/contentWorker.ts` (DOM parsing logic), `server/lib/cleaner/`
+**Implementation files**: `server/fetcher/content.ts` (HTTP fetching + pool invocation), `server/fetcher/contentWorker.ts` (DOM parsing logic), `server/fetcher/markdown-utils.ts` (HTML→Markdown conversion + excerpt generation), `server/lib/cleaner/`
 
 ```
 fetchFullText(articleUrl, cleanerConfig?)
 │
-├─ 1. HTML retrieval + OGP image extraction [Main Thread]
+├─ 1. HTML retrieval [Main Thread]
 │     requires_js_challenge=1 -> retrieve via FlareSolverr
 │     Otherwise -> safeFetch(url), fallback to FlareSolverr on 403
 │
@@ -192,8 +202,22 @@ fetchFullText(articleUrl, cleanerConfig?)
 │     headingStyle: 'atx', codeBlockStyle: 'fenced'
 │     Table-related tags are kept as HTML
 │
-└─ 7. Excerpt generation
-      Extract first 200 characters from Markdown text
+├─ 7. Excerpt generation
+│     Extract first 200 characters from Markdown text
+│     Uses markdownToExcerpt(): strips images and link syntax, then truncates
+│
+└─ 8. FlareSolverr automatic retry (quality gate) [Main Thread]
+      If requires_js_challenge was NOT set and the extracted text is
+      under MIN_EXTRACTED_LENGTH (200 chars) or classified as garbage:
+      ├─ Garbage detection (isGarbageExtraction): bot-block patterns,
+      │   fewer than 3 prose sentences, or prose ratio < 10% of total text
+      ├─ Fetch via FlareSolverr with waitForSelector targeting content containers
+      │   (article, main, [role="main"], .post-content, .entry-content)
+      ├─ Re-run the full pipeline (stripHeavyTags -> Worker parse) on FlareSolverr HTML
+      └─ Adopt FlareSolverr result only if it yields more text than the original
+      * Independent of the per-feed requires_js_challenge flag —
+        an automatic quality gate that retries with JS rendering when
+        static fetch produces poor results
 ```
 
 **Fail-open design**: pre-clean/post-clean are wrapped in try-catch, and on exception, the original HTML/Readability result is used as-is. This guarantees that cleaner failures never block article ingestion.
