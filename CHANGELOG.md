@@ -1,5 +1,12 @@
 # Changelog
 
+## [v0.4.2](https://github.com/babarot/oksskolten/compare/v0.4.1...v0.4.2) - 2026-03-26
+### Improvements
+- Add support for custom key bindings in settings by @asonas in https://github.com/babarot/oksskolten/pull/37
+- Refactor `safeFetch` to exclude certain HTTP status codes as redirects by @asonas in https://github.com/babarot/oksskolten/pull/42
+- Update keyboard navigation to include prefetching on near-end items by @asonas in https://github.com/babarot/oksskolten/pull/43
+- Expose article original URL as data-original-url attribute on all car… by @asonas in https://github.com/babarot/oksskolten/pull/44
+
 ## [v0.4.1](https://github.com/babarot/oksskolten/compare/v0.4.0...v0.4.1) - 2026-03-23
 ### Bug fixes
 - Fix multibyte URL lookup returning 404 by @babarot in https://github.com/babarot/oksskolten/pull/31
