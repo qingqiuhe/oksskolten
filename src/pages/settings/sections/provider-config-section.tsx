@@ -39,6 +39,7 @@ export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Set
               { value: '', label: t('settings.translateTargetLangAuto') },
               { value: 'ja', label: t('settings.languageJa') },
               { value: 'en', label: t('settings.languageEn') },
+              { value: 'zh', label: t('settings.languageZh') },
             ] as const).map(opt => (
               <button
                 key={opt.value}

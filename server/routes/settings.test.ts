@@ -210,6 +210,17 @@ describe('PATCH /api/settings/preferences — provider-model validation', () => 
 // =========================================================================
 
 describe('PATCH /api/settings/preferences — AI provider/model enums', () => {
+  it('accepts zh as a translation target language', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/preferences',
+      headers: json,
+      payload: { 'translate.target_lang': 'zh' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()['translate.target_lang']).toBe('zh')
+  })
+
   it('rejects invalid provider value', async () => {
     const res = await app.inject({
       method: 'PATCH',

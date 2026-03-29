@@ -96,6 +96,8 @@ const mockSettings = {
   setHighlightTheme: vi.fn(),
   articleFont: 'sans' as const,
   setArticleFont: vi.fn(),
+  translateTargetLang: null as string | null,
+  setTranslateTargetLang: vi.fn(),
   save: vi.fn(),
 }
 
@@ -246,6 +248,7 @@ describe('ArticleDetail stale translation filtering', () => {
     mockTrackRead.mockReset()
     mockQueueSeenIds.mockClear()
     mockUseTranslate.mockClear()
+    mockSettings.translateTargetLang = null
   })
 
   it('passes full_text_translated: null when translated_lang does not match locale', () => {
@@ -369,5 +372,47 @@ describe('ArticleDetail stale translation filtering', () => {
     expect(mockUseTranslate).toHaveBeenCalled()
     const firstArg = mockUseTranslate.mock.calls[0]![0]
     expect(firstArg).toEqual({ id: 1, full_text_translated: null })
+  })
+
+  it('uses translateTargetLang instead of UI locale when checking translation freshness', () => {
+    const article = {
+      id: 1,
+      feed_id: 2,
+      feed_name: 'Example Feed',
+      title: 'Example Article',
+      url: articleUrl,
+      published_at: '2026-03-04T00:00:00.000Z',
+      lang: 'fr',
+      summary: null,
+      full_text: 'Contenu français',
+      full_text_translated: '中文译文',
+      translated_lang: 'zh',
+      seen_at: '2026-03-04T00:00:00.000Z',
+      read_at: '2026-03-04T00:00:00.000Z',
+      bookmarked_at: null,
+      liked_at: null,
+    }
+
+    mockSettings.translateTargetLang = 'zh'
+
+    render(
+      <MemoryRouter>
+        <LocaleContext.Provider value={{ locale: 'en', setLocale: vi.fn() }}>
+          <TooltipProvider>
+            <SWRConfig value={{ provider: () => new Map(), fallback: { [articleKey]: article } }}>
+              <Routes>
+                <Route element={<OutletWrapper />}>
+                  <Route path="*" element={<ArticleDetail articleUrl={articleUrl} />} />
+                </Route>
+              </Routes>
+            </SWRConfig>
+          </TooltipProvider>
+        </LocaleContext.Provider>
+      </MemoryRouter>,
+    )
+
+    expect(mockUseTranslate).toHaveBeenCalled()
+    const firstArg = mockUseTranslate.mock.calls[0]![0]
+    expect(firstArg).toEqual({ id: 1, full_text_translated: '中文译文' })
   })
 })

@@ -5,7 +5,7 @@
 const LANGUAGE_NAMES: Record<string, string> = {
   en: 'English',
   ja: 'Japanese',
-  zh: 'Chinese',
+  zh: 'Simplified Chinese',
   ko: 'Korean',
   fr: 'French',
   de: 'German',

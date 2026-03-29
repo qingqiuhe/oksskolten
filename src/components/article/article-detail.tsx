@@ -40,7 +40,8 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
   const { data: article, error, mutate } = useSWR<ArticleDetailData>(articleKey, fetcher)
   const { mutate: globalMutate } = useSWRConfig()
 
-  const isUserLang = article?.lang === (translateTargetLang || locale)
+  const effectiveTargetLang = translateTargetLang || locale
+  const isUserLang = article?.lang === effectiveTargetLang
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
 
   const articleRef = useRef<HTMLElement>(null)
@@ -48,7 +49,7 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
   const metrics = useMetrics()
   const { summary, summarizing, streamingText, handleSummarize, summaryHtml, streamingHtml, error: summarizeError } = useSummarize(article, metrics)
   // Only pass translation to the hook if it matches the current locale; stale translations are treated as absent
-  const isTranslationCurrent = article?.translated_lang === (translateTargetLang || locale)
+  const isTranslationCurrent = article?.translated_lang === effectiveTargetLang
   const translateInput = useMemo(() =>
     article ? { id: article.id, full_text_translated: isTranslationCurrent ? article.full_text_translated : null } : undefined,
     [article, isTranslationCurrent],
@@ -63,9 +64,9 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
   // Sync translation/summary back into SWR cache so it persists across navigations
   useEffect(() => {
     if (fullTextTranslated && article && article.full_text_translated !== fullTextTranslated) {
-      void mutate({ ...article, full_text_translated: fullTextTranslated, translated_lang: locale }, false)
+      void mutate({ ...article, full_text_translated: fullTextTranslated, translated_lang: effectiveTargetLang }, false)
     }
-  }, [fullTextTranslated]) // eslint-disable-line react-hooks/exhaustive-deps -- only sync when translated text changes; article/mutate are refs to current data
+  }, [fullTextTranslated, effectiveTargetLang]) // eslint-disable-line react-hooks/exhaustive-deps -- only sync when translated text changes; article/mutate are refs to current data
 
   useEffect(() => {
     if (summary && article && article.summary !== summary) {

@@ -841,10 +841,10 @@ describe('PATCH /api/settings/profile', () => {
       method: 'PATCH',
       url: '/api/settings/profile',
       headers: json,
-      payload: { language: 'ja' },
+      payload: { language: 'zh' },
     })
     expect(res.statusCode).toBe(200)
-    expect(res.json().language).toBe('ja')
+    expect(res.json().language).toBe('zh')
   })
 
   it('returns 400 for empty account_name', async () => {
