@@ -7,7 +7,7 @@ import jwt from '@fastify/jwt'
 import rateLimit from '@fastify/rate-limit'
 import multipart from '@fastify/multipart'
 import cron, { type ScheduledTask } from 'node-cron'
-import { runMigrations, getSetting, upsertSetting, getOrCreateJwtSecret, ensureClipFeed, recalculateScores, purgeExpiredArticles } from './db.js'
+import { runMigrations, getSetting, upsertSetting, getOrCreateJwtSecret, recalculateScores, purgeExpiredArticles } from './db.js'
 import { logger } from './logger.js'
 
 const log = logger
@@ -31,9 +31,6 @@ const projectRoot = path.resolve(__dirname, '..')
 
 // --- Migrations ---
 runMigrations()
-
-// --- Ensure virtual feed for clipped articles exists ---
-ensureClipFeed()
 
 // --- Dev seed data ---
 if (process.env.NODE_ENV === 'development') {

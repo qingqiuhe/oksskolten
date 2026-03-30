@@ -27,7 +27,7 @@ import {
 import type { MeiliArticleDoc } from '../search/client.js'
 import { buildMeiliFilter, meiliSearch } from '../search/client.js'
 import { isSearchReady, syncArticleToSearch } from '../search/sync.js'
-import { requireJson } from '../auth.js'
+import { requireJson, getRequestUserId } from '../auth.js'
 import { summarizeArticle, translateArticle, streamSummarizeArticle, streamTranslateArticle, fetchArticleContent } from '../fetcher.js'
 import type { AiTextResult } from '../fetcher.js'
 import { archiveArticleImages, isImageArchivingEnabled, deleteArticleImages } from '../fetcher/article-images.js'
@@ -38,8 +38,8 @@ import fs from 'node:fs'
 import { dataPath } from '../paths.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 
-function getTranslateTargetLang(): string {
-  return getSetting('translate.target_lang') || getSetting('general.language') || DEFAULT_LANGUAGE
+function getTranslateTargetLang(userId: number | null): string {
+  return getSetting('translate.target_lang', userId) || getSetting('general.language', userId) || DEFAULT_LANGUAGE
 }
 
 const DEFAULT_ARTICLE_LIMIT = 20
@@ -224,16 +224,17 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const sort = query.sort === 'score' ? 'score' as const : undefined
     const noFloor = query.no_floor === '1'
 
-    const isClipFeed = feedId != null && getClipFeed()?.id === feedId
+    const userId = getRequestUserId(request)
+    const isClipFeed = feedId != null && getClipFeed(userId)?.id === feedId
     const smartFloor = !noFloor && !isClipFeed && !unread && !bookmarked && !liked && !read
-    const { articles, total, totalWithoutFloor } = getArticles({ feedId, categoryId, unread, bookmarked, liked, read, sort, limit, offset, smartFloor })
+    const { articles, total, totalWithoutFloor } = getArticles({ feedId, categoryId, unread, bookmarked, liked, read, sort, limit, offset, smartFloor, userId })
     const hasMore = offset + articles.length < total
 
     // When unread filter yields 0 results, return total article count (without unread filter)
     // so the UI can distinguish "no articles" from "all read"
     let totalAll: number | undefined
     if (unread && total === 0 && offset === 0) {
-      const allResult = getArticles({ feedId, categoryId, limit: 0, offset: 0 })
+      const allResult = getArticles({ feedId, categoryId, limit: 0, offset: 0, userId })
       totalAll = allResult.total
     }
 
@@ -269,7 +270,8 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       const { hits, estimatedTotalHits } = await meiliSearch(query.q, { limit, offset, filter })
       const ids = hits.map((h) => h.id)
 
-      const articles = getArticlesByIds(ids)
+      const userId = getRequestUserId(request)
+      const articles = getArticlesByIds(ids, undefined, userId)
       const hasMore = offset + hits.length < estimatedTotalHits
       reply.send({ articles, has_more: hasMore })
     } catch (err) {
@@ -332,7 +334,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
         })()
         // Sync clip move to Meilisearch (best-effort, outside transaction)
         const movedDoc = getDb().prepare(`
-          SELECT id, feed_id, category_id, title,
+          SELECT id, user_id, feed_id, category_id, title,
                  COALESCE(full_text, '') AS full_text,
                  COALESCE(full_text_translated, '') AS full_text_translated,
                  lang,
@@ -381,7 +383,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       if (!params) return
       const body = parseOrBadRequest(SeenBody, request.body, reply)
       if (!body) return
-      const result = markArticleSeen(params.id, body.seen)
+      const result = markArticleSeen(params.id, body.seen, getRequestUserId(request))
       if (!result) {
         reply.status(404).send({ error: 'Article not found' })
         return
@@ -398,7 +400,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       if (!params) return
       const body = parseOrBadRequest(BookmarkBody, request.body, reply)
       if (!body) return
-      const result = markArticleBookmarked(params.id, body.bookmarked)
+      const result = markArticleBookmarked(params.id, body.bookmarked, getRequestUserId(request))
       if (!result) {
         reply.status(404).send({ error: 'Article not found' })
         return
@@ -415,7 +417,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       if (!params) return
       const body = parseOrBadRequest(LikeBody, request.body, reply)
       if (!body) return
-      const result = markArticleLiked(params.id, body.liked)
+      const result = markArticleLiked(params.id, body.liked, getRequestUserId(request))
       if (!result) {
         reply.status(404).send({ error: 'Article not found' })
         return
@@ -430,7 +432,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const body = parseOrBadRequest(BatchSeenBody, request.body, reply)
       if (!body) return
-      const result = markArticlesSeen(body.ids)
+      const result = markArticlesSeen(body.ids, getRequestUserId(request))
       reply.send(result)
     },
   )
@@ -440,7 +442,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const params = parseOrBadRequest(NumericIdParams, request.params, reply)
       if (!params) return
-      const result = recordArticleRead(params.id)
+      const result = recordArticleRead(params.id, getRequestUserId(request))
       if (!result) {
         reply.status(404).send({ error: 'Article not found' })
         return
@@ -473,31 +475,28 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
   api.post(
     '/api/articles/:id/translate',
     { preHandler: [requireJson] },
-    createAiHandler({
-      getCached: (article) => {
-        const userLang = getTranslateTargetLang()
-        return article.translated_lang === userLang ? article.full_text_translated : null
-      },
-      validate: (article) => {
-        const userLang = getTranslateTargetLang()
-        return article.lang === userLang ? `Article is already in ${userLang}` : null
-      },
-      streamFn: async (fullText, onDelta) => {
-        const r = await streamTranslateArticle(fullText, onDelta)
-        return { text: r.fullTextTranslated, ...r }
-      },
-      nonStreamFn: async (fullText) => {
-        const r = await translateArticle(fullText)
-        return { text: r.fullTextTranslated, ...r }
-      },
-      applyResult: (articleId, text) => {
-        const userLang = getTranslateTargetLang()
-        updateArticleContent(articleId, { full_text_translated: text, translated_lang: userLang })
-        updateScore(articleId)
-      },
-      errorMessage: 'Translation failed',
-      errorCode: 'TRANSLATION_FAILED',
-    }),
+    async (request, reply) => {
+      const userId = getRequestUserId(request)
+      const userLang = getTranslateTargetLang(userId)
+      await createAiHandler({
+        getCached: (article) => article.translated_lang === userLang ? article.full_text_translated : null,
+        validate: (article) => article.lang === userLang ? `Article is already in ${userLang}` : null,
+        streamFn: async (fullText, onDelta) => {
+          const r = await streamTranslateArticle(fullText, onDelta)
+          return { text: r.fullTextTranslated, ...r }
+        },
+        nonStreamFn: async (fullText) => {
+          const r = await translateArticle(fullText)
+          return { text: r.fullTextTranslated, ...r }
+        },
+        applyResult: (articleId, text) => {
+          updateArticleContent(articleId, { full_text_translated: text, translated_lang: userLang })
+          updateScore(articleId)
+        },
+        errorMessage: 'Translation failed',
+        errorCode: 'TRANSLATION_FAILED',
+      })(request, reply)
+    },
   )
 
   // --- Image archiving ---
