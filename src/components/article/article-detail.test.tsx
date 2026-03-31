@@ -418,6 +418,10 @@ describe('ArticleDetail stale translation filtering', () => {
 })
 
 describe('ArticleDetail article kind badge', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('shows article kind in the toolbar when present', () => {
     const articleUrl = 'https://x.com/example/status/1'
     const articleKey = `/api/articles/by-url?url=${encodeURIComponent(articleUrl)}`
@@ -551,5 +555,56 @@ describe('ArticleDetail article kind badge', () => {
     const source = document.querySelector('video source')
     expect(source).not.toBeNull()
     expect(source?.getAttribute('src')).toBe('https://video.twimg.com/post-source.mp4')
+  })
+
+  it('rewrites amplify_video to a poster link that opens the article url', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const articleUrl = 'https://x.com/example/status/4'
+    const articleKey = `/api/articles/by-url?url=${encodeURIComponent(articleUrl)}`
+    const article = {
+      id: 4,
+      feed_id: 2,
+      feed_name: 'Example Feed',
+      title: 'Blocked X video',
+      url: articleUrl,
+      article_kind: 'original' as const,
+      published_at: '2026-03-04T00:00:00.000Z',
+      lang: 'en',
+      summary: null,
+      excerpt: null,
+      og_image: 'https://pbs.twimg.com/fallback.jpg',
+      has_video: true,
+      full_text: '<video src="https://video.twimg.com/amplify_video/123/vid/avc1/1920x1080/demo.mp4?tag=21" poster="https://pbs.twimg.com/poster.jpg" controls></video>',
+      full_text_translated: null,
+      translated_lang: null,
+      seen_at: '2026-03-04T00:00:00.000Z',
+      read_at: '2026-03-04T00:00:00.000Z',
+      bookmarked_at: null,
+      liked_at: null,
+    }
+
+    render(
+      <MemoryRouter>
+        <LocaleContext.Provider value={{ locale: 'en', setLocale: vi.fn() }}>
+          <TooltipProvider>
+            <SWRConfig value={{ provider: () => new Map(), fallback: { [articleKey]: article } }}>
+              <Routes>
+                <Route element={<OutletWrapper />}>
+                  <Route path="*" element={<ArticleDetail articleUrl={articleUrl} />} />
+                </Route>
+              </Routes>
+            </SWRConfig>
+          </TooltipProvider>
+        </LocaleContext.Provider>
+      </MemoryRouter>,
+    )
+
+    expect(document.querySelector('video')).toBeNull()
+    const poster = document.querySelector('.video-fallback-poster') as HTMLImageElement | null
+    expect(poster).not.toBeNull()
+    expect(poster?.getAttribute('src')).toBe('https://pbs.twimg.com/poster.jpg')
+
+    fireEvent.click(poster!)
+    expect(openSpy).toHaveBeenCalledWith(articleUrl, '_blank', 'noopener,noreferrer')
   })
 })

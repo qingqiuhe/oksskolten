@@ -1,9 +1,10 @@
 export type ArticleKind = 'original' | 'repost' | 'quote'
+export type FeedViewType = 'article' | 'social'
 
 const RSSHUB_X_ROUTE_RE = /\/(?:twitter|x)\//i
 const RT_PREFIX_RE = /^RT\b/u
 
-interface FeedSourceLike {
+export interface FeedSourceLike {
   url?: string | null
   rss_url?: string | null
   rss_bridge_url?: string | null
@@ -41,6 +42,27 @@ export function isXFeedSource(feed: FeedSourceLike): boolean {
     matchesRssHubXRoute(feed.rss_url) ||
     matchesRssHubXRoute(feed.rss_bridge_url)
   )
+}
+
+export function resolveFeedViewType(feed: { view_type?: string | null } & FeedSourceLike): FeedViewType {
+  if (feed.view_type === 'social' || feed.view_type === 'article') return feed.view_type
+  return isXFeedSource(feed) ? 'social' : 'article'
+}
+
+export function extractXHandle(articleUrl: string | null | undefined): string | null {
+  if (!articleUrl) return null
+
+  try {
+    const parsed = new URL(articleUrl)
+    if (!matchesXHost(parsed.href)) return null
+
+    const [handle, segment] = parsed.pathname.split('/').filter(Boolean)
+    if (!handle || segment !== 'status') return null
+    if (handle.startsWith('@')) return handle
+    return `@${handle}`
+  } catch {
+    return null
+  }
 }
 
 export function classifyXItem(input: { title?: string | null; rawExcerpt?: string | null }): ArticleKind {

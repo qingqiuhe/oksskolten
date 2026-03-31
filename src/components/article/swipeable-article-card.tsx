@@ -6,11 +6,13 @@ import { ArticleCard, type ArticleDisplayConfig } from './article-card'
 import { articleUrlToPath } from '../../lib/url'
 import type { ArticleListItem } from '../../../shared/types'
 import type { LayoutName } from '../../data/layouts'
+import type { FeedViewType } from '../../../shared/article-kind'
 
 interface SwipeableArticleCardProps extends ArticleDisplayConfig {
   article: ArticleListItem
   layout?: LayoutName
   isFeatured?: boolean
+  feedViewType?: FeedViewType
   onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void
 }
 
@@ -21,6 +23,7 @@ export function SwipeableArticleCard({
   article,
   layout,
   isFeatured,
+  feedViewType,
   dateMode,
   indicatorStyle,
   showUnreadIndicator,
@@ -81,6 +84,7 @@ export function SwipeableArticleCard({
           article={article}
           layout={layout}
           isFeatured={isFeatured}
+          feedViewType={feedViewType}
           dateMode={dateMode}
           indicatorStyle={indicatorStyle}
           showUnreadIndicator={showUnreadIndicator}

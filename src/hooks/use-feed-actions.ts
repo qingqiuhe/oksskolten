@@ -94,6 +94,23 @@ export function useFeedActions({
     }
   }
 
+  async function handleUpdateViewType(feed: FeedWithCounts, viewType: FeedWithCounts['view_type']) {
+    const feedId = feed.id
+    void mutateFeeds(
+      prev => prev ? {
+        ...prev,
+        feeds: prev.feeds.map(f => f.id === feedId ? { ...f, view_type: viewType } : f),
+      } : prev,
+      { revalidate: false },
+    )
+    try {
+      await apiPatch(`/api/feeds/${feedId}`, { view_type: viewType })
+      revalidateArticles()
+    } catch {
+      void mutateFeeds()
+    }
+  }
+
   async function handleFetchFeed(feed: FeedWithCounts) {
     const result = await startFeedFetch(feed.id)
     onFetchComplete?.({ ...result, name: feed.name })
@@ -205,6 +222,7 @@ export function useFeedActions({
     handleDeleteFeed,
     handleDeleteCategory,
     handleMoveToCategory,
+    handleUpdateViewType,
     handleFetchFeed,
     handleFetchCategory,
     handleReDetectFeed,

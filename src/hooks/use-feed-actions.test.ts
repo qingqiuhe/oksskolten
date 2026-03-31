@@ -19,6 +19,7 @@ function makeFeed(overrides: Partial<FeedWithCounts> = {}): FeedWithCounts {
     icon_url: null,
     rss_url: null,
     rss_bridge_url: null,
+    view_type: null,
     category_id: null,
     last_error: null,
     error_count: 0,
@@ -214,6 +215,17 @@ describe('useFeedActions', () => {
 
       expect(opts.mutateFeeds).toHaveBeenCalledWith(expect.any(Function), { revalidate: false })
       expect(apiPatch).toHaveBeenCalledWith('/api/feeds/4', { category_id: 2 })
+    })
+
+    it('updates feed view type', async () => {
+      const opts = defaultOpts()
+      const { result } = renderHook(() => useFeedActions(opts))
+      const feed = makeFeed({ id: 9, view_type: null })
+
+      await act(async () => result.current.handleUpdateViewType(feed, 'social'))
+
+      expect(opts.mutateFeeds).toHaveBeenCalledWith(expect.any(Function), { revalidate: false })
+      expect(apiPatch).toHaveBeenCalledWith('/api/feeds/9', { view_type: 'social' })
     })
   })
 

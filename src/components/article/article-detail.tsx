@@ -21,11 +21,13 @@ import { formatDetailDate } from '../../lib/dateFormat'
 import { useAppLayout } from '../../app'
 import { Skeleton } from '../ui/skeleton'
 import { Callout } from '../ui/callout'
+import { rewriteBlockedXVideos } from '../../lib/x-video-fallback'
 import { ArticleToolbar } from './article-toolbar'
 import { ArticleSummarySection } from './article-summary-section'
 import { ArticleTranslationBanner } from './article-translation-banner'
 import { ArticleContentBody } from './article-content-body'
 import { ArticleSimilarBanner } from './article-similar-banner'
+import { SocialArticleDetail } from './social-article-detail'
 import type { ArticleDetail as ArticleDetailData } from '../../../shared/types'
 
 interface ArticleDetailProps {
@@ -102,8 +104,13 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
       md = article.full_text || ''
     }
     if (!md) return `<p class="text-muted">${t('article.noContent')}</p>`
-    return sanitizeHtml(renderMarkdown(md))
-  }, [article, viewMode, isUserLang, fullTextTranslated, t])
+    const rendered = renderMarkdown(md)
+    const withXVideoFallbacks = rewriteBlockedXVideos(rendered, {
+      articleUrl,
+      ogImage: article.og_image ?? null,
+    })
+    return sanitizeHtml(withXVideoFallbacks)
+  }, [article, articleUrl, viewMode, isUserLang, fullTextTranslated, t])
 
   const { rewrittenHtml: displayContent } = useRewriteInternalLinks(
     content,
@@ -118,13 +125,21 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
     if (!container) return
 
     const handleClick = (e: MouseEvent) => {
-      const img = (e.target as HTMLElement).closest('.prose img') as HTMLImageElement | null
+      const fallbackLink = (e.target as HTMLElement).closest('.video-fallback-link') as HTMLAnchorElement | null
+      if (fallbackLink) {
+        e.preventDefault()
+        const href = fallbackLink.getAttribute('href')
+        if (href) window.open(href, '_blank', 'noopener,noreferrer')
+        return
+      }
+
+      const img = (e.target as HTMLElement).closest('.article-rendered-content img') as HTMLImageElement | null
       if (img) {
         setLightboxSrc(img.currentSrc || img.src)
         return
       }
 
-      const anchor = (e.target as HTMLElement).closest('.prose a') as HTMLAnchorElement | null
+      const anchor = (e.target as HTMLElement).closest('.article-rendered-content a') as HTMLAnchorElement | null
       if (anchor) {
         e.preventDefault()
         if (anchor.hasAttribute('data-internal-link')) {
@@ -139,7 +154,7 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
 
     const handleError = (e: Event) => {
       const el = e.target as HTMLElement
-      if (el.tagName === 'IMG' && el.closest('.prose')) {
+      if (el.tagName === 'IMG' && el.closest('.article-rendered-content')) {
         el.classList.add('error')
       }
     }
@@ -179,9 +194,45 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
 
   const hasTranslation = !!fullTextTranslated
   const displayTitle = article.has_video && !article.title.trim() ? t('article.videoPost') : article.title
+  const metricsText = metrics.metrics && !translating ? metrics.formatMetrics() : null
 
-  return (
-    <>
+  const detailContent = article.feed_view_type === 'social' ? (
+    <SocialArticleDetail
+      articleRef={articleRef}
+      article={article}
+      locale={locale}
+      displayTitle={displayTitle}
+      displayContent={displayContent}
+      viewMode={viewMode}
+      isUserLang={isUserLang}
+      hasTranslation={hasTranslation}
+      translating={translating}
+      translatingText={translatingText}
+      translatingHtml={translatingHtml}
+      summary={summary}
+      summarizing={summarizing}
+      streamingText={streamingText}
+      summaryHtml={summaryHtml}
+      streamingHtml={streamingHtml}
+      summarizeError={summarizeError}
+      metricsText={metricsText}
+      translateError={translateError}
+      chatPosition={chatPosition}
+      chatOpen={chat.open}
+      onChatToggle={chat.toggle}
+      onTranslate={handleTranslate}
+      onToggleViewMode={() => setViewMode(viewMode === 'translated' ? 'original' : 'translated')}
+      onSummarize={handleSummarize}
+      isBookmarked={!!isBookmarked}
+      isLiked={isLiked}
+      archivingImages={archivingImages}
+      onToggleBookmark={toggleBookmark}
+      onToggleLike={toggleLike}
+      onArchiveImages={handleArchiveImages}
+      onDelete={() => setDeleteConfirmOpen(true)}
+      onCloseChat={chat.close}
+    />
+  ) : (
     <article ref={articleRef} className="article-card max-w-2xl mx-auto px-6 md:px-10 py-8">
       {/* Title */}
       <h1 className="mb-1.5 text-[28px] font-bold leading-[1.3] break-words [overflow-wrap:anywhere]">
@@ -226,7 +277,7 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
         summaryHtml={summaryHtml}
         streamingHtml={streamingHtml}
         summarizeError={summarizeError}
-        metricsText={metrics.metrics && !translating ? metrics.formatMetrics() : null}
+        metricsText={metricsText}
       />
 
       {/* Similar articles */}
@@ -271,8 +322,13 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
         translatingHtml={translatingHtml}
         displayContent={displayContent}
       />
-      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </article>
+  )
+
+  return (
+    <>
+    {detailContent}
+    <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     {chatPosition === 'fab' && article && <ChatFab key={article.id} articleId={article.id} />}
     {deleteConfirmOpen && (
       <ConfirmDialog

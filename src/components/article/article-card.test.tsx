@@ -11,6 +11,7 @@ function makeArticle(overrides: Partial<ArticleListItem> = {}): ArticleListItem 
     feed_id: 1,
     feed_name: 'Example Feed',
     feed_icon_url: null,
+    feed_view_type: 'article',
     article_kind: null,
     title: 'Example Article',
     url: 'https://example.com/posts/1',
@@ -79,5 +80,18 @@ describe('ArticleCard icon rendering', () => {
     }))
 
     expect(getByText('Video post')).toBeTruthy()
+  })
+
+  it('renders social cards for social feed types', () => {
+    const { getByText } = renderArticleCard(makeArticle({
+      feed_name: 'Example Author',
+      feed_view_type: 'social',
+      url: 'https://x.com/example/status/1',
+      article_kind: 'quote',
+    }))
+
+    expect(getByText('Example Author')).toBeTruthy()
+    expect(getByText('@example')).toBeTruthy()
+    expect(getByText('Quote')).toBeTruthy()
   })
 })

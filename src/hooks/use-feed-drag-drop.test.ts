@@ -18,6 +18,7 @@ function makeFeed(overrides: Partial<FeedWithCounts> = {}): FeedWithCounts {
     icon_url: null,
     rss_url: null,
     rss_bridge_url: null,
+    view_type: null,
     category_id: null,
     last_error: null,
     error_count: 0,

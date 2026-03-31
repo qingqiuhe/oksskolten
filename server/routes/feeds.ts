@@ -46,6 +46,7 @@ const CreateFeedBody = z.object({
 const UpdateFeedBody = z.object({
   name: z.string().optional(),
   rss_bridge_url: z.string().nullable().optional(),
+  view_type: z.enum(['article', 'social']).nullable().optional(),
   disabled: z.number().optional(),
   category_id: z.number().nullable().optional(),
 })

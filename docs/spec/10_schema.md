@@ -22,6 +22,7 @@ erDiagram
         INTEGER id PK
         TEXT url UK
         TEXT type "rss | clip"
+        TEXT view_type "nullable, article | social"
         INTEGER category_id FK "nullable"
         TEXT etag "nullable"
         TEXT last_modified "nullable"
@@ -103,6 +104,7 @@ CREATE TABLE feeds (
   url             TEXT NOT NULL UNIQUE,               -- Blog top URL (clip: 'clip://saved')
   rss_url         TEXT,                               -- Resolved RSS URL
   rss_bridge_url  TEXT,                               -- URL when fetched via RSSBridge
+  view_type       TEXT,                               -- NULL=auto-detect, 'article' | 'social'
   type            TEXT NOT NULL DEFAULT 'rss',        -- 'rss' | 'clip'
   category_id     INTEGER REFERENCES categories(id) ON DELETE SET NULL,
   last_error      TEXT,                               -- Last fetch error

@@ -1,0 +1,1 @@
+ALTER TABLE feeds ADD COLUMN view_type TEXT;

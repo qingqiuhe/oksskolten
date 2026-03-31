@@ -80,6 +80,26 @@ describe('updateFeed rss_url', () => {
   })
 })
 
+describe('updateFeed view_type', () => {
+  it('updates view_type field', () => {
+    const feed = seedFeed()
+
+    updateFeed(feed.id, { view_type: 'social' })
+
+    const updated = getFeedById(feed.id)!
+    expect(updated.view_type).toBe('social')
+  })
+
+  it('clears view_type back to auto', () => {
+    const feed = seedFeed({ view_type: 'article' })
+
+    updateFeed(feed.id, { view_type: null })
+
+    const updated = getFeedById(feed.id)!
+    expect(updated.view_type).toBeNull()
+  })
+})
+
 describe('feed icon_url', () => {
   it('persists icon_url on create', () => {
     const feed = seedFeed({ icon_url: 'https://example.com/icon.png' })

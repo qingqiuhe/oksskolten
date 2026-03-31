@@ -95,14 +95,15 @@ export function createFeed(data: {
   icon_url?: string | null
   rss_url?: string | null
   rss_bridge_url?: string | null
+  view_type?: Feed['view_type']
   category_id?: number | null
   requires_js_challenge?: number
   type?: 'rss' | 'clip'
 }, userId?: number | null): Feed {
   const scopedUserId = resolveUserId(userId)
   const info = runNamed(`
-    INSERT INTO feeds (user_id, name, url, icon_url, rss_url, rss_bridge_url, category_id, requires_js_challenge, type)
-    VALUES (@user_id, @name, @url, @icon_url, @rss_url, @rss_bridge_url, @category_id, @requires_js_challenge, @type)
+    INSERT INTO feeds (user_id, name, url, icon_url, rss_url, rss_bridge_url, view_type, category_id, requires_js_challenge, type)
+    VALUES (@user_id, @name, @url, @icon_url, @rss_url, @rss_bridge_url, @view_type, @category_id, @requires_js_challenge, @type)
   `, {
     user_id: scopedUserId,
     name: data.name,
@@ -110,6 +111,7 @@ export function createFeed(data: {
     icon_url: data.icon_url ?? null,
     rss_url: data.rss_url ?? null,
     rss_bridge_url: data.rss_bridge_url ?? null,
+    view_type: data.view_type ?? null,
     category_id: data.category_id ?? null,
     requires_js_challenge: data.requires_js_challenge ?? 0,
     type: data.type ?? 'rss',
@@ -119,7 +121,7 @@ export function createFeed(data: {
 
 export function updateFeed(
   id: number,
-  data: { name?: string; icon_url?: string | null; rss_url?: string | null; rss_bridge_url?: string | null; disabled?: number; category_id?: number | null; requires_js_challenge?: number },
+  data: { name?: string; icon_url?: string | null; rss_url?: string | null; rss_bridge_url?: string | null; view_type?: Feed['view_type']; disabled?: number; category_id?: number | null; requires_js_challenge?: number },
   userId?: number | null,
 ): Feed | undefined {
   const feed = getFeedById(id, userId)
@@ -144,6 +146,10 @@ export function updateFeed(
   if (data.rss_bridge_url !== undefined) {
     fields.push('rss_bridge_url = @rss_bridge_url')
     params.rss_bridge_url = data.rss_bridge_url
+  }
+  if (data.view_type !== undefined) {
+    fields.push('view_type = @view_type')
+    params.view_type = data.view_type
   }
   if (data.disabled !== undefined) {
     fields.push('disabled = @disabled')

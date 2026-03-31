@@ -408,6 +408,22 @@ describe('GET /api/articles feed icon metadata', () => {
     expect(res.json().article_kind).toBe('quote')
   })
 
+  it('returns resolved feed_view_type from list and by-url responses', async () => {
+    const socialFeed = seedFeed({ url: 'https://x.com/example', rss_url: 'https://rsshub.app/twitter/user/example' })
+    seedArticle(socialFeed.id, { url: 'https://x.com/example/status/4' })
+
+    const listRes = await app.inject({ method: 'GET', url: `/api/articles?feed_id=${socialFeed.id}` })
+    const detailRes = await app.inject({
+      method: 'GET',
+      url: `/api/articles/by-url?url=${encodeURIComponent('https://x.com/example/status/4')}`,
+    })
+
+    expect(listRes.statusCode).toBe(200)
+    expect(listRes.json().articles[0].feed_view_type).toBe('social')
+    expect(detailRes.statusCode).toBe(200)
+    expect(detailRes.json().feed_view_type).toBe('social')
+  })
+
   it('returns has_video from list and by-url responses', async () => {
     const feed = seedFeed()
     seedArticle(feed.id, {

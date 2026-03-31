@@ -4,7 +4,7 @@ import seedConversationsEn from './seed/en/conversations.json'
 import seedConversationsJa from './seed/ja/conversations.json'
 import { getLocale, dt } from './i18n'
 import type { FeedWithCounts, ArticleListItem, ArticleDetail, Category } from '../../../shared/types'
-import type { ArticleKind } from '../../../shared/article-kind'
+import { resolveFeedViewType, type ArticleKind, type FeedViewType } from '../../../shared/article-kind'
 
 type Locale = 'ja' | 'en'
 
@@ -69,6 +69,7 @@ interface SeedFeed {
   icon_url?: string | null
   rss_url: string | null
   rss_bridge_url: string | null
+  view_type: FeedViewType | null
   category_id: number | null
   category_name: string | null
   lang: string
@@ -145,6 +146,7 @@ function createFeed(overrides: Partial<SeedFeed> & Pick<SeedFeed, 'name' | 'url'
     icon_url: null,
     rss_url: overrides.url,
     rss_bridge_url: null,
+    view_type: null,
     category_id: null,
     category_name: null,
     lang: getLocale(),
@@ -186,11 +188,13 @@ function createArticle(overrides: Partial<SeedArticle> & Pick<SeedArticle, 'feed
 }
 
 function toArticleListItem(a: SeedArticle): ArticleListItem {
+  const feed = feeds.find(f => f.id === a.feed_id)
   return {
     id: a.id,
     feed_id: a.feed_id,
     feed_name: feedName(a.feed_id),
     feed_icon_url: feedIconUrl(a.feed_id),
+    feed_view_type: resolveFeedViewType(feed ?? {}),
     article_kind: a.article_kind ?? null,
     title: a.title,
     url: a.url,

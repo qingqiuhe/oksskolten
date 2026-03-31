@@ -493,6 +493,7 @@ export const ArticleList = forwardRef<ArticleListHandle, object>(function Articl
             article: effectiveArticle,
             layout,
             isFeatured: layout === 'magazine' && index === 0,
+            feedViewType: effectiveArticle.feed_view_type,
             onClick: handleOverlayOpen,
             ...displayConfig,
           }

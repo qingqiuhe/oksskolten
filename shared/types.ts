@@ -1,7 +1,7 @@
 // Shared type definitions for Feed, Category, Article and related types.
 // Canonical source of truth — server/db.ts re-exports these.
 
-import type { ArticleKind } from './article-kind.js'
+import type { ArticleKind, FeedViewType } from './article-kind.js'
 
 export interface Category {
   id: number
@@ -18,6 +18,7 @@ export interface Feed {
   icon_url: string | null
   rss_url: string | null
   rss_bridge_url: string | null
+  view_type: FeedViewType | null
   category_id: number | null
   last_error: string | null
   error_count: number
@@ -69,6 +70,7 @@ export interface ArticleListItem {
   feed_id: number
   feed_name: string
   feed_icon_url?: string | null
+  feed_view_type: FeedViewType
   title: string
   url: string
   article_kind: ArticleKind | null

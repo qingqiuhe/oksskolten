@@ -119,6 +119,14 @@ body {
   word-break: break-word;
 }
 
+.social-content {
+  font-family: var(--font-article);
+  overflow-wrap: break-word;
+  word-break: break-word;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
 .article-card {
   font-family: var(--font-article);
 }
@@ -153,10 +161,23 @@ body {
   line-height: 1.8;
 }
 
+.social-content p {
+  margin-bottom: 0.9em;
+}
+
 .prose a {
   color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.social-content a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.social-content a:hover {
+  text-decoration: underline;
 }
 
 .prose img {
@@ -170,9 +191,26 @@ body {
   cursor: zoom-in;
 }
 
+.social-content img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  margin: 1rem 0;
+  border-radius: 16px;
+  cursor: zoom-in;
+}
+
 .prose img.error {
   height: 60px;
   max-height: 60px;
+  object-fit: contain;
+  background: var(--color-bg-subtle);
+  border: 1px dashed var(--color-border);
+}
+
+.social-content img.error {
+  height: 60px;
   object-fit: contain;
   background: var(--color-bg-subtle);
   border: 1px dashed var(--color-border);
@@ -186,6 +224,65 @@ body {
   margin: 1.5em 0;
   border-radius: 8px;
   background: var(--color-bg-subtle);
+}
+
+.social-content video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  margin: 1rem 0;
+  border-radius: 16px;
+  background: var(--color-bg-subtle);
+}
+
+.prose .video-fallback-link,
+.social-content .video-fallback-link {
+  display: block;
+  width: 100%;
+  margin: 1.5em 0;
+  text-decoration: none;
+}
+
+.prose .video-fallback-poster,
+.social-content .video-fallback-poster {
+  width: 100%;
+  max-width: 100%;
+  max-height: none;
+  margin: 0;
+  border-radius: 16px;
+  background: var(--color-bg-subtle);
+  cursor: pointer;
+}
+
+.prose .video-fallback-caption,
+.prose .video-fallback-text,
+.social-content .video-fallback-caption,
+.social-content .video-fallback-text {
+  display: inline-block;
+  margin-top: 0.5rem;
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.social-content h1,
+.social-content h2,
+.social-content h3,
+.social-content h4,
+.social-content h5,
+.social-content h6 {
+  margin: 1em 0 0.5em;
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.social-content blockquote {
+  margin: 1rem 0;
+  padding-left: 1rem;
+  border-left: 3px solid var(--color-border);
+  color: var(--color-text-muted);
 }
 
 .prose pre {

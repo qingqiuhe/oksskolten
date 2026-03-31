@@ -6,6 +6,7 @@ interface ArticleContentBodyProps {
   translatingText: string
   translatingHtml: string
   displayContent: string
+  className?: string
 }
 
 export function ArticleContentBody({
@@ -13,9 +14,10 @@ export function ArticleContentBody({
   translatingText,
   translatingHtml,
   displayContent,
+  className = 'prose article-rendered-content transition-opacity duration-150',
 }: ArticleContentBodyProps) {
   if (translating && translatingText) {
-    return <SanitizedHTML html={translatingHtml} className="prose transition-opacity duration-150" />
+    return <SanitizedHTML html={translatingHtml} className={className} />
   }
 
   if (translating) {
@@ -28,5 +30,5 @@ export function ArticleContentBody({
     )
   }
 
-  return <SanitizedHTML html={displayContent} className="prose transition-opacity duration-150" />
+  return <SanitizedHTML html={displayContent} className={className} />
 }

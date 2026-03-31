@@ -100,6 +100,26 @@ describe('getArticles read filter', () => {
     const { articles } = getArticles({ feedId: feed.id, limit: 100, offset: 0 })
     expect(articles[0].has_video).toBe(true)
   })
+
+  it('resolves feed_view_type from feed metadata', () => {
+    const socialFeed = seedFeed({
+      url: 'https://x.com/example',
+      rss_url: 'https://rsshub.app/twitter/user/example',
+      view_type: null,
+    })
+    const articleFeed = seedFeed({
+      url: 'https://example.com/blog',
+      view_type: 'social',
+    })
+    seedArticle(socialFeed.id, { url: 'https://x.com/example/status/1' })
+    seedArticle(articleFeed.id, { url: 'https://example.com/post/1' })
+
+    const socialArticles = getArticles({ feedId: socialFeed.id, limit: 100, offset: 0 })
+    const forcedArticles = getArticles({ feedId: articleFeed.id, limit: 100, offset: 0 })
+
+    expect(socialArticles.articles[0].feed_view_type).toBe('social')
+    expect(forcedArticles.articles[0].feed_view_type).toBe('social')
+  })
 })
 
 // --- searchArticles ---

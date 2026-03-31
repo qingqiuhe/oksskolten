@@ -176,6 +176,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
     handleMarkAllReadFeed, handleMarkAllReadCategory,
     handleDeleteFeed, handleDeleteCategory,
     handleMoveToCategory,
+    handleUpdateViewType,
     handleFetchFeed, handleFetchCategory,
     handleReDetectFeed,
     handleConfirm, handleRenameSubmit, handleToggleCollapse,
@@ -361,6 +362,8 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
         onMarkAllRead={() => handleMarkAllReadFeed(feed)}
         onDelete={() => handleDeleteFeed(feed)}
         onMoveToCategory={(catId) => handleMoveToCategory(feed, catId)}
+        currentViewType={feed.view_type}
+        onViewTypeChange={(viewType) => handleUpdateViewType(feed, viewType)}
         onFetch={() => handleFetchFeed(feed)}
         onReDetect={() => handleReDetectFeed(feed)}
       >

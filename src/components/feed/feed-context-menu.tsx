@@ -6,6 +6,8 @@ import {
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSub,
   ContextMenuSubTrigger,
   ContextMenuSubContent,
@@ -20,6 +22,8 @@ interface FeedMenuProps {
   onMarkAllRead: () => void
   onDelete: () => void
   onMoveToCategory?: (categoryId: number | null) => void
+  currentViewType?: 'article' | 'social' | null
+  onViewTypeChange?: (viewType: 'article' | 'social' | null) => void
   onFetch?: () => void
   onReDetect?: () => void
 }
@@ -32,6 +36,8 @@ export function FeedContextMenu({
   onMarkAllRead,
   onDelete,
   onMoveToCategory,
+  currentViewType,
+  onViewTypeChange,
   onFetch,
   onReDetect,
 }: FeedMenuProps) {
@@ -68,6 +74,27 @@ export function FeedContextMenu({
                   {cat.name}
                 </ContextMenuItem>
               ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
+
+        {!isClip && onViewTypeChange && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              {t('feeds.viewAs')}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              <ContextMenuRadioGroup value={currentViewType ?? 'auto'}>
+                <ContextMenuRadioItem value="auto" onSelect={() => onViewTypeChange(null)}>
+                  {t('feeds.viewType.auto')}
+                </ContextMenuRadioItem>
+                <ContextMenuRadioItem value="article" onSelect={() => onViewTypeChange('article')}>
+                  {t('feeds.viewType.article')}
+                </ContextMenuRadioItem>
+                <ContextMenuRadioItem value="social" onSelect={() => onViewTypeChange('social')}>
+                  {t('feeds.viewType.social')}
+                </ContextMenuRadioItem>
+              </ContextMenuRadioGroup>
             </ContextMenuSubContent>
           </ContextMenuSub>
         )}

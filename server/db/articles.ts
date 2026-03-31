@@ -5,7 +5,7 @@ import { syncArticleToSearch, deleteArticleFromSearch, deleteArticlesFromSearch,
 import { RETRY_MAX_ATTEMPTS, RETRY_BATCH_LIMIT } from '../fetcher/util.js'
 import { deleteArticleImages } from '../fetcher/article-images.js'
 import { logger } from '../logger.js'
-import { detectArticleKindForFeed, isArticleKind, type ArticleKind } from '../../shared/article-kind.js'
+import { detectArticleKindForFeed, isArticleKind, resolveFeedViewType, type ArticleKind } from '../../shared/article-kind.js'
 import { getCurrentUserId } from '../identity.js'
 
 const log = logger.child('retention')
@@ -39,12 +39,46 @@ function hasVideoExpr(prefix: string): string {
   return `CASE WHEN COALESCE(${prefix}full_text, '') LIKE '%<video%' THEN 1 ELSE 0 END`
 }
 
-function mapArticleListItem<T extends ArticleListItem>(article: T): T {
-  return { ...article, has_video: Boolean(article.has_video) }
+type ArticleListItemRow = ArticleListItem & {
+  _feed_view_type_raw?: string | null
+  _feed_url?: string | null
+  _feed_rss_url?: string | null
+  _feed_rss_bridge_url?: string | null
 }
 
-function mapArticleDetail<T extends ArticleDetail>(article: T | undefined): T | undefined {
-  return article ? { ...article, has_video: Boolean(article.has_video) } : undefined
+type ArticleDetailRow = ArticleDetail & ArticleListItemRow
+
+function mapArticleListItem(article: ArticleListItemRow): ArticleListItem {
+  const {
+    _feed_view_type_raw,
+    _feed_url,
+    _feed_rss_url,
+    _feed_rss_bridge_url,
+    ...rest
+  } = article
+
+  return {
+    ...rest,
+    has_video: Boolean(article.has_video),
+    feed_view_type: resolveFeedViewType({
+      view_type: _feed_view_type_raw,
+      url: _feed_url,
+      rss_url: _feed_rss_url,
+      rss_bridge_url: _feed_rss_bridge_url,
+    }),
+  }
+}
+
+function mapArticleDetail(article: ArticleDetailRow | undefined): ArticleDetail | undefined {
+  return article ? {
+    ...mapArticleListItem(article),
+    full_text: article.full_text,
+    full_text_translated: article.full_text_translated,
+    translated_lang: article.translated_lang,
+    images_archived_at: article.images_archived_at,
+    feed_type: article.feed_type,
+    imageArchivingEnabled: article.imageArchivingEnabled,
+  } : undefined
 }
 
 // --- Score computation ---
@@ -222,6 +256,7 @@ export function getArticles(opts: {
 
   const articles = allNamed<ArticleListItem>(`
     SELECT a.id, a.feed_id, f.name AS feed_name, f.icon_url AS feed_icon_url,
+           f.view_type AS _feed_view_type_raw, f.url AS _feed_url, f.rss_url AS _feed_rss_url, f.rss_bridge_url AS _feed_rss_bridge_url,
            a.title, a.url, a.article_kind, a.published_at, a.lang, a.summary, a.excerpt, a.og_image, a.seen_at, a.read_at, a.bookmarked_at, a.liked_at,
            ${hasVideoExpr('a.')} AS has_video,
            a.score,
@@ -231,7 +266,7 @@ export function getArticles(opts: {
     ${where}
     ORDER BY ${orderBy}
     LIMIT @_limit OFFSET @_offset
-  `, { ...params, _limit: Number(opts.limit), _offset: Number(opts.offset) }).map(mapArticleListItem)
+  `, { ...params, _limit: Number(opts.limit), _offset: Number(opts.offset) }).map((row) => mapArticleListItem(row as ArticleListItemRow))
 
   return { articles, total, ...(totalWithoutFloor != null && totalWithoutFloor > total ? { totalWithoutFloor } : {}) }
 }
@@ -240,6 +275,7 @@ export function getArticleByUrl(url: string, userId?: number | null): ArticleDet
   const scopedUserId = resolveUserId(userId)
   return mapArticleDetail(getDb().prepare(`
     SELECT a.id, a.feed_id, f.name AS feed_name, f.icon_url AS feed_icon_url, f.type AS feed_type,
+           f.view_type AS _feed_view_type_raw, f.url AS _feed_url, f.rss_url AS _feed_rss_url, f.rss_bridge_url AS _feed_rss_bridge_url,
            a.title, a.url, a.article_kind, a.published_at, a.lang, a.summary, a.excerpt, a.og_image,
            ${hasVideoExpr('a.')} AS has_video,
            a.full_text, a.full_text_translated, a.translated_lang, a.seen_at, a.read_at, a.bookmarked_at, a.liked_at,
@@ -249,13 +285,14 @@ export function getArticleByUrl(url: string, userId?: number | null): ArticleDet
     JOIN feeds f ON a.feed_id = f.id
     WHERE a.url = ?
       ${scopedUserId == null ? '' : 'AND a.user_id = ?'}
-  `).get(...(scopedUserId == null ? [normalizeUrl(url)] : [normalizeUrl(url), scopedUserId])) as ArticleDetail | undefined)
+  `).get(...(scopedUserId == null ? [normalizeUrl(url)] : [normalizeUrl(url), scopedUserId])) as ArticleDetailRow | undefined)
 }
 
 export function getArticleById(id: number, userId?: number | null): ArticleDetail | undefined {
   const scopedUserId = resolveUserId(userId)
   return mapArticleDetail(getDb().prepare(`
     SELECT a.id, a.feed_id, f.name AS feed_name, f.icon_url AS feed_icon_url, f.type AS feed_type,
+           f.view_type AS _feed_view_type_raw, f.url AS _feed_url, f.rss_url AS _feed_rss_url, f.rss_bridge_url AS _feed_rss_bridge_url,
            a.title, a.url, a.article_kind, a.published_at, a.lang, a.summary, a.excerpt, a.og_image,
            ${hasVideoExpr('a.')} AS has_video,
            a.full_text, a.full_text_translated, a.translated_lang, a.seen_at, a.read_at, a.bookmarked_at, a.liked_at,
@@ -265,7 +302,7 @@ export function getArticleById(id: number, userId?: number | null): ArticleDetai
     JOIN feeds f ON a.feed_id = f.id
     WHERE a.id = ?
       ${scopedUserId == null ? '' : 'AND a.user_id = ?'}
-  `).get(...(scopedUserId == null ? [id] : [id, scopedUserId])) as ArticleDetail | undefined)
+  `).get(...(scopedUserId == null ? [id] : [id, scopedUserId])) as ArticleDetailRow | undefined)
 }
 
 export function markArticleSeen(
@@ -684,6 +721,7 @@ export function getArticlesByIds(
 
   return getDb().prepare(`
     SELECT a.id, a.feed_id, f.name AS feed_name, f.icon_url AS feed_icon_url,
+           f.view_type AS _feed_view_type_raw, f.url AS _feed_url, f.rss_url AS _feed_rss_url, f.rss_bridge_url AS _feed_rss_bridge_url,
            a.title, a.url, a.article_kind, a.published_at, a.lang, a.summary, a.excerpt,
            a.og_image, ${hasVideoExpr('a.')} AS has_video, a.seen_at, a.read_at, a.bookmarked_at, a.liked_at,
            ${score} AS score
@@ -691,7 +729,7 @@ export function getArticlesByIds(
     JOIN feeds f ON a.feed_id = f.id
     ${where}
     ORDER BY CASE a.id ${orderCase} END
-  `).all(...ids, ...(scopedUserId == null ? [] : [scopedUserId])).map((row) => mapArticleListItem(row as ArticleListItem))
+  `).all(...ids, ...(scopedUserId == null ? [] : [scopedUserId])).map((row) => mapArticleListItem(row as ArticleListItemRow))
 }
 
 // --- Search queries ---
@@ -767,6 +805,7 @@ export function searchArticles(opts: {
 
   return allNamed<ArticleListItem>(`
     SELECT a.id, a.feed_id, f.name AS feed_name, f.icon_url AS feed_icon_url,
+           f.view_type AS _feed_view_type_raw, f.url AS _feed_url, f.rss_url AS _feed_rss_url, f.rss_bridge_url AS _feed_rss_bridge_url,
            a.title, a.url, a.article_kind, a.published_at, a.lang, a.summary, a.excerpt, a.og_image, a.seen_at, a.read_at, a.bookmarked_at, a.liked_at,
            ${hasVideoExpr('a.')} AS has_video,
            ${score} AS score
@@ -775,7 +814,7 @@ export function searchArticles(opts: {
     ${where}
     ORDER BY ${orderBy}
     LIMIT ${Number(limit)}
-  `, params).map(mapArticleListItem)
+  `, params).map((row) => mapArticleListItem(row as ArticleListItemRow))
 }
 
 export function markImagesArchived(articleId: number): void {

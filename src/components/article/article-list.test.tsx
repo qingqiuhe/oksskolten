@@ -87,14 +87,14 @@ vi.mock('../ui/mascot', () => ({
 }))
 
 vi.mock('./swipeable-article-card', () => ({
-  SwipeableArticleCard: ({ article }: { article: ArticleListItem }) => (
-    <div data-testid={`swipeable-${article.id}`}>{article.title}</div>
+  SwipeableArticleCard: ({ article, feedViewType }: { article: ArticleListItem; feedViewType?: string }) => (
+    <div data-testid={`swipeable-${article.id}`} data-feed-view-type={feedViewType}>{article.title}</div>
   ),
 }))
 
 vi.mock('./article-card', () => ({
-  ArticleCard: ({ article }: { article: ArticleListItem }) => (
-    <div data-testid={`article-${article.id}`}>{article.title}</div>
+  ArticleCard: ({ article, feedViewType }: { article: ArticleListItem; feedViewType?: string }) => (
+    <div data-testid={`article-${article.id}`} data-feed-view-type={feedViewType}>{article.title}</div>
   ),
 }))
 
@@ -127,6 +127,7 @@ function makeArticle(overrides: Partial<ArticleListItem> = {}): ArticleListItem 
     id: 1,
     feed_id: 1,
     feed_name: 'Test Feed',
+    feed_view_type: 'article',
     article_kind: null,
     title: 'Test Article',
     url: 'https://example.com/1',
@@ -269,6 +270,25 @@ describe('ArticleList', () => {
     renderArticleList()
     expect(screen.getByText('First Article')).toBeTruthy()
     expect(screen.getByText('Second Article')).toBeTruthy()
+  })
+
+  it('passes social feed view type to cards', () => {
+    swrInfiniteReturn = {
+      data: [{
+        articles: [makeArticle({ id: 7, title: 'Social Article', feed_view_type: 'social' })],
+        total: 1,
+        has_more: false,
+      }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList()
+    expect(screen.getByTestId('article-7').getAttribute('data-feed-view-type')).toBe('social')
   })
 
   it('shows mascot at end of feed', () => {
