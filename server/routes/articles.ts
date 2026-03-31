@@ -34,6 +34,7 @@ import { archiveArticleImages, isImageArchivingEnabled, deleteArticleImages } fr
 import { getSetting } from '../db/settings.js'
 import { DEFAULT_LANGUAGE } from '../../shared/lang.js'
 import type { ArticleKind } from '../../shared/article-kind.js'
+import { buildNotificationPreview } from '../notifications/article-preview.js'
 import path from 'node:path'
 import fs from 'node:fs'
 import { dataPath } from '../paths.js'
@@ -365,6 +366,11 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
 
       // Fetch content (same pipeline as RSS feeds)
       const content = await fetchArticleContent(body.url)
+      const notificationPreview = buildNotificationPreview({
+        articleUrl: body.url,
+        fullText: content.fullText,
+        ogImage: content.ogImage,
+      })
 
       const title = body.title || content.title || new URL(body.url).hostname
       const articleId = insertArticle({
@@ -377,6 +383,9 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
         full_text: content.fullText,
         excerpt: content.excerpt,
         og_image: content.ogImage,
+        notification_body_text: notificationPreview.notification_body_text,
+        notification_media_json: notificationPreview.notification_media_json,
+        notification_media_extracted_at: notificationPreview.notification_media_extracted_at,
         last_error: content.lastError,
       })
 

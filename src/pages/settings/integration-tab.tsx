@@ -3,6 +3,7 @@ import { useAppLayout } from '../../app'
 import { Separator } from '@/components/ui/separator'
 import { ProviderConfigSection } from './sections/provider-config-section'
 import { TaskModelSection } from './sections/task-model-section'
+import { NotificationChannelsSection } from './sections/notification-channels-section'
 
 export function IntegrationTab() {
   const { settings } = useAppLayout()
@@ -11,6 +12,8 @@ export function IntegrationTab() {
   return (
     <>
       <ProviderConfigSection t={t} settings={settings} />
+      <Separator />
+      <NotificationChannelsSection t={t} />
       <Separator />
       <TaskModelSection settings={settings} t={t} />
     </>

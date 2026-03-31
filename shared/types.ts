@@ -54,6 +54,9 @@ export interface Article {
   translated_lang: string | null
   summary: string | null
   og_image: string | null
+  notification_body_text: string | null
+  notification_media_json: string | null
+  notification_media_extracted_at: string | null
   last_error: string | null
   retry_count: number
   last_retry_at: string | null
@@ -95,4 +98,32 @@ export interface ArticleDetail extends ArticleListItem {
   images_archived_at: string | null
   feed_type: 'rss' | 'clip'
   imageArchivingEnabled: boolean
+}
+
+export interface NotificationChannel {
+  id: number
+  user_id: number | null
+  type: 'feishu_webhook'
+  name: string
+  webhook_url: string
+  secret: string | null
+  enabled: number
+  created_at: string
+  updated_at: string
+}
+
+export interface FeedNotificationRule {
+  id: number
+  user_id: number | null
+  feed_id: number
+  enabled: number
+  check_interval_minutes: number
+  next_check_at: string | null
+  last_checked_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface FeedNotificationRuleRecord extends FeedNotificationRule {
+  channel_ids: number[]
 }

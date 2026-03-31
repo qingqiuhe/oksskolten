@@ -23,6 +23,7 @@ import { computeInterval, computeEmpiricalInterval, sqliteFuture, DEFAULT_INTERV
 import { detectLanguage } from './fetcher/ai.js'
 import { logger } from './logger.js'
 import type { ArticleKind } from '../shared/article-kind.js'
+import { buildNotificationPreview } from './notifications/article-preview.js'
 
 const log = logger.child('fetcher')
 
@@ -154,6 +155,11 @@ async function processArticle(task: ArticleTask): Promise<boolean> {
   })
 
   const effectiveLang = content.lang || (task.kind === 'retry' ? task.article.lang : null)
+  const notificationPreview = buildNotificationPreview({
+    articleUrl,
+    fullText: content.fullText,
+    ogImage: content.ogImage,
+  })
 
   // Persist
   if (task.kind === 'new') {
@@ -170,6 +176,9 @@ async function processArticle(task: ArticleTask): Promise<boolean> {
         summary: null,
         excerpt: content.excerpt,
         og_image: content.ogImage,
+        notification_body_text: notificationPreview.notification_body_text,
+        notification_media_json: notificationPreview.notification_media_json,
+        notification_media_extracted_at: notificationPreview.notification_media_extracted_at,
         last_error: content.lastError,
       })
       // Fire-and-forget: detect similar articles asynchronously
@@ -186,6 +195,9 @@ async function processArticle(task: ArticleTask): Promise<boolean> {
       full_text: content.fullText,
       excerpt: content.excerpt,
       og_image: content.ogImage,
+      notification_body_text: notificationPreview.notification_body_text,
+      notification_media_json: notificationPreview.notification_media_json,
+      notification_media_extracted_at: notificationPreview.notification_media_extracted_at,
       last_error: content.lastError,
     })
   }

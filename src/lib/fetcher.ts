@@ -23,6 +23,7 @@ async function request(url: string, method: string, body?: unknown) {
 }
 
 export const apiPost = (url: string, body?: unknown) => request(url, 'POST', body)
+export const apiPut = (url: string, body: unknown) => request(url, 'PUT', body)
 export const apiPatch = (url: string, body: unknown) => request(url, 'PATCH', body)
 export const apiDelete = (url: string) => request(url, 'DELETE')
 

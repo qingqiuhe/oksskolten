@@ -26,6 +26,7 @@ import { useGlobalShortcuts } from '../../hooks/use-global-shortcuts'
 import { useAppLayout } from '../../app'
 import { extractDomain } from '../../lib/url'
 import type { FeedWithCounts, Category } from '../../../shared/types'
+import { FeedNotificationDialog } from './feed-notification-dialog'
 
 function isFeedInactive(feed: FeedWithCounts): boolean {
   if (feed.article_count === 0) return false
@@ -82,6 +83,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
   const [feedModalOpen, setFeedModalOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
+  const [notificationFeed, setNotificationFeed] = useState<FeedWithCounts | null>(null)
 
   useGlobalShortcuts({
     onCommandPalette: () => setCommandOpen(true),
@@ -366,6 +368,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
         onViewTypeChange={(viewType) => handleUpdateViewType(feed, viewType)}
         onFetch={() => handleFetchFeed(feed)}
         onReDetect={() => handleReDetectFeed(feed)}
+        onConfigureNotifications={() => setNotificationFeed(feed)}
       >
         {button}
       </FeedContextMenu>
@@ -554,6 +557,13 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
         onOpenSearch={() => setSearchOpen(true)}
         onOpenAddFeed={() => setFeedModalOpen(true)}
       />
+
+      {notificationFeed && (
+        <FeedNotificationDialog
+          feed={notificationFeed}
+          onClose={() => setNotificationFeed(null)}
+        />
+      )}
 
       {bulkDeleteConfirm && (
         <ConfirmDialog

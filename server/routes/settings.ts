@@ -7,6 +7,11 @@ import {
   getRetentionStats,
   purgeExpiredArticles,
   getDb,
+  listNotificationChannels,
+  getNotificationChannelById,
+  createNotificationChannel,
+  updateNotificationChannel,
+  deleteNotificationChannel,
 } from '../db.js'
 import { requireJson, getAuthUser, getRequestUserId } from '../auth.js'
 import { getAllModelValues, getModelValues } from '../../shared/models.js'
@@ -14,7 +19,8 @@ import { assertSafeUrl } from '../fetcher/ssrf.js'
 import { extractByDotPath } from '../fetcher/article-images.js'
 import { getMonthlyUsage } from '../providers/translate/google-translate.js'
 import { getDeeplMonthlyUsage } from '../providers/translate/deepl.js'
-import { parseOrBadRequest } from '../lib/validation.js'
+import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
+import { sendFeishuTestMessage } from '../notifications/feishu.js'
 
 const ProfileBody = z.object({
   account_name: z.string().optional(),
@@ -24,6 +30,19 @@ const ProfileBody = z.object({
 
 const ProviderParams = z.object({ provider: z.string() })
 const ApiKeyBody = z.object({ apiKey: z.string().optional() })
+const NotificationChannelBody = z.object({
+  type: z.literal('feishu_webhook'),
+  name: z.string().trim().min(1, 'name is required'),
+  webhook_url: z.string().url('webhook_url must be a valid URL'),
+  secret: z.string().nullable().optional(),
+  enabled: z.boolean().optional(),
+})
+const NotificationChannelPatchBody = z.object({
+  name: z.string().trim().min(1, 'name is required').optional(),
+  webhook_url: z.string().url('webhook_url must be a valid URL').optional(),
+  secret: z.string().nullable().optional(),
+  enabled: z.boolean().optional(),
+})
 
 const PREF_KEYS = [
   'appearance.color_theme',
@@ -113,6 +132,18 @@ function validateProviderModel(body: Record<string, unknown>, userId: number | n
     }
   }
   return null
+}
+
+function validateFeishuWebhookUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:') return 'webhook_url must use https'
+    if (parsed.hostname !== 'open.feishu.cn') return 'webhook_url must point to open.feishu.cn'
+    if (!parsed.pathname.startsWith('/open-apis/bot/v2/hook/')) return 'webhook_url must be a Feishu custom bot webhook'
+    return null
+  } catch {
+    return 'webhook_url must be a valid URL'
+  }
 }
 
 export async function settingsRoutes(api: FastifyInstance): Promise<void> {
@@ -261,6 +292,98 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
 
   api.patch('/api/settings/preferences', { preHandler: [requireJson] }, handlePrefsUpdate)
   api.post('/api/settings/preferences', { preHandler: [requireJson] }, handlePrefsUpdate)
+
+  // --- Notification channels ---
+
+  api.get('/api/settings/notification-channels', async (request, reply) => {
+    reply.send({ channels: listNotificationChannels(getRequestUserId(request)) })
+  })
+
+  api.post(
+    '/api/settings/notification-channels',
+    { preHandler: [requireJson] },
+    async (request, reply) => {
+      const body = parseOrBadRequest(NotificationChannelBody, request.body, reply)
+      if (!body) return
+
+      const webhookError = validateFeishuWebhookUrl(body.webhook_url)
+      if (webhookError) {
+        reply.status(400).send({ error: webhookError })
+        return
+      }
+
+      const channel = createNotificationChannel({
+        type: body.type,
+        name: body.name,
+        webhook_url: body.webhook_url,
+        secret: body.secret?.trim() || null,
+        enabled: body.enabled === false ? 0 : 1,
+      }, getRequestUserId(request))
+      reply.status(201).send(channel)
+    },
+  )
+
+  api.patch(
+    '/api/settings/notification-channels/:id',
+    { preHandler: [requireJson] },
+    async (request, reply) => {
+      const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+      if (!params) return
+      const body = parseOrBadRequest(NotificationChannelPatchBody, request.body, reply)
+      if (!body) return
+
+      if (body.webhook_url) {
+        const webhookError = validateFeishuWebhookUrl(body.webhook_url)
+        if (webhookError) {
+          reply.status(400).send({ error: webhookError })
+          return
+        }
+      }
+
+      const updated = updateNotificationChannel(params.id, {
+        name: body.name,
+        webhook_url: body.webhook_url,
+        secret: body.secret === undefined ? undefined : (body.secret?.trim() || null),
+        enabled: body.enabled === undefined ? undefined : (body.enabled ? 1 : 0),
+      }, getRequestUserId(request))
+
+      if (!updated) {
+        reply.status(404).send({ error: 'Notification channel not found' })
+        return
+      }
+
+      reply.send(updated)
+    },
+  )
+
+  api.delete('/api/settings/notification-channels/:id', async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+    const deleted = deleteNotificationChannel(params.id, getRequestUserId(request))
+    if (!deleted) {
+      reply.status(404).send({ error: 'Notification channel not found' })
+      return
+    }
+    reply.status(204).send()
+  })
+
+  api.post('/api/settings/notification-channels/:id/test', async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+    const channel = getNotificationChannelById(params.id, getRequestUserId(request))
+    if (!channel) {
+      reply.status(404).send({ error: 'Notification channel not found' })
+      return
+    }
+
+    try {
+      await sendFeishuTestMessage(channel)
+      reply.send({ ok: true })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      reply.status(502).send({ error: message })
+    }
+  })
 
   // --- Image storage settings ---
 

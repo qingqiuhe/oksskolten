@@ -20,6 +20,10 @@ import {
   getFeedMetrics,
   getCategories,
   createCategory,
+  getFeedNotificationRule,
+  upsertFeedNotificationRule,
+  deleteFeedNotificationRule,
+  listNotificationChannels,
 } from '../db.js'
 import { requireJson, getRequestUserId } from '../auth.js'
 import { fetchSingleFeed, discoverRssUrl } from '../fetcher.js'
@@ -49,6 +53,11 @@ const UpdateFeedBody = z.object({
   view_type: z.enum(['article', 'social']).nullable().optional(),
   disabled: z.number().optional(),
   category_id: z.number().nullable().optional(),
+})
+const FeedNotificationRuleBody = z.object({
+  enabled: z.boolean(),
+  check_interval_minutes: z.number().int().min(5).max(1440),
+  channel_ids: z.array(z.number().int()).max(32),
 })
 
 export async function feedRoutes(api: FastifyInstance): Promise<void> {
@@ -188,6 +197,83 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       reply.send(withCounts || feed)
     },
   )
+
+  api.get('/api/feeds/:id/notification-rule', async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+    const userId = getRequestUserId(request)
+    const feed = getFeedById(params.id, userId)
+    if (!feed) {
+      reply.status(404).send({ error: 'Feed not found' })
+      return
+    }
+
+    const rule = getFeedNotificationRule(params.id, userId)
+    reply.send(rule ?? {
+      id: null,
+      user_id: userId,
+      feed_id: params.id,
+      enabled: 0,
+      check_interval_minutes: 60,
+      next_check_at: null,
+      last_checked_at: null,
+      created_at: null,
+      updated_at: null,
+      channel_ids: [],
+    })
+  })
+
+  api.put(
+    '/api/feeds/:id/notification-rule',
+    { preHandler: [requireJson] },
+    async (request, reply) => {
+      const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+      if (!params) return
+      const body = parseOrBadRequest(FeedNotificationRuleBody, request.body, reply)
+      if (!body) return
+
+      const userId = getRequestUserId(request)
+      const feed = getFeedById(params.id, userId)
+      if (!feed) {
+        reply.status(404).send({ error: 'Feed not found' })
+        return
+      }
+
+      const availableChannels = new Map(
+        listNotificationChannels(userId)
+          .filter(channel => channel.enabled === 1)
+          .map(channel => [channel.id, channel]),
+      )
+
+      if (body.enabled && body.channel_ids.length === 0) {
+        reply.status(400).send({ error: 'channel_ids must not be empty when notifications are enabled' })
+        return
+      }
+
+      for (const channelId of body.channel_ids) {
+        if (!availableChannels.has(channelId)) {
+          reply.status(400).send({ error: `Invalid notification channel: ${channelId}` })
+          return
+        }
+      }
+
+      const rule = upsertFeedNotificationRule(params.id, body, userId)
+      reply.send(rule)
+    },
+  )
+
+  api.delete('/api/feeds/:id/notification-rule', async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+    const userId = getRequestUserId(request)
+    const feed = getFeedById(params.id, userId)
+    if (!feed) {
+      reply.status(404).send({ error: 'Feed not found' })
+      return
+    }
+    deleteFeedNotificationRule(params.id, userId)
+    reply.status(204).send()
+  })
 
   const BulkMoveBody = z.object({
     feed_ids: z.array(z.number()).min(1, 'feed_ids must not be empty'),

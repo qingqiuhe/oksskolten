@@ -498,14 +498,25 @@ export function insertArticle(data: {
   summary?: string | null
   excerpt?: string | null
   og_image?: string | null
+  notification_body_text?: string | null
+  notification_media_json?: string | null
+  notification_media_extracted_at?: string | null
   last_error?: string | null
 }): number {
   const inferredUserId = data.user_id
     ?? resolveUserId()
     ?? (getDb().prepare('SELECT user_id FROM feeds WHERE id = ?').get(data.feed_id) as { user_id: number | null } | undefined)?.user_id
   const info = runNamed(`
-    INSERT INTO articles (user_id, feed_id, category_id, title, url, article_kind, published_at, lang, full_text, full_text_translated, translated_lang, summary, excerpt, og_image, last_error)
-    VALUES (@user_id, @feed_id, (SELECT category_id FROM feeds WHERE id = @feed_id), @title, @url, @article_kind, @published_at, @lang, @full_text, @full_text_translated, @translated_lang, @summary, @excerpt, @og_image, @last_error)
+    INSERT INTO articles (
+      user_id, feed_id, category_id, title, url, article_kind, published_at, lang,
+      full_text, full_text_translated, translated_lang, summary, excerpt, og_image,
+      notification_body_text, notification_media_json, notification_media_extracted_at, last_error
+    )
+    VALUES (
+      @user_id, @feed_id, (SELECT category_id FROM feeds WHERE id = @feed_id), @title, @url, @article_kind, @published_at, @lang,
+      @full_text, @full_text_translated, @translated_lang, @summary, @excerpt, @og_image,
+      @notification_body_text, @notification_media_json, @notification_media_extracted_at, @last_error
+    )
   `, {
     user_id: inferredUserId ?? null,
     feed_id: data.feed_id,
@@ -520,6 +531,9 @@ export function insertArticle(data: {
     summary: data.summary ?? null,
     excerpt: data.excerpt ?? null,
     og_image: data.og_image ?? null,
+    notification_body_text: data.notification_body_text ?? null,
+    notification_media_json: data.notification_media_json ?? null,
+    notification_media_extracted_at: data.notification_media_extracted_at ?? null,
     last_error: data.last_error ?? null,
   })
   const articleId = info.lastInsertRowid as number
@@ -539,6 +553,9 @@ export function updateArticleContent(
     summary?: string | null
     excerpt?: string | null
     og_image?: string | null
+    notification_body_text?: string | null
+    notification_media_json?: string | null
+    notification_media_extracted_at?: string | null
     last_error?: string | null
     retry_count?: number
     last_retry_at?: string | null

@@ -5,6 +5,8 @@ export { getArticles, getArticleByUrl, getArticleById, getArticlesByIds, markArt
 export type { RetryStats } from './articles.js'
 export { getCategories, getCategoryById, createCategory, updateCategory, deleteCategory, markAllSeenByCategory } from './categories.js'
 export { getSetting, upsertSetting, deleteSetting, getInstanceSetting, upsertInstanceSetting, deleteInstanceSetting, getUserSetting, upsertUserSetting, deleteUserSetting, getOrCreateJwtSecret } from './settings.js'
+export { listNotificationChannels, getNotificationChannelById, createNotificationChannel, updateNotificationChannel, deleteNotificationChannel, getFeedNotificationRule, upsertFeedNotificationRule, deleteFeedNotificationRule, listDueNotificationRules, listRuleBindings, getPendingNotificationArticles, markNotificationBindingDelivered, markNotificationBindingError, markNotificationRuleChecked } from './notifications.js'
+export type { NotificationChannel, FeedNotificationRule, FeedNotificationRuleRecord, FeedNotificationBinding, DueNotificationRule, NotificationArticleRecord } from './notifications.js'
 export { createConversation, getConversations, getConversationById, updateConversation, deleteConversation, insertChatMessage, getChatMessages, deleteChatMessage, replaceChatMessages } from './conversations.js'
 export { createApiKey, listApiKeys, deleteApiKey, validateApiKey } from './apiKeys.js'
 export type { ApiKey, ApiKeyCreated } from './apiKeys.js'

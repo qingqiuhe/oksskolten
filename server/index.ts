@@ -20,6 +20,7 @@ import { oauthRoutes } from './oauthRoutes.js'
 import { fetchAllFeeds } from './fetcher.js'
 import { rebuildSearchIndex, isSearchReady, syncAllScoredArticlesToSearch } from './search/sync.js'
 import { CONTENT_SECURITY_POLICY } from './security.js'
+import { runNotificationChecks } from './notifications/runner.js'
 
 // --- Startup guards ---
 if (process.env.AUTH_DISABLED === '1' && process.env.NODE_ENV !== 'development') {
@@ -180,6 +181,15 @@ cronTasks.push(cron.schedule(CRON_SCHEDULE, async () => {
   activeFetchPromise = p
   await p
   activeFetchPromise = null
+}))
+
+const NOTIFICATION_CRON_SCHEDULE = process.env.NOTIFICATION_CRON_SCHEDULE || '* * * * *'
+cronTasks.push(cron.schedule(NOTIFICATION_CRON_SCHEDULE, async () => {
+  try {
+    await runNotificationChecks()
+  } catch (err) {
+    log.error('[cron] Notification check error:', err)
+  }
 }))
 
 // --- Score recalculation ---

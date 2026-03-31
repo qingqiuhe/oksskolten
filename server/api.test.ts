@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from './__tests__/helpers/testDb.js'
 import { buildApp } from './__tests__/helpers/buildApp.js'
-import { createFeed, insertArticle, createCategory } from './db.js'
+import { createFeed, insertArticle, createCategory, createNotificationChannel } from './db.js'
 import type { FastifyInstance } from 'fastify'
 
 vi.mock('./fetcher.js', async () => {
@@ -182,6 +182,51 @@ describe('POST /api/feeds/:id/mark-all-seen', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(res.json().updated).toBe(2)
+  })
+})
+
+describe('notification rule endpoints', () => {
+  it('returns default notification rule when missing', async () => {
+    const feed = seedFeed()
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/feeds/${feed.id}/notification-rule`,
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().enabled).toBe(0)
+    expect(res.json().channel_ids).toEqual([])
+  })
+
+  it('creates and returns a notification rule', async () => {
+    const feed = seedFeed()
+    const channel = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Team',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-token',
+      secret: null,
+      enabled: 1,
+    })
+
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: `/api/feeds/${feed.id}/notification-rule`,
+      headers: json,
+      payload: {
+        enabled: true,
+        check_interval_minutes: 30,
+        channel_ids: [channel.id],
+      },
+    })
+    expect(putRes.statusCode).toBe(200)
+    expect(putRes.json().enabled).toBe(1)
+    expect(putRes.json().channel_ids).toEqual([channel.id])
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/api/feeds/${feed.id}/notification-rule`,
+    })
+    expect(getRes.json().check_interval_minutes).toBe(30)
+    expect(getRes.json().channel_ids).toEqual([channel.id])
   })
 })
 

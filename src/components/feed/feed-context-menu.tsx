@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react'
-import { Pencil, CheckCheck, Trash2, FolderInput, RefreshCw, Search } from 'lucide-react'
+import { Pencil, CheckCheck, Trash2, FolderInput, RefreshCw, Search, BellRing } from 'lucide-react'
 import { useI18n } from '../../lib/i18n'
 import {
   ContextMenu,
@@ -26,6 +26,7 @@ interface FeedMenuProps {
   onViewTypeChange?: (viewType: 'article' | 'social' | null) => void
   onFetch?: () => void
   onReDetect?: () => void
+  onConfigureNotifications?: () => void
 }
 
 export function FeedContextMenu({
@@ -40,6 +41,7 @@ export function FeedContextMenu({
   onViewTypeChange,
   onFetch,
   onReDetect,
+  onConfigureNotifications,
 }: FeedMenuProps) {
   const { t } = useI18n()
   const isClip = feedType === 'clip'
@@ -110,6 +112,13 @@ export function FeedContextMenu({
           <ContextMenuItem onSelect={onReDetect}>
             <Search size={16} strokeWidth={1.5} />
             {t('feeds.reDetect')}
+          </ContextMenuItem>
+        )}
+
+        {!isClip && onConfigureNotifications && (
+          <ContextMenuItem onSelect={onConfigureNotifications}>
+            <BellRing size={16} strokeWidth={1.5} />
+            {t('feeds.pushNotifications')}
           </ContextMenuItem>
         )}
 
