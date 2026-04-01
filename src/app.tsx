@@ -159,7 +159,7 @@ function ArticleListPage() {
       {isLikes && <HintBanner storageKey="hint-dismissed-likes">{t('hint.likes')}</HintBanner>}
       {isHistory && <HintBanner storageKey="hint-dismissed-history">{t('hint.history')}</HintBanner>}
       {isClips && <HintBanner storageKey="hint-dismissed-clips">{t('hint.clips')}</HintBanner>}
-      <ArticleList ref={articleListRef} />
+      <ArticleList ref={articleListRef} listLabel={headerName ?? t('chat.scope.currentList')} />
     </PageLayout>
   )
 }
