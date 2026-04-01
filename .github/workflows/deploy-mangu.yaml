@@ -1,0 +1,94 @@
+name: Deploy mangu
+
+on:
+  workflow_run:
+    workflows: [Publish Docker image]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-mangu
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Install SSH key
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.MANGU_SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Add remote host to known_hosts
+        shell: bash
+        env:
+          REMOTE_HOST: ${{ vars.REMOTE_HOST }}
+          REMOTE_PORT: ${{ vars.REMOTE_PORT }}
+        run: |
+          host="${REMOTE_HOST#*@}"
+          port="${REMOTE_PORT:-22}"
+          ssh-keyscan -p "$port" -H "$host" >> ~/.ssh/known_hosts
+
+      - name: Download publish metadata
+        id: metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" --jq '.artifacts[] | select(.name=="publish-metadata") | .id' | head -n 1)"
+          if [[ -z "$artifact_id" ]]; then
+            echo "Error: publish-metadata artifact not found for run ${RUN_ID}" >&2
+            exit 1
+          fi
+
+          gh api -H "Accept: application/vnd.github+json" "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > /tmp/publish-metadata.zip
+          unzip -p /tmp/publish-metadata.zip publish-metadata.json > /tmp/publish-metadata.json
+          cat /tmp/publish-metadata.json
+
+          {
+            echo "server_image=$(jq -r '.image_ref' /tmp/publish-metadata.json)"
+            echo "git_commit=$(jq -r '.git_commit' /tmp/publish-metadata.json)"
+            echo "git_tag=$(jq -r '.git_tag' /tmp/publish-metadata.json)"
+            echo "build_date=$(jq -r '.build_date' /tmp/publish-metadata.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Deploy published image to mangu
+        env:
+          REMOTE_HOST: ${{ vars.REMOTE_HOST }}
+          REMOTE_PORT: ${{ vars.REMOTE_PORT }}
+          REMOTE_DIR: ${{ vars.REMOTE_DIR }}
+          PROJECT_NAME: ${{ vars.PROJECT_NAME }}
+          DATA_DIR: ${{ vars.DATA_DIR }}
+          PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+          SERVER_IMAGE: ${{ steps.metadata.outputs.server_image }}
+          MEILI_MASTER_KEY: ${{ secrets.MEILI_MASTER_KEY }}
+          TUNNEL_TOKEN: ${{ secrets.TUNNEL_TOKEN }}
+          GHCR_USERNAME: ${{ vars.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          EXPECTED_GIT_COMMIT: ${{ steps.metadata.outputs.git_commit }}
+          EXPECTED_GIT_TAG: ${{ steps.metadata.outputs.git_tag }}
+          EXPECTED_BUILD_DATE: ${{ steps.metadata.outputs.build_date }}
+          SSH_OPTS: -o StrictHostKeyChecking=yes
+        run: bash scripts/deploy-mangu.sh

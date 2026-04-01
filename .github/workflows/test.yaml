@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
@@ -217,15 +221,34 @@ jobs:
       - name: Lint docs
         run: bash scripts/lint-docs.sh
 
+  no-japanese:
+    name: No Japanese in source
+    needs: detect-changes
+    if: needs.detect-changes.outputs.server == 'true' || needs.detect-changes.outputs.client == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check for Japanese characters
+        run: npx tsx scripts/lint-no-japanese.ts
+
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [check, server-test, client-test, lint-docs]
+    needs: [check, server-test, client-test, lint-docs, no-japanese]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.check.result }}" "${{ needs.server-test.result }}" "${{ needs.client-test.result }}" "${{ needs.lint-docs.result }}")
+          results=("${{ needs.check.result }}" "${{ needs.server-test.result }}" "${{ needs.client-test.result }}" "${{ needs.lint-docs.result }}" "${{ needs.no-japanese.result }}")
           for r in "${results[@]}"; do
             if [[ "$r" != "success" && "$r" != "skipped" ]]; then
               echo "Job failed with result: $r"

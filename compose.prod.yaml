@@ -1,10 +1,7 @@
 services:
   server:
-    # Option A: Build locally (default)
-    build:
-      target: runtime
-    # Option B: Use pre-built image from GHCR (comment out "build" above and uncomment below)
-    # image: ghcr.io/babarot/oksskolten:latest
+    build: !reset null
+    image: ${SERVER_IMAGE:-ghcr.io/qingqiuhe/oksskolten:stable}
     command: []
     restart: unless-stopped
     environment:

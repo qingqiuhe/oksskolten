@@ -189,26 +189,46 @@ Runs anywhere Docker runs — a home NAS, a Raspberry Pi, or a cloud VM.
 
 ### Using pre-built images
 
-Pre-built multi-architecture Docker images (amd64/arm64) are published to GHCR on every release:
+Pre-built multi-architecture Docker images (amd64/arm64) are published to GHCR on every release, and `main` also publishes an auto-deployable candidate image for `mangu`:
 
 ```bash
-docker pull ghcr.io/babarot/oksskolten:latest
+docker pull ghcr.io/qingqiuhe/oksskolten:latest
 ```
 
-To use the pre-built image instead of building locally, edit `compose.prod.yaml` and swap the `build` directive for the commented-out `image` line, then:
+Production now reads `SERVER_IMAGE` from the environment. To deploy a specific published image or digest:
 
 ```bash
+export SERVER_IMAGE=ghcr.io/qingqiuhe/oksskolten:stable
 docker compose -f compose.yaml -f compose.prod.yaml up -d
 ```
 
 ### Building locally
 
 ```bash
-# Production with Cloudflare Tunnel
-docker compose -f compose.yaml -f compose.prod.yaml up --build -d
+# Production with Cloudflare Tunnel from a published image
+export SERVER_IMAGE=ghcr.io/qingqiuhe/oksskolten:stable
+docker compose -f compose.yaml -f compose.prod.yaml up -d
 ```
 
 The production compose file includes a `cloudflared` sidecar that exposes the app via Cloudflare Tunnel — no port forwarding or static IP required.
+
+### Automatic deploy to `mangu`
+
+`main` now publishes a candidate image to GHCR and triggers an automatic deploy workflow for `mangu`. Configure the following GitHub Actions settings before enabling it:
+
+- Repository / environment variables:
+  - `REMOTE_HOST` (recommended: `admin@47.81.56.131`, not a local SSH alias)
+  - `REMOTE_PORT`
+  - `REMOTE_DIR`
+  - `PROJECT_NAME`
+  - `DATA_DIR`
+  - `PUBLIC_URL`
+  - `GHCR_USERNAME` (optional; only if the remote host needs GHCR auth)
+- Repository / environment secrets:
+  - `MANGU_SSH_PRIVATE_KEY`
+  - `MEILI_MASTER_KEY`
+  - `TUNNEL_TOKEN`
+  - `GHCR_TOKEN` (optional; only if the remote host needs GHCR auth)
 
 ### Deployment Notes
 
@@ -230,7 +250,7 @@ docker exec oksskolten-server-1 curl --fail http://127.0.0.1:3000/api/health
 docker compose -f compose.yaml -f compose.prod.yaml restart cloudflared
 ```
 
-The helper script [`scripts/deploy-mangu.sh`](scripts/deploy-mangu.sh) now does this automatically after the `server` healthcheck passes, so rebuilds on the target host do not leave the tunnel pointing at a dead origin connection.
+The helper script [`scripts/deploy-mangu.sh`](scripts/deploy-mangu.sh) now deploys a published image digest to `mangu`, updates the remote `.env`, validates `/api/health`, and refreshes `cloudflared` only after the app is healthy. A separate [`scripts/deploy-mangu-source.sh`](scripts/deploy-mangu-source.sh) remains available as an emergency source-build fallback.
 
 ## License
 

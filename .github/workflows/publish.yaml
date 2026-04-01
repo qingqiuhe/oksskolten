@@ -1,24 +1,88 @@
 name: Publish Docker image
 
 on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+    branches: [main]
   push:
     tags: ['v*']
+
+concurrency:
+  group: publish-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build:
+  publish:
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        platform: [linux/amd64, linux/arm64]
+
     steps:
+      - name: Resolve source metadata
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            source_sha="${{ github.event.workflow_run.head_sha }}"
+            source_ref="main"
+            git_tag="main"
+            trigger_event="workflow_run"
+          else
+            source_sha="${GITHUB_SHA}"
+            source_ref="${GITHUB_REF_NAME}"
+            git_tag="${GITHUB_REF_NAME}"
+            trigger_event="push"
+          fi
+
+          short_sha="${source_sha:0:7}"
+          build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          image_repo="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+
+          tags=("${image_repo}:sha-${short_sha}")
+          if [[ "$trigger_event" == "workflow_run" ]]; then
+            tags+=("${image_repo}:main")
+          else
+            version="${source_ref#v}"
+            tags+=("${image_repo}:${version}" "${image_repo}:stable" "${image_repo}:latest")
+            if [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+              tags+=("${image_repo}:${BASH_REMATCH[1]}.${BASH_REMATCH[2]}")
+            fi
+          fi
+
+          {
+            echo "source_sha=${source_sha}"
+            echo "source_ref=${source_ref}"
+            echo "git_tag=${git_tag}"
+            echo "short_sha=${short_sha}"
+            echo "build_date=${build_date}"
+            echo "image_repo=${image_repo}"
+            echo "trigger_event=${trigger_event}"
+            echo "tags<<EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF"
+            echo "labels<<EOF"
+            echo "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"
+            echo "org.opencontainers.image.revision=${source_sha}"
+            echo "org.opencontainers.image.created=${build_date}"
+            echo "org.opencontainers.image.version=${git_tag}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.prep.outputs.source_sha }}
 
       - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
 
@@ -30,72 +94,55 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
-        id: meta
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-
       - uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         id: build
         with:
           context: .
-          platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.prep.outputs.tags }}
+          labels: ${{ steps.prep.outputs.labels }}
+          cache-from: type=gha,scope=publish
+          cache-to: type=gha,mode=max,scope=publish
           build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            GIT_TAG=${{ github.ref_type == 'tag' && github.ref_name || 'unknown' }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp || github.event.repository.updated_at }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+            GIT_COMMIT=${{ steps.prep.outputs.short_sha }}
+            GIT_TAG=${{ steps.prep.outputs.git_tag }}
+            BUILD_DATE=${{ steps.prep.outputs.build_date }}
 
-      - run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+      - name: Write publish metadata
         shell: bash
+        env:
+          PUBLISH_TAGS: ${{ steps.prep.outputs.tags }}
+        run: |
+          tags_json="$(printf '%s\n' "$PUBLISH_TAGS" | jq -R . | jq -s .)"
+          jq -n \
+            --arg image_ref "${{ steps.prep.outputs.image_repo }}@${{ steps.build.outputs.digest }}" \
+            --arg image_repo "${{ steps.prep.outputs.image_repo }}" \
+            --arg digest "${{ steps.build.outputs.digest }}" \
+            --arg git_commit "${{ steps.prep.outputs.short_sha }}" \
+            --arg git_tag "${{ steps.prep.outputs.git_tag }}" \
+            --arg build_date "${{ steps.prep.outputs.build_date }}" \
+            --arg source_sha "${{ steps.prep.outputs.source_sha }}" \
+            --arg source_ref "${{ steps.prep.outputs.source_ref }}" \
+            --arg trigger_event "${{ steps.prep.outputs.trigger_event }}" \
+            --argjson tags "$tags_json" \
+            '{
+              image_ref: $image_ref,
+              image_repo: $image_repo,
+              digest: $digest,
+              git_commit: $git_commit,
+              git_tag: $git_tag,
+              build_date: $build_date,
+              source_sha: $source_sha,
+              source_ref: $source_ref,
+              trigger_event: $trigger_event,
+              tags: $tags
+            }' > publish-metadata.json
+          cat publish-metadata.json
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
-          path: /tmp/digests/*
+          name: publish-metadata
+          path: publish-metadata.json
           if-no-files-found: error
-          retention-days: 1
-
-  merge:
-    runs-on: ubuntu-latest
-    needs: build
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          path: /tmp/digests
-          pattern: digests-*
-          merge-multiple: true
-
-      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
-
-      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
-        id: meta
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-            type=raw,value=stable
-
-      - run: |
-          cd /tmp/digests
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
-        shell: bash
+          retention-days: 7
