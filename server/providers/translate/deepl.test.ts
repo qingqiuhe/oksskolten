@@ -231,7 +231,7 @@ describe('monthly usage tracking', () => {
     const result = await deeplTranslate('Hello', 'ja')
 
     expect(result.monthlyChars).toBeGreaterThan(1000)
-    expect(mockUpsertSetting).toHaveBeenCalledWith('deepl.usage_chars', expect.any(String))
+    expect(mockUpsertSetting).toHaveBeenCalledWith('deepl.usage_chars', expect.any(String), undefined)
   })
 
   it('resets usage when month changes', async () => {
@@ -246,6 +246,6 @@ describe('monthly usage tracking', () => {
     const result = await deeplTranslate('Hi', 'ja')
 
     expect(result.monthlyChars).toBeLessThan(100)
-    expect(mockUpsertSetting).toHaveBeenCalledWith('deepl.usage_month', expect.stringMatching(/^\d{4}-\d{2}$/))
+    expect(mockUpsertSetting).toHaveBeenCalledWith('deepl.usage_month', expect.stringMatching(/^\d{4}-\d{2}$/), undefined)
   })
 })

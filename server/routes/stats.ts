@@ -10,11 +10,17 @@ export async function statsRoutes(api: FastifyInstance): Promise<void> {
     const stats = getReadingStats({ since, until, userId })
 
     const feedCount = (
-      getDb().prepare('SELECT COUNT(*) AS cnt FROM feeds WHERE user_id = ?').get(userId) as { cnt: number }
-    ).cnt
+      userId != null
+        ? getDb().prepare('SELECT COUNT(*) AS cnt FROM feeds WHERE user_id = ?').get(userId)
+        : getDb().prepare('SELECT COUNT(*) AS cnt FROM feeds').get()
+    ) as { cnt: number }
+    const feedCountValue = feedCount.cnt
     const categoryCount = (
-      getDb().prepare('SELECT COUNT(*) AS cnt FROM categories WHERE user_id = ?').get(userId) as { cnt: number }
-    ).cnt
+      userId != null
+        ? getDb().prepare('SELECT COUNT(*) AS cnt FROM categories WHERE user_id = ?').get(userId)
+        : getDb().prepare('SELECT COUNT(*) AS cnt FROM categories').get()
+    ) as { cnt: number }
+    const categoryCountValue = categoryCount.cnt
     const bookmarked = getBookmarkCount(userId)
     const liked = getLikeCount(userId)
 
@@ -24,8 +30,8 @@ export async function statsRoutes(api: FastifyInstance): Promise<void> {
       read_articles: stats.read,
       bookmarked_articles: bookmarked,
       liked_articles: liked,
-      total_feeds: feedCount,
-      total_categories: categoryCount,
+      total_feeds: feedCountValue,
+      total_categories: categoryCountValue,
       by_feed: stats.by_feed,
     })
   })

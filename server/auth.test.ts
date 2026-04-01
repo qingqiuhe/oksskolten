@@ -5,7 +5,7 @@ import { requireAuth, getAuthUser, requireJson } from './auth.js'
 vi.mock('./db.js', () => ({
   getDb: vi.fn(() => ({
     prepare: vi.fn(() => ({
-      get: vi.fn(() => ({ token_version: 0 })),
+      get: vi.fn(() => ({ id: 1, email: 'user@example.com', role: 'owner', status: 'active', token_version: 0 })),
     })),
   })),
 }))
@@ -87,7 +87,7 @@ describe('auth', () => {
       const { getDb } = await import('./db.js')
       vi.mocked(getDb).mockReturnValue({
         prepare: vi.fn(() => ({
-          get: vi.fn(() => ({ token_version: 1 })),
+          get: vi.fn(() => ({ id: 1, email: 'user@example.com', role: 'owner', status: 'active', token_version: 1 })),
         })),
       } as any)
 
@@ -104,7 +104,7 @@ describe('auth', () => {
         // Reset mock to default
         vi.mocked(getDb).mockReturnValue({
           prepare: vi.fn(() => ({
-            get: vi.fn(() => ({ token_version: 0 })),
+            get: vi.fn(() => ({ id: 1, email: 'user@example.com', role: 'owner', status: 'active', token_version: 0 })),
           })),
         } as any)
       }

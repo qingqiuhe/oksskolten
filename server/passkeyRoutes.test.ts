@@ -22,7 +22,7 @@ let savedAuthDisabled: string | undefined
 function seedUser(email = 'test@example.com', password = 'password123') {
   const db = getDb()
   const hash = hashSync(password, 4)
-  db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run(email, hash)
+  db.prepare("INSERT INTO users (email, password_hash, role, status) VALUES (?, ?, 'owner', 'active')").run(email, hash)
 }
 
 function seedCredential(credentialId = 'cred-1', deviceType = 'multiDevice') {

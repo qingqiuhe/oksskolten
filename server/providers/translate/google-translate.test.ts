@@ -213,7 +213,7 @@ describe('monthly usage tracking', () => {
 
     // Should accumulate: 1000 existing + chars from current call
     expect(result.monthlyChars).toBeGreaterThan(1000)
-    expect(mockUpsertSetting).toHaveBeenCalledWith('google_translate.usage_chars', expect.any(String))
+    expect(mockUpsertSetting).toHaveBeenCalledWith('google_translate.usage_chars', expect.any(String), undefined)
   })
 
   it('resets usage when month changes', async () => {
@@ -229,6 +229,6 @@ describe('monthly usage tracking', () => {
 
     // Should reset: only chars from current call
     expect(result.monthlyChars).toBeLessThan(100)
-    expect(mockUpsertSetting).toHaveBeenCalledWith('google_translate.usage_month', expect.stringMatching(/^\d{4}-\d{2}$/))
+    expect(mockUpsertSetting).toHaveBeenCalledWith('google_translate.usage_month', expect.stringMatching(/^\d{4}-\d{2}$/), undefined)
   })
 })

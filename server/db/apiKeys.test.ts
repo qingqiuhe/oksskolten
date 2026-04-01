@@ -72,7 +72,7 @@ describe('apiKeys', () => {
     it('returns id and scopes for a valid key', () => {
       const created = createApiKey('valid', 'read,write')
       const result = validateApiKey(created.key)
-      expect(result).toEqual({ id: created.id, scopes: 'read,write' })
+      expect(result).toMatchObject({ id: created.id, scopes: 'read,write' })
     })
 
     it('returns null for an invalid key', () => {
