@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { buildApp } from '../__tests__/helpers/buildApp.js'
 import { upsertSetting, getSetting, createFeed, insertArticle, markArticleSeen, getDb } from '../db.js'
+import { hashSync } from 'bcryptjs'
 import type { FastifyInstance } from 'fastify'
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,22 @@ vi.mock('../anthropic.js', () => ({
 
 let app: FastifyInstance
 const json = { 'content-type': 'application/json' }
+
+function createAuthedUser(role: 'owner' | 'admin' | 'member') {
+  const info = getDb().prepare(`
+    INSERT INTO users (email, password_hash, role, status)
+    VALUES (?, ?, ?, 'active')
+  `).run(`${role}@example.com`, hashSync('password123', 4), role)
+
+  return {
+    authorization: `Bearer ${app.jwt.sign({
+      sub: Number(info.lastInsertRowid),
+      email: `${role}@example.com`,
+      role,
+      token_version: 0,
+    })}`,
+  }
+}
 
 beforeEach(async () => {
   setupTestDb()
@@ -351,6 +368,103 @@ describe('POST /api/settings/preferences', () => {
       },
     })
     expect(res.statusCode).toBe(400)
+  })
+})
+
+describe('fetch schedule settings endpoints', () => {
+  it('GET returns the default minimum interval when unset', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/settings/fetch-schedule',
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ min_interval_minutes: 15 })
+  })
+
+  it('PATCH stores a valid configured minimum interval', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/fetch-schedule',
+      headers: json,
+      payload: { min_interval_minutes: 5 },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ min_interval_minutes: 5 })
+    expect(getSetting('system.feed_min_check_interval_minutes')).toBe('5')
+  })
+
+  it('PATCH rejects values above the allowed range', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/fetch-schedule',
+      headers: json,
+      payload: { min_interval_minutes: 241 },
+    })
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('PATCH rejects zero and negative values', async () => {
+    const zeroRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/fetch-schedule',
+      headers: json,
+      payload: { min_interval_minutes: 0 },
+    })
+    const negativeRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/fetch-schedule',
+      headers: json,
+      payload: { min_interval_minutes: -1 },
+    })
+
+    expect(zeroRes.statusCode).toBe(400)
+    expect(negativeRes.statusCode).toBe(400)
+  })
+
+  it('PATCH rejects non-integer values', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/fetch-schedule',
+      headers: json,
+      payload: { min_interval_minutes: 3.5 },
+    })
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('PATCH rejects non-numeric values', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/fetch-schedule',
+      headers: json,
+      payload: { min_interval_minutes: 'five' },
+    })
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('returns 403 for members', async () => {
+    const savedAuthDisabled = process.env.AUTH_DISABLED
+    delete process.env.AUTH_DISABLED
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/settings/fetch-schedule',
+        headers: createAuthedUser('member'),
+      })
+
+      expect(res.statusCode).toBe(403)
+    } finally {
+      if (savedAuthDisabled !== undefined) {
+        process.env.AUTH_DISABLED = savedAuthDisabled
+      } else {
+        delete process.env.AUTH_DISABLED
+      }
+    }
   })
 })
 

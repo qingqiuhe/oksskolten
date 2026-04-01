@@ -19,7 +19,7 @@ import { detectAndStoreSimilarArticles } from './similarity.js'
 import { type FetchProgressEvent, emitProgress, markFeedDone } from './fetcher/progress.js'
 import { fetchFullText, isBotBlockPage, convertHtmlToMarkdown, markdownToExcerpt, extractFirstVideoPoster, MIN_EXTRACTED_LENGTH } from './fetcher/content.js'
 import { type FetchRssResult, fetchAndParseRss, RateLimitError } from './fetcher/rss.js'
-import { computeInterval, computeEmpiricalInterval, sqliteFuture, DEFAULT_INTERVAL } from './fetcher/schedule.js'
+import { clampInterval, computeInterval, computeEmpiricalInterval, getFetchScheduleConfig, sqliteFuture, DEFAULT_INTERVAL } from './fetcher/schedule.js'
 import { detectLanguage } from './fetcher/ai.js'
 import { logger } from './logger.js'
 import type { ArticleKind } from '../shared/article-kind.js'
@@ -31,7 +31,15 @@ const log = logger.child('fetcher')
 export { normalizeDate } from './fetcher/util.js'
 export { type FetchProgressEvent, fetchProgress, getFeedState } from './fetcher/progress.js'
 export { discoverRssUrl } from './fetcher/rss.js'
-export { detectLanguage, summarizeArticle, streamSummarizeArticle, translateArticle, streamTranslateArticle } from './fetcher/ai.js'
+export {
+  detectLanguage,
+  summarizeArticle,
+  streamSummarizeArticle,
+  translateArticle,
+  streamTranslateArticle,
+  translateText,
+  streamTranslateText,
+} from './fetcher/ai.js'
 export type { AiTextResult, AiBillingMode } from './fetcher/ai.js'
 
 // --- Article content fetching (shared by feed pipeline & clip) ---
@@ -224,6 +232,7 @@ export async function fetchSingleFeed(
   opts?: { skipCache?: boolean },
 ): Promise<void> {
   const semaphore = new Semaphore(CONCURRENCY)
+  const { minIntervalSeconds } = getFetchScheduleConfig()
 
   let rssResult: FetchRssResult
   try {
@@ -244,7 +253,7 @@ export async function fetchSingleFeed(
 
   if (rssResult.notModified) {
     // Reschedule using stored interval (or default)
-    const interval = feed.check_interval ?? DEFAULT_INTERVAL
+    const interval = clampInterval(feed.check_interval ?? DEFAULT_INTERVAL, minIntervalSeconds)
     updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
     log.info(`Feed ${feed.name}: not modified (304)`)
     return
@@ -253,7 +262,7 @@ export async function fetchSingleFeed(
   // Compute and store adaptive interval
   {
     const empirical = computeEmpiricalInterval(rssResult.items)
-    const interval = computeInterval(rssResult.httpCacheSeconds, rssResult.rssTtlSeconds, empirical)
+    const interval = computeInterval(rssResult.httpCacheSeconds, rssResult.rssTtlSeconds, empirical, minIntervalSeconds)
     updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
   }
 
@@ -325,6 +334,7 @@ export async function fetchAllFeeds(
 ): Promise<void> {
   const feeds = getEnabledFeeds()
   const semaphore = new Semaphore(CONCURRENCY)
+  const { minIntervalSeconds } = getFetchScheduleConfig()
 
   const allTasks: ArticleTask[] = []
 
@@ -341,7 +351,7 @@ export async function fetchAllFeeds(
           updateFeedCacheHeaders(feed.id, rssResult.etag, rssResult.lastModified, rssResult.contentHash)
 
           if (rssResult.notModified) {
-            const interval = feed.check_interval ?? DEFAULT_INTERVAL
+            const interval = clampInterval(feed.check_interval ?? DEFAULT_INTERVAL, minIntervalSeconds)
             updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
             log.info(`Feed ${feed.name}: not modified (304)`)
             feedNewCounts.set(feed.id, 0)
@@ -351,7 +361,7 @@ export async function fetchAllFeeds(
           // Compute and store adaptive interval
           {
             const empirical = computeEmpiricalInterval(rssResult.items)
-            const interval = computeInterval(rssResult.httpCacheSeconds, rssResult.rssTtlSeconds, empirical)
+            const interval = computeInterval(rssResult.httpCacheSeconds, rssResult.rssTtlSeconds, empirical, minIntervalSeconds)
             updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
           }
 

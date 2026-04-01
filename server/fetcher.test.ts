@@ -645,6 +645,21 @@ describe('fetchSingleFeed', () => {
     const count = getDb().prepare('SELECT COUNT(*) AS cnt FROM articles WHERE feed_id = ?').get(feed.id) as { cnt: number }
     expect(count.cnt).toBe(35)
   })
+
+  it('clamps not-modified reschedule to the configured minimum interval', async () => {
+    upsertSetting('system.feed_min_check_interval_minutes', '2')
+    const feed = { ...seedFeed(), check_interval: 30 }
+
+    mockFetch.mockImplementation((url: string | URL) => {
+      if (url.toString() === feed.rss_url) return Promise.resolve(mockResponse('', { status: 304 }))
+      return Promise.resolve(mockResponse('', { status: 404 }))
+    })
+
+    await fetchSingleFeed(feed)
+
+    const updatedFeed = getFeedById(feed.id)
+    expect(updatedFeed!.check_interval).toBe(120)
+  })
 })
 
 // ==========================================================================
@@ -758,6 +773,46 @@ describe('fetchAllFeeds', () => {
 
     // Should not throw
     await expect(fetchAllFeeds()).resolves.toBeUndefined()
+  })
+
+  it('clamps successful scheduling to the configured minimum interval', async () => {
+    upsertSetting('system.feed_min_check_interval_minutes', '1')
+    const feed = seedFeed()
+    const now = Date.now()
+    const rssXml = rss20Xml('Fast Feed', [
+      { title: 'Article 1', link: 'https://example.com/fast/1', pubDate: new Date(now - 2 * 60 * 1000).toUTCString() },
+      { title: 'Article 2', link: 'https://example.com/fast/2', pubDate: new Date(now - 60 * 1000).toUTCString() },
+      { title: 'Article 3', link: 'https://example.com/fast/3', pubDate: new Date(now).toUTCString() },
+    ])
+    const html = articleHtml()
+
+    mockFetch.mockImplementation((url: string | URL) => {
+      const u = url.toString()
+      if (u === feed.rss_url) return Promise.resolve(mockResponse(rssXml, { headers: { 'content-type': 'application/rss+xml' } }))
+      return Promise.resolve(mockResponse(html))
+    })
+
+    await fetchAllFeeds()
+
+    const updatedFeed = getFeedById(feed.id)
+    expect(updatedFeed!.check_interval).toBe(60)
+  })
+
+  it('clamps not-modified reschedule in batch fetching to the configured minimum interval', async () => {
+    upsertSetting('system.feed_min_check_interval_minutes', '2')
+    const feed = seedFeed()
+    const { getDb } = await import('./db.js')
+    getDb().prepare('UPDATE feeds SET check_interval = ? WHERE id = ?').run(30, feed.id)
+
+    mockFetch.mockImplementation((url: string | URL) => {
+      if (url.toString() === feed.rss_url) return Promise.resolve(mockResponse('', { status: 304 }))
+      return Promise.resolve(mockResponse('', { status: 404 }))
+    })
+
+    await fetchAllFeeds()
+
+    const updatedFeed = getFeedById(feed.id)
+    expect(updatedFeed!.check_interval).toBe(120)
   })
 
   it('retry: excludes article with full_text from retry candidates', async () => {

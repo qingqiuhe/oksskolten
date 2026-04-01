@@ -42,16 +42,20 @@ Line 3+: Key points as bullet points. Each item should follow the format "**Poin
 ${fullText}`
 }
 
-function buildTranslatePrompt(fullText: string): string {
-  const lang = getSetting('translate.target_lang') || getSetting('general.language') || DEFAULT_LANGUAGE
-  const targetLang = languageName(lang)
-  return `Translate the following article into ${targetLang}.
+function buildTranslatePrompt(fullText: string, targetLang: string): string {
+  const resolvedTargetLang = languageName(targetLang)
+  return `Translate the following article into ${resolvedTargetLang}.
 Translate every word faithfully — do not summarize, compress, or omit anything.
 The translation must be 1:1 with the original text in volume.
 Preserve Markdown formatting. In particular, keep blockquote lines starting with ">".
 
 --- Article body ---
 ${fullText}`
+}
+
+interface TranslateOptions {
+  userId?: number | null
+  targetLang?: string
 }
 
 interface AiTaskConfig {
@@ -102,14 +106,6 @@ const summarizeConfig: AiTaskConfig = {
   buildPrompt: buildSummarizePrompt,
 }
 
-const translateConfig: AiTaskConfig = {
-  providerKey: 'translate.provider',
-  modelKey: 'translate.model',
-  defaultModel: TASK_DEFAULTS.translate.model,
-  maxTokens: TRANSLATE_MAX_TOKENS,
-  buildPrompt: buildTranslatePrompt,
-}
-
 export async function summarizeArticle(fullText: string): Promise<{ summary: string } & AiTextResult> {
   const r = await runAiTask(summarizeConfig, fullText)
   return { summary: r.text, inputTokens: r.inputTokens, outputTokens: r.outputTokens, billingMode: r.billingMode, model: r.model }
@@ -124,42 +120,82 @@ export async function streamSummarizeArticle(
 }
 
 export async function translateArticle(fullText: string): Promise<{ fullTextTranslated: string } & AiTextResult> {
-  const provider = getSetting('translate.provider') || TASK_DEFAULTS.translate.provider
-  if (provider === 'google-translate') {
-    return runGoogleTranslate(fullText)
-  }
-  if (provider === 'deepl') {
-    return runDeepl(fullText)
-  }
-  const r = await runAiTask(translateConfig, fullText)
-  return { fullTextTranslated: r.text, inputTokens: r.inputTokens, outputTokens: r.outputTokens, billingMode: r.billingMode, model: r.model }
+  return runTranslateTask(fullText)
 }
 
 export async function streamTranslateArticle(
   fullText: string,
   onText: (delta: string) => void,
 ): Promise<{ fullTextTranslated: string } & AiTextResult> {
-  const provider = getSetting('translate.provider') || TASK_DEFAULTS.translate.provider
+  return runTranslateTask(fullText, onText)
+}
+
+function getResolvedTranslateTargetLang(options?: TranslateOptions): string {
+  return options?.targetLang
+    || getSetting('translate.target_lang', options?.userId)
+    || getSetting('general.language', options?.userId)
+    || DEFAULT_LANGUAGE
+}
+
+async function runTranslateTask(
+  fullText: string,
+  onText?: (delta: string) => void,
+  options?: TranslateOptions,
+): Promise<{ fullTextTranslated: string } & AiTextResult> {
+  const provider = getSetting('translate.provider', options?.userId) || TASK_DEFAULTS.translate.provider
+  const targetLang = getResolvedTranslateTargetLang(options)
   if (provider === 'google-translate') {
-    const result = await runGoogleTranslate(fullText)
-    onText(result.fullTextTranslated)
-    return result
+    return runGoogleTranslate(fullText, targetLang, options?.userId)
   }
   if (provider === 'deepl') {
-    const result = await runDeepl(fullText)
-    onText(result.fullTextTranslated)
-    return result
+    return runDeepl(fullText, targetLang, options?.userId)
   }
-  const r = await runAiTask(translateConfig, fullText, onText)
-  return { fullTextTranslated: r.text, inputTokens: r.inputTokens, outputTokens: r.outputTokens, billingMode: r.billingMode, model: r.model }
+  const model = getSetting('translate.model', options?.userId) || TASK_DEFAULTS.translate.model
+  const llmProvider = getProvider(provider)
+  llmProvider.requireKey()
+  const prompt = buildTranslatePrompt(fullText, targetLang)
+  const r = onText
+    ? await llmProvider.streamMessage(
+        { model, maxTokens: TRANSLATE_MAX_TOKENS, messages: [{ role: 'user', content: prompt }] },
+        onText,
+      )
+    : await llmProvider.createMessage({
+        model,
+        maxTokens: TRANSLATE_MAX_TOKENS,
+        messages: [{ role: 'user', content: prompt }],
+      })
+  return {
+    fullTextTranslated: r.text,
+    inputTokens: r.inputTokens,
+    outputTokens: r.outputTokens,
+    billingMode: provider as AiBillingMode,
+    model,
+  }
 }
 
-function getTargetLang(): string {
-  return getSetting('translate.target_lang') || getSetting('general.language') || DEFAULT_LANGUAGE
+export async function translateText(
+  fullText: string,
+  targetLang: string,
+  userId?: number | null,
+): Promise<{ fullTextTranslated: string } & AiTextResult> {
+  return runTranslateTask(fullText, undefined, { targetLang, userId })
 }
 
-async function runGoogleTranslate(fullText: string): Promise<{ fullTextTranslated: string } & AiTextResult> {
-  const result = await googleTranslate(fullText, getTargetLang())
+export async function streamTranslateText(
+  fullText: string,
+  onText: (delta: string) => void,
+  targetLang: string,
+  userId?: number | null,
+): Promise<{ fullTextTranslated: string } & AiTextResult> {
+  return runTranslateTask(fullText, onText, { targetLang, userId })
+}
+
+async function runGoogleTranslate(
+  fullText: string,
+  targetLang: string,
+  userId?: number | null,
+): Promise<{ fullTextTranslated: string } & AiTextResult> {
+  const result = await googleTranslate(fullText, targetLang, userId)
   return {
     fullTextTranslated: result.translatedText,
     inputTokens: result.characters,
@@ -170,8 +206,12 @@ async function runGoogleTranslate(fullText: string): Promise<{ fullTextTranslate
   }
 }
 
-async function runDeepl(fullText: string): Promise<{ fullTextTranslated: string } & AiTextResult> {
-  const result = await deeplTranslate(fullText, getTargetLang())
+async function runDeepl(
+  fullText: string,
+  targetLang: string,
+  userId?: number | null,
+): Promise<{ fullTextTranslated: string } & AiTextResult> {
+  const result = await deeplTranslate(fullText, targetLang, userId)
   return {
     fullTextTranslated: result.translatedText,
     inputTokens: result.characters,

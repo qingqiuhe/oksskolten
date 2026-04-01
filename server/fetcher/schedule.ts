@@ -1,10 +1,35 @@
+import { getSetting } from '../db.js'
 import type { RssItem } from './rss.js'
 
 // --- Constants ---
 
-export const MIN_INTERVAL = 15 * 60       // 15 minutes (seconds)
+export const DEFAULT_MIN_INTERVAL_MINUTES = 15
+export const MIN_INTERVAL = DEFAULT_MIN_INTERVAL_MINUTES * 60
 export const MAX_INTERVAL = 4 * 60 * 60   // 4 hours (seconds)
 export const DEFAULT_INTERVAL = 60 * 60   // 1 hour (seconds)
+export const FETCH_MIN_INTERVAL_SETTING_KEY = 'system.feed_min_check_interval_minutes'
+
+export interface FetchScheduleConfig {
+  minIntervalMinutes: number
+  minIntervalSeconds: number
+}
+
+export function getFetchScheduleConfig(): FetchScheduleConfig {
+  const raw = getSetting(FETCH_MIN_INTERVAL_SETTING_KEY)
+  const parsed = raw == null ? NaN : Number(raw)
+  const minIntervalMinutes = Number.isInteger(parsed) && parsed >= 1 && parsed <= 240
+    ? parsed
+    : DEFAULT_MIN_INTERVAL_MINUTES
+
+  return {
+    minIntervalMinutes,
+    minIntervalSeconds: minIntervalMinutes * 60,
+  }
+}
+
+export function clampInterval(seconds: number, minIntervalSeconds = MIN_INTERVAL): number {
+  return Math.max(minIntervalSeconds, seconds)
+}
 
 // --- Date formatting ---
 
@@ -74,7 +99,7 @@ export function computeEmpiricalInterval(items: RssItem[]): number {
     const totalSpan = dates[0] - dates[dates.length - 1]
     const avgIntervalMs = totalSpan / (dates.length - 1)
     const halfAvgSec = Math.floor(avgIntervalMs / 2000)
-    return Math.max(MIN_INTERVAL, halfAvgSec)
+    return Math.max(1, halfAvgSec)
   }
 
   return MAX_INTERVAL / 4  // single article → 1h
@@ -86,11 +111,12 @@ export function computeInterval(
   httpCacheSeconds: number | null,
   rssTtlSeconds: number | null,
   empiricalSeconds: number,
+  minIntervalSeconds = MIN_INTERVAL,
 ): number {
   return Math.min(
     MAX_INTERVAL,
     Math.max(
-      MIN_INTERVAL,
+      minIntervalSeconds,
       Math.max(httpCacheSeconds ?? 0, rssTtlSeconds ?? 0, empiricalSeconds),
     ),
   )

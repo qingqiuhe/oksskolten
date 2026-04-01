@@ -13,7 +13,7 @@ import {
   updateNotificationChannel,
   deleteNotificationChannel,
 } from '../db.js'
-import { requireJson, getAuthUser, getRequestUserId } from '../auth.js'
+import { requireJson, getAuthUser, getRequestUserId, requireRoles } from '../auth.js'
 import { getAllModelValues, getModelValues } from '../../shared/models.js'
 import { assertSafeUrl } from '../fetcher/ssrf.js'
 import { extractByDotPath } from '../fetcher/article-images.js'
@@ -21,6 +21,7 @@ import { getMonthlyUsage } from '../providers/translate/google-translate.js'
 import { getDeeplMonthlyUsage } from '../providers/translate/deepl.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 import { sendFeishuTestMessage } from '../notifications/feishu.js'
+import { FETCH_MIN_INTERVAL_SETTING_KEY, getFetchScheduleConfig } from '../fetcher/schedule.js'
 
 const ProfileBody = z.object({
   account_name: z.string().optional(),
@@ -42,6 +43,9 @@ const NotificationChannelPatchBody = z.object({
   webhook_url: z.string().url('webhook_url must be a valid URL').optional(),
   secret: z.string().nullable().optional(),
   enabled: z.boolean().optional(),
+})
+const FetchScheduleBody = z.object({
+  min_interval_minutes: z.number().int().min(1).max(240),
 })
 
 const PREF_KEYS = [
@@ -383,6 +387,24 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
       const message = err instanceof Error ? err.message : String(err)
       reply.status(502).send({ error: message })
     }
+  })
+
+  // --- Feed fetch schedule settings ---
+
+  api.get('/api/settings/fetch-schedule', {
+    preHandler: [requireRoles(['owner', 'admin'])],
+  }, async (_request, reply) => {
+    reply.send({ min_interval_minutes: getFetchScheduleConfig().minIntervalMinutes })
+  })
+
+  api.patch('/api/settings/fetch-schedule', {
+    preHandler: [requireJson, requireRoles(['owner', 'admin'])],
+  }, async (request, reply) => {
+    const body = parseOrBadRequest(FetchScheduleBody, request.body, reply)
+    if (!body) return
+
+    upsertSetting(FETCH_MIN_INTERVAL_SETTING_KEY, String(body.min_interval_minutes))
+    reply.send({ min_interval_minutes: getFetchScheduleConfig().minIntervalMinutes })
   })
 
   // --- Image storage settings ---

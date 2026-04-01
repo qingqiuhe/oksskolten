@@ -194,6 +194,7 @@ describe('notification rule endpoints', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(res.json().enabled).toBe(0)
+    expect(res.json().translate_enabled).toBe(0)
     expect(res.json().channel_ids).toEqual([])
   })
 
@@ -213,12 +214,14 @@ describe('notification rule endpoints', () => {
       headers: json,
       payload: {
         enabled: true,
+        translate_enabled: true,
         check_interval_minutes: 30,
         channel_ids: [channel.id],
       },
     })
     expect(putRes.statusCode).toBe(200)
     expect(putRes.json().enabled).toBe(1)
+    expect(putRes.json().translate_enabled).toBe(1)
     expect(putRes.json().channel_ids).toEqual([channel.id])
 
     const getRes = await app.inject({
@@ -226,6 +229,7 @@ describe('notification rule endpoints', () => {
       url: `/api/feeds/${feed.id}/notification-rule`,
     })
     expect(getRes.json().check_interval_minutes).toBe(30)
+    expect(getRes.json().translate_enabled).toBe(1)
     expect(getRes.json().channel_ids).toEqual([channel.id])
   })
 })

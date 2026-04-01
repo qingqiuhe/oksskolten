@@ -7,8 +7,8 @@ const API_URL_FREE = 'https://api-free.deepl.com/v2/translate'
 const API_URL_PRO = 'https://api.deepl.com/v2/translate'
 const MAX_CHARS_PER_REQUEST = 50_000
 
-export function requireDeeplKey(): string {
-  const key = getSetting('api_key.deepl')
+export function requireDeeplKey(userId?: number | null): string {
+  const key = getSetting('api_key.deepl', userId)
   if (!key) {
     const err = new Error('DeepL API key is not configured')
     ;(err as any).code = 'DEEPL_KEY_NOT_SET'
@@ -25,8 +25,9 @@ function getApiUrl(apiKey: string): string {
 export async function deeplTranslate(
   text: string,
   targetLang: string,
+  userId?: number | null,
 ): Promise<{ translatedText: string; characters: number; monthlyChars: number }> {
-  const apiKey = requireDeeplKey()
+  const apiKey = requireDeeplKey(userId)
   const apiUrl = getApiUrl(apiKey)
 
   const { translated, characters } = await translateWithProtection(
@@ -60,25 +61,25 @@ export async function deeplTranslate(
     },
   )
 
-  const monthlyChars = addMonthlyUsage(characters)
+  const monthlyChars = addMonthlyUsage(characters, userId)
 
   return { translatedText: translated, characters, monthlyChars }
 }
 
 /** Track cumulative monthly character usage. Resets when month changes. */
-function addMonthlyUsage(chars: number): number {
+function addMonthlyUsage(chars: number, userId?: number | null): number {
   const currentMonth = new Date().toISOString().slice(0, 7)
-  const storedMonth = getSetting('deepl.usage_month') || ''
-  const storedChars = Number(getSetting('deepl.usage_chars') || '0')
+  const storedMonth = getSetting('deepl.usage_month', userId) || ''
+  const storedChars = Number(getSetting('deepl.usage_chars', userId) || '0')
 
   let total: number
   if (storedMonth === currentMonth) {
     total = storedChars + chars
   } else {
     total = chars
-    upsertSetting('deepl.usage_month', currentMonth)
+    upsertSetting('deepl.usage_month', currentMonth, userId)
   }
-  upsertSetting('deepl.usage_chars', String(total))
+  upsertSetting('deepl.usage_chars', String(total), userId)
   return total
 }
 

@@ -52,6 +52,7 @@ export interface FeishuNotificationArticle {
   url: string
   displayTime: string
   bodyText: string | null
+  bodyTextTranslated: string | null
   mediaUrls: string[]
 }
 
@@ -69,6 +70,7 @@ export async function sendFeishuDigestMessage(args: {
       `**[${article.title}](${article.url})**`,
       `发布时间：${article.displayTime}`,
       article.bodyText ?? '',
+      article.bodyTextTranslated ?? '',
       ...article.mediaUrls.map(url => `![](${url})`),
     ].filter(Boolean)
 

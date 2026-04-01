@@ -22,6 +22,7 @@ export interface FeedNotificationRule {
   user_id: number | null
   feed_id: number
   enabled: number
+  translate_enabled: number
   check_interval_minutes: number
   next_check_at: string | null
   last_checked_at: string | null
@@ -188,7 +189,7 @@ export function getFeedNotificationRule(feedId: number, userId?: number | null):
 
 export function upsertFeedNotificationRule(
   feedId: number,
-  data: { enabled: boolean; check_interval_minutes: number; channel_ids: number[] },
+  data: { enabled: boolean; translate_enabled: boolean; check_interval_minutes: number; channel_ids: number[] },
   userId?: number | null,
 ): FeedNotificationRuleRecord {
   const scopedUserId = resolveUserId(userId)
@@ -198,12 +199,13 @@ export function upsertFeedNotificationRule(
     let rule = getFeedNotificationRule(feedId, scopedUserId)
     if (!rule) {
       const result = runNamed(`
-        INSERT INTO feed_notification_rules (user_id, feed_id, enabled, check_interval_minutes, next_check_at)
-        VALUES (@user_id, @feed_id, @enabled, @check_interval_minutes, @next_check_at)
+        INSERT INTO feed_notification_rules (user_id, feed_id, enabled, translate_enabled, check_interval_minutes, next_check_at)
+        VALUES (@user_id, @feed_id, @enabled, @translate_enabled, @check_interval_minutes, @next_check_at)
       `, {
         user_id: scopedUserId,
         feed_id: feedId,
         enabled: data.enabled ? 1 : 0,
+        translate_enabled: data.translate_enabled ? 1 : 0,
         check_interval_minutes: data.check_interval_minutes,
         next_check_at: nextCheckAt,
       })
@@ -215,6 +217,7 @@ export function upsertFeedNotificationRule(
       runNamed(`
         UPDATE feed_notification_rules
         SET enabled = @enabled,
+            translate_enabled = @translate_enabled,
             check_interval_minutes = @check_interval_minutes,
             next_check_at = @next_check_at,
             updated_at = datetime('now')
@@ -222,6 +225,7 @@ export function upsertFeedNotificationRule(
       `, {
         id: rule.id,
         enabled: data.enabled ? 1 : 0,
+        translate_enabled: data.translate_enabled ? 1 : 0,
         check_interval_minutes: data.check_interval_minutes,
         next_check_at: nextCheckAt,
       })

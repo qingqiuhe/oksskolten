@@ -117,6 +117,7 @@ export interface FeedNotificationRule {
   user_id: number | null
   feed_id: number
   enabled: number
+  translate_enabled: number
   check_interval_minutes: number
   next_check_at: string | null
   last_checked_at: string | null

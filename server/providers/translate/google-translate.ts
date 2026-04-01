@@ -6,8 +6,8 @@ const FREE_TIER_CHARS = 500_000
 const API_URL = 'https://translation.googleapis.com/language/translate/v2'
 const MAX_CHARS_PER_REQUEST = 30_000
 
-export function requireGoogleTranslateKey(): string {
-  const key = getSetting('api_key.google_translate')
+export function requireGoogleTranslateKey(userId?: number | null): string {
+  const key = getSetting('api_key.google_translate', userId)
   if (!key) {
     const err = new Error('Google Translate API key is not configured')
     ;(err as any).code = 'GOOGLE_TRANSLATE_KEY_NOT_SET'
@@ -19,8 +19,9 @@ export function requireGoogleTranslateKey(): string {
 export async function googleTranslate(
   text: string,
   targetLang: string,
+  userId?: number | null,
 ): Promise<{ translatedText: string; characters: number; monthlyChars: number }> {
-  const apiKey = requireGoogleTranslateKey()
+  const apiKey = requireGoogleTranslateKey(userId)
 
   const { translated, characters } = await translateWithProtection(
     text,
@@ -49,25 +50,25 @@ export async function googleTranslate(
     },
   )
 
-  const monthlyChars = addMonthlyUsage(characters)
+  const monthlyChars = addMonthlyUsage(characters, userId)
 
   return { translatedText: translated, characters, monthlyChars }
 }
 
 /** Track cumulative monthly character usage. Resets when month changes. */
-function addMonthlyUsage(chars: number): number {
+function addMonthlyUsage(chars: number, userId?: number | null): number {
   const currentMonth = new Date().toISOString().slice(0, 7)
-  const storedMonth = getSetting('google_translate.usage_month') || ''
-  const storedChars = Number(getSetting('google_translate.usage_chars') || '0')
+  const storedMonth = getSetting('google_translate.usage_month', userId) || ''
+  const storedChars = Number(getSetting('google_translate.usage_chars', userId) || '0')
 
   let total: number
   if (storedMonth === currentMonth) {
     total = storedChars + chars
   } else {
     total = chars
-    upsertSetting('google_translate.usage_month', currentMonth)
+    upsertSetting('google_translate.usage_month', currentMonth, userId)
   }
-  upsertSetting('google_translate.usage_chars', String(total))
+  upsertSetting('google_translate.usage_chars', String(total), userId)
   return total
 }
 

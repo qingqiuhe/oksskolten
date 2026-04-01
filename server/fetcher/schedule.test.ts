@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { setupTestDb } from '../__tests__/helpers/testDb.js'
+import { upsertSetting } from '../db.js'
 import {
+  DEFAULT_MIN_INTERVAL_MINUTES,
+  FETCH_MIN_INTERVAL_SETTING_KEY,
   MIN_INTERVAL,
   MAX_INTERVAL,
   formatDateSqlite,
@@ -8,7 +12,34 @@ import {
   parseRssTtl,
   computeEmpiricalInterval,
   computeInterval,
+  getFetchScheduleConfig,
 } from './schedule.js'
+
+beforeEach(() => {
+  setupTestDb()
+})
+
+describe('getFetchScheduleConfig', () => {
+  it('returns the default minimum when unset', () => {
+    expect(getFetchScheduleConfig()).toEqual({
+      minIntervalMinutes: DEFAULT_MIN_INTERVAL_MINUTES,
+      minIntervalSeconds: MIN_INTERVAL,
+    })
+  })
+
+  it('returns the stored value when configured', () => {
+    upsertSetting(FETCH_MIN_INTERVAL_SETTING_KEY, '5')
+    expect(getFetchScheduleConfig()).toEqual({
+      minIntervalMinutes: 5,
+      minIntervalSeconds: 300,
+    })
+  })
+
+  it('falls back to the default when the stored value is invalid', () => {
+    upsertSetting(FETCH_MIN_INTERVAL_SETTING_KEY, '0')
+    expect(getFetchScheduleConfig().minIntervalMinutes).toBe(DEFAULT_MIN_INTERVAL_MINUTES)
+  })
+})
 
 // --- formatDateSqlite ---
 
@@ -149,15 +180,16 @@ describe('computeEmpiricalInterval', () => {
     expect(computeEmpiricalInterval(items)).toBe(MAX_INTERVAL / 4)
   })
 
-  it('clamps to MIN_INTERVAL for very frequent feeds', () => {
-    // Articles every hour: avg = 1h, half = 30min > 15min min
+  it('returns the raw half-average interval for very frequent feeds', () => {
+    // Articles every hour: avg = 1h, half = 30min
     const items = Array.from({ length: 10 }, (_, i) => ({
       title: `Post ${i}`,
       url: `https://example.com/${i}`,
       published_at: new Date(Date.now() - i * 60 * 60 * 1000).toISOString(),
     }))
     const result = computeEmpiricalInterval(items)
-    expect(result).toBeGreaterThanOrEqual(MIN_INTERVAL)
+    expect(result).toBeGreaterThanOrEqual(1800)
+    expect(result).toBeLessThan(1900)
   })
 
   it('handles items with null published_at', () => {
@@ -186,6 +218,11 @@ describe('computeInterval', () => {
   it('clamps to MIN_INTERVAL', () => {
     const result = computeInterval(60, 120, 30)
     expect(result).toBe(MIN_INTERVAL)
+  })
+
+  it('uses a custom configurable minimum when provided', () => {
+    const result = computeInterval(null, null, 30, 60)
+    expect(result).toBe(60)
   })
 
   it('uses empirical when no HTTP/TTL signals', () => {

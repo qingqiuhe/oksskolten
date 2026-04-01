@@ -9,6 +9,7 @@ import {
 } from '../db.js'
 import { logger } from '../logger.js'
 import { sendFeishuDigestMessage } from './feishu.js'
+import { translateNotificationBodyText } from './translation.js'
 
 const log = logger.child('notifications')
 
@@ -29,11 +30,46 @@ export async function runNotificationChecks(): Promise<void> {
   const dueRules = listDueNotificationRules()
   for (const rule of dueRules) {
     const bindings = listRuleBindings(rule.id)
+    const pendingByBinding = new Map<number, ReturnType<typeof getPendingNotificationArticles>>()
+    let pendingForTranslation: ReturnType<typeof getPendingNotificationArticles> | null = null
+
     for (const binding of bindings) {
       const channel = getNotificationChannelById(binding.channel_id, rule.user_id)
       if (!channel || channel.enabled !== 1) continue
 
       const pending = getPendingNotificationArticles(rule.feed_id, binding.last_notified_article_id)
+      pendingByBinding.set(binding.channel_id, pending)
+      if (pending.total === 0 || pending.maxArticleId == null) continue
+      if (!pendingForTranslation || pending.total > pendingForTranslation.total) {
+        pendingForTranslation = pending
+      }
+    }
+
+    const translationCache = new Map<number, string | null>()
+    if (rule.translate_enabled === 1 && pendingForTranslation) {
+      await Promise.all(pendingForTranslation.articles.map(async (article) => {
+        if (!article.notification_body_text) {
+          translationCache.set(article.id, null)
+          return
+        }
+
+        try {
+          translationCache.set(
+            article.id,
+            await translateNotificationBodyText(article.notification_body_text, rule.user_id),
+          )
+        } catch (err) {
+          translationCache.set(article.id, null)
+          log.warn({ err, ruleId: rule.id, articleId: article.id }, 'notification translation failed, falling back to source text')
+        }
+      }))
+    }
+
+    for (const binding of bindings) {
+      const channel = getNotificationChannelById(binding.channel_id, rule.user_id)
+      if (!channel || channel.enabled !== 1) continue
+
+      const pending = pendingByBinding.get(binding.channel_id) ?? getPendingNotificationArticles(rule.feed_id, binding.last_notified_article_id)
       if (pending.total === 0 || pending.maxArticleId == null) {
         continue
       }
@@ -49,6 +85,7 @@ export async function runNotificationChecks(): Promise<void> {
             url: article.url,
             displayTime: formatArticleTime(article.published_at ?? article.fetched_at),
             bodyText: article.notification_body_text,
+            bodyTextTranslated: translationCache.get(article.id) ?? null,
             mediaUrls: article.notification_media_json ? JSON.parse(article.notification_media_json) as string[] : [],
           })),
         })

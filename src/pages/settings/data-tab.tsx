@@ -1,6 +1,7 @@
 import { Construction } from 'lucide-react'
 import { useI18n } from '../../lib/i18n'
 import { DataSection } from './sections/data-section'
+import { FetchScheduleSection } from './sections/fetch-schedule-section'
 import { RetentionSection } from './sections/retention-section'
 import { Separator } from '@/components/ui/separator'
 
@@ -24,6 +25,8 @@ export function DataTab() {
   return (
     <>
       <DataSection />
+      <Separator />
+      <FetchScheduleSection />
       <Separator />
       <PlaceholderSection titleKey="settings.dbBackup" descKey="settings.dbBackupDesc" />
       <Separator />

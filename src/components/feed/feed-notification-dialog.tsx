@@ -25,6 +25,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
     { revalidateOnFocus: false },
   )
   const [enabled, setEnabled] = useState(false)
+  const [translateEnabled, setTranslateEnabled] = useState(false)
   const [intervalMinutes, setIntervalMinutes] = useState('60')
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([])
   const [saving, setSaving] = useState(false)
@@ -33,6 +34,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
   useEffect(() => {
     if (!rule) return
     setEnabled(rule.enabled === 1)
+    setTranslateEnabled(rule.translate_enabled === 1)
     setIntervalMinutes(String(rule.check_interval_minutes ?? 60))
     setSelectedChannelIds(rule.channel_ids ?? [])
   }, [rule])
@@ -56,6 +58,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
     try {
       await apiPut(`/api/feeds/${feed.id}/notification-rule`, {
         enabled,
+        translate_enabled: translateEnabled,
         check_interval_minutes: Number(intervalMinutes),
         channel_ids: selectedChannelIds,
       })
@@ -78,6 +81,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
         user_id: null,
         feed_id: feed.id,
         enabled: 0,
+        translate_enabled: 0,
         check_interval_minutes: 60,
         next_check_at: null,
         last_checked_at: null,
@@ -86,6 +90,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
         channel_ids: [],
       }, { revalidate: false })
       setEnabled(false)
+      setTranslateEnabled(false)
       setSelectedChannelIds([])
       setIntervalMinutes('60')
       setMessage(t('notifications.ruleDeleted'))
@@ -100,7 +105,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="max-w-md" aria-describedby={undefined}>
         <VisuallyHidden.Root asChild><DialogTitle>{t('notifications.feedDialogTitle')}</DialogTitle></VisuallyHidden.Root>
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <div>
             <h2 className="text-base font-semibold text-text">{t('notifications.feedDialogTitle')}</h2>
             <p className="mt-1 text-xs text-muted">{feed.name}</p>
@@ -116,6 +121,30 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
             {t('notifications.ruleEnabled')}
           </label>
 
+          <div className="rounded-lg border border-border bg-bg-subtle px-3 py-3">
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+              <div className="min-w-0">
+                <div className="text-sm text-text">{t('notifications.translateEnabled')}</div>
+                <p className="mt-1 text-xs text-muted">{t('notifications.translateEnabledHint')}</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={translateEnabled}
+                onClick={() => setTranslateEnabled(value => !value)}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                  translateEnabled ? 'bg-accent' : 'bg-border'
+                }`}
+              >
+                <span
+                  className={`inline-block h-5 w-5 rounded-full bg-white transition-transform ${
+                    translateEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </label>
+          </div>
+
           <div>
             <p className="text-xs text-muted mb-2">{t('notifications.feedDialogChannels')}</p>
             {availableChannels.length === 0 ? (
@@ -127,7 +156,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
                 {availableChannels.map(channel => (
                   <label
                     key={channel.id}
-                    className="flex items-start gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2 cursor-pointer"
+                    className="flex w-full min-w-0 items-start gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2 cursor-pointer"
                   >
                     <input
                       type="checkbox"
@@ -135,9 +164,9 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
                       onChange={() => toggleChannel(channel.id)}
                       className="mt-0.5 accent-accent"
                     />
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="text-sm text-text truncate">{channel.name}</div>
-                      <div className="text-xs text-muted truncate">{channel.webhook_url}</div>
+                      <div className="block text-xs text-muted truncate">{channel.webhook_url}</div>
                     </div>
                   </label>
                 ))}
@@ -158,9 +187,9 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
             <p className="mt-2 text-xs text-muted">{t('notifications.feedDialogHint')}</p>
           </div>
 
-          <div className="rounded-lg border border-border bg-bg-subtle px-3 py-3">
+          <div className="min-w-0 rounded-lg border border-border bg-bg-subtle px-3 py-3">
             <p className="text-xs font-medium text-text mb-1">{t('notifications.previewTitle')}</p>
-            <p className="text-xs text-muted whitespace-pre-line">{t('notifications.previewBody', { feedName: feed.name })}</p>
+            <p className="text-xs text-muted whitespace-pre-line break-words">{t('notifications.previewBody', { feedName: feed.name, count: 'N' })}</p>
           </div>
 
           <div className="flex items-center justify-between gap-2">

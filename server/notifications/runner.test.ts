@@ -9,11 +9,20 @@ import {
 } from '../db.js'
 import { runNotificationChecks } from './runner.js'
 
+const { mockTranslateNotificationBodyText } = vi.hoisted(() => ({
+  mockTranslateNotificationBodyText: vi.fn(),
+}))
+
+vi.mock('./translation.js', () => ({
+  translateNotificationBodyText: (...args: unknown[]) => mockTranslateNotificationBodyText(...args),
+}))
+
 describe('runNotificationChecks', () => {
   beforeEach(() => {
     setupTestDb()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    mockTranslateNotificationBodyText.mockReset().mockResolvedValue(null)
   })
 
   it('does not backfill history and only sends newly inserted articles once', async () => {
@@ -37,6 +46,7 @@ describe('runNotificationChecks', () => {
     })
     upsertFeedNotificationRule(feed.id, {
       enabled: true,
+      translate_enabled: false,
       check_interval_minutes: 5,
       channel_ids: [channel.id],
     })
@@ -78,5 +88,119 @@ describe('runNotificationChecks', () => {
     getDb().prepare(`UPDATE feed_notification_rules SET next_check_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 minute')`).run()
     await runNotificationChecks()
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('adds translated body lines when translation is enabled', async () => {
+    const feed = createFeed({ name: 'Example Feed', url: 'https://example.com' })
+    insertArticle({
+      feed_id: feed.id,
+      title: 'Old article',
+      url: 'https://example.com/old',
+      published_at: '2026-03-30T10:15:00Z',
+      full_text: 'Old body',
+      notification_body_text: 'Old body',
+      notification_media_json: null,
+    })
+
+    const channel = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Team',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-token',
+      secret: null,
+      enabled: 1,
+    })
+    upsertFeedNotificationRule(feed.id, {
+      enabled: true,
+      translate_enabled: true,
+      check_interval_minutes: 5,
+      channel_ids: [channel.id],
+    })
+
+    insertArticle({
+      feed_id: feed.id,
+      title: 'Fresh article',
+      url: 'https://example.com/fresh',
+      published_at: '2026-03-31T10:15:00Z',
+      full_text: 'Fresh body',
+      notification_body_text: 'English body',
+      notification_media_json: null,
+    })
+
+    mockTranslateNotificationBodyText.mockResolvedValue('中文正文')
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 0, msg: 'success' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    getDb().prepare(`UPDATE feed_notification_rules SET next_check_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 minute')`).run()
+    await runNotificationChecks()
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as { card: { body: { elements: Array<{ text?: { content: string } }> } } }
+    const articleText = payload.card.body.elements.find(element => element.text)?.text?.content ?? ''
+    expect(articleText).toContain('English body')
+    expect(articleText).toContain('中文正文')
+    expect(mockTranslateNotificationBodyText).toHaveBeenCalledWith('English body', null)
+  })
+
+  it('falls back to source text when notification translation fails', async () => {
+    const feed = createFeed({ name: 'Example Feed', url: 'https://example.com' })
+    insertArticle({
+      feed_id: feed.id,
+      title: 'Old article',
+      url: 'https://example.com/old',
+      published_at: '2026-03-30T10:15:00Z',
+      full_text: 'Old body',
+      notification_body_text: 'Old body',
+      notification_media_json: null,
+    })
+
+    const channel = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Team',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-token',
+      secret: null,
+      enabled: 1,
+    })
+    upsertFeedNotificationRule(feed.id, {
+      enabled: true,
+      translate_enabled: true,
+      check_interval_minutes: 5,
+      channel_ids: [channel.id],
+    })
+
+    insertArticle({
+      feed_id: feed.id,
+      title: 'Fresh article',
+      url: 'https://example.com/fresh',
+      published_at: '2026-03-31T10:15:00Z',
+      full_text: 'Fresh body',
+      notification_body_text: 'English body',
+      notification_media_json: null,
+    })
+
+    mockTranslateNotificationBodyText.mockRejectedValue(new Error('translator down'))
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 0, msg: 'success' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    getDb().prepare(`UPDATE feed_notification_rules SET next_check_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 minute')`).run()
+    await runNotificationChecks()
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as { card: { body: { elements: Array<{ text?: { content: string } }> } } }
+    const articleText = payload.card.body.elements.find(element => element.text)?.text?.content ?? ''
+    expect(articleText).toContain('English body')
+    expect(articleText).not.toContain('中文正文')
+
+    const binding = getDb().prepare(`
+      SELECT last_error
+      FROM feed_notification_rule_channels
+      WHERE channel_id = ?
+    `).get(channel.id) as { last_error: string | null }
+    expect(binding.last_error).toBeNull()
   })
 })

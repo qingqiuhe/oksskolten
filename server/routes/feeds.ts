@@ -56,6 +56,7 @@ const UpdateFeedBody = z.object({
 })
 const FeedNotificationRuleBody = z.object({
   enabled: z.boolean(),
+  translate_enabled: z.boolean(),
   check_interval_minutes: z.number().int().min(5).max(1440),
   channel_ids: z.array(z.number().int()).max(32),
 })
@@ -214,6 +215,7 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       user_id: userId,
       feed_id: params.id,
       enabled: 0,
+      translate_enabled: 0,
       check_interval_minutes: 60,
       next_check_at: null,
       last_checked_at: null,
