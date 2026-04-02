@@ -247,6 +247,50 @@ describe('FeedNotificationDialog', () => {
     expect(labelClassName).toContain('min-w-0')
   })
 
+  it('uses a viewport-bounded dialog shell and a scrollable form area', async () => {
+    render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <FeedNotificationDialog
+          feed={{
+            id: 7,
+            name: 'Example Feed',
+            url: 'https://example.com',
+            icon_url: null,
+            rss_url: null,
+            rss_bridge_url: null,
+            view_type: null,
+            category_id: null,
+            last_error: null,
+            error_count: 0,
+            disabled: 0,
+            requires_js_challenge: 0,
+            type: 'rss',
+            etag: null,
+            last_modified: null,
+            last_content_hash: null,
+            next_check_at: null,
+            check_interval: null,
+            created_at: '2026-03-31T00:00:00Z',
+            category_name: null,
+            article_count: 0,
+            unread_count: 0,
+            articles_per_week: 0,
+            latest_published_at: null,
+          }}
+          onClose={() => {}}
+        />
+      </SWRConfig>,
+    )
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.className).toContain('max-h-[calc(100dvh-2rem)]')
+    expect(dialog.className).toContain('overflow-hidden')
+
+    const scrollArea = screen.getByTestId('feed-notification-scroll-area')
+    expect(scrollArea.className).toContain('flex-1')
+    expect(scrollArea.className).toContain('overflow-y-auto')
+  })
+
   it('switches preview copy for title-only mode', async () => {
     render(
       <SWRConfig value={{ provider: () => new Map() }}>
