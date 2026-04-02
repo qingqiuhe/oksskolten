@@ -142,6 +142,20 @@ const RSS_GUID_FALLBACK_XML = `<?xml version="1.0" encoding="UTF-8"?>
   </channel>
 </rss>`
 
+const RSS_GUID_ANCHOR_FALLBACK_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Jin10 Style</title>
+    <item>
+      <title>Flash</title>
+      <description>Flash content</description>
+      <link/>
+      <guid isPermaLink="false">jin10:index:20260402200104657800</guid>
+      <pubDate>Thu, 02 Apr 2026 12:01:04 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+
 const RSSHUB_X_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
@@ -336,6 +350,19 @@ describe('fetchAndParseRss', () => {
 
     expect(items).toHaveLength(1)
     expect(items[0].url).toBe('https://example.com/guid-1')
+  })
+
+  it('builds a synthetic anchor URL when RSS guid is non-http and link is empty', async () => {
+    mockSafeFetch.mockResolvedValue(mockResponse(RSS_GUID_ANCHOR_FALLBACK_XML))
+
+    const { items } = await fetchAndParseRss({
+      id: 1, name: 'test', url: 'https://www.jin10.com',
+      rss_url: 'https://rsshub.example.com/jin10?important=1',
+    } as any)
+
+    expect(items).toHaveLength(1)
+    expect(items[0].url).toBe('https://www.jin10.com/#jin10:index:20260402200104657800')
+    expect(items[0].excerpt).toBe('Flash content')
   })
 
   it('parses Atom with single link (no rel=alternate)', async () => {

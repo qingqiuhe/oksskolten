@@ -2564,6 +2564,33 @@ describe('fetchSingleFeed — non-HTTP id must not be used as URL', () => {
     const article = getArticleByUrl('https://example.com/good-atom')
     expect(article).toBeDefined()
   })
+
+  it('feedsmith: synthesizes an anchor URL from guid when RSS item has no link', async () => {
+    feedsmithOverride = {
+      items: [
+        {
+          title: 'Jin10 Flash',
+          description: 'Flash body',
+          guid: { value: 'jin10:index:20260402200104657800', isPermaLink: false },
+        },
+      ],
+    }
+    const feed = seedFeed({ url: 'https://www.jin10.com' })
+
+    mockFetch.mockImplementation((url: string | URL) => {
+      const u = url.toString()
+      if (u === feed.rss_url)
+        return Promise.resolve(mockResponse('<rss/>', { headers: { 'content-type': 'application/rss+xml' } }))
+      throw new Error(`unexpected fetch: ${u}`)
+    })
+
+    await fetchSingleFeed(feed)
+
+    const article = getArticleByUrl('https://www.jin10.com/#jin10:index:20260402200104657800')
+    expect(article).toBeDefined()
+    expect(article!.title).toBe('Jin10 Flash')
+    expect(article!.full_text).toContain('Flash body')
+  })
 })
 
 describe('fetchSingleFeed — Atom link vs id URL preference', () => {

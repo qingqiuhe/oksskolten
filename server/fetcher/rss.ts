@@ -145,6 +145,32 @@ function firstNonEmpty(...values: (string | null | undefined)[]): string | null 
   return null
 }
 
+function isHttpUrl(value: string | null | undefined): value is string {
+  return typeof value === 'string' && /^https?:\/\//i.test(value.trim())
+}
+
+function buildSyntheticItemUrl(baseUrl: string, key: string | null | undefined): string | null {
+  if (typeof key !== 'string' || !key.trim()) return null
+  try {
+    const url = new URL(baseUrl)
+    url.hash = key.trim()
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
+function guidValueOf(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null
+  if (!value || typeof value !== 'object') return null
+
+  const record = value as Record<string, unknown>
+  return firstNonEmpty(
+    typeof record.value === 'string' ? record.value : null,
+    typeof record['#text'] === 'string' ? record['#text'] : null,
+  )
+}
+
 function resolveFeedAssetUrl(rawUrl: string | null | undefined, baseUrl: string): string | null {
   if (!rawUrl) return null
   try {
@@ -359,6 +385,30 @@ function buildRssItem(
   }
 }
 
+function resolveFeedsmithItemUrl(feed: FeedSource, item: Record<string, unknown>): string | null {
+  const directUrl = typeof item.url === 'string'
+    ? item.url
+    : typeof item.link === 'string'
+      ? item.link
+      : null
+  if (directUrl?.trim()) return directUrl
+
+  const links = item.links as { href?: string; rel?: string }[] | undefined
+  if (links?.length) {
+    const alt = links.find(link => link.rel === 'alternate')
+    const href = alt?.href || links[0]?.href
+    if (href?.trim()) return href
+  }
+
+  const id = typeof item.id === 'string' ? item.id : null
+  if (isHttpUrl(id)) return id
+
+  const guid = guidValueOf(item.guid)
+  if (isHttpUrl(guid)) return guid
+
+  return buildSyntheticItemUrl(feed.url, guid)
+}
+
 async function parseRssXml(feed: FeedSource, xml: string): Promise<RssItem[]> {
   // Try feedsmith first
   try {
@@ -368,36 +418,20 @@ async function parseRssXml(feed: FeedSource, xml: string): Promise<RssItem[]> {
     const items = (parsed.items ?? parsed.entries ?? parsedFeed?.items ?? parsedFeed?.entries) as Record<string, unknown>[] | undefined
     if (items && items.length > 0) {
       return items
-        .filter((item: Record<string, unknown>) => {
-          if (item.url || item.link) return true
-          // feedsmith puts Atom <link> elements in a links[] array
-          const links = item.links as { href?: string; rel?: string }[] | undefined
-          if (links?.length) return true
-          // Only use id as URL when it looks like an HTTP URL
-          const id = item.id as string | undefined
-          return id ? /^https?:\/\//i.test(id) : false
-        })
         .map((item: Record<string, unknown>) => {
-          let url = (item.url || item.link) as string | undefined
-          if (!url) {
-            // Extract URL from feedsmith links[] array (prefer rel=alternate)
-            const links = item.links as { href?: string; rel?: string }[] | undefined
-            if (links?.length) {
-              const alt = links.find(l => l.rel === 'alternate')
-              url = alt?.href || links[0]?.href
-            }
-          }
           const rawExcerpt = item.content_encoded || item['content:encoded'] || item.content || item.description || item.summary
           const excerpt = typeof rawExcerpt === 'string' ? rawExcerpt : (rawExcerpt && typeof rawExcerpt === 'object' && 'value' in rawExcerpt ? String((rawExcerpt as Record<string, unknown>).value) : undefined)
+          const url = resolveFeedsmithItemUrl(feed, item)
           return buildRssItem(feed, {
             title: (item.title as string) || 'Untitled',
-            url: (url || item.id) as string,
+            url: url || '',
             published_at: normalizeDate(
               (item.published || item.updated || item.date || item.pubDate || (item.dc as Record<string, unknown>)?.date) as string | undefined,
             ),
             rawExcerpt: excerpt,
           })
         })
+        .filter((item: RssItem) => item.url)
     }
   } catch {
     // feedsmith failed, fall through to fast-xml-parser
@@ -415,9 +449,11 @@ async function parseRssXml(feed: FeedSource, xml: string): Promise<RssItem[]> {
     return items
       .map((item: Record<string, unknown>) => {
         const excerpt = textOf(item['content:encoded']) || textOf(item.description)
+        const link = textOf(item.link)
+        const guid = textOf(item.guid)
         return buildRssItem(feed, {
           title: textOf(item.title) || 'Untitled',
-          url: (item.link || item.guid || '') as string,
+          url: link || (isHttpUrl(guid) ? guid : buildSyntheticItemUrl(feed.url, guid) || ''),
           published_at: normalizeDate(item.pubDate as string | undefined),
           rawExcerpt: excerpt,
         })
