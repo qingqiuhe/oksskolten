@@ -138,7 +138,7 @@ describe('NotificationTasksSection', () => {
     expect(screen.queryByRole('checkbox', { name: /Member Channel/ })).toBeNull()
   })
 
-  it('parses legacy UTC timestamps without timezone suffix as UTC for last check display', async () => {
+  it('parses legacy UTC timestamps without timezone suffix as UTC for last check and next retry display', async () => {
     swrData['/api/settings/notification-tasks?scope=all'] = {
       scope: 'all',
       tasks: [
@@ -164,7 +164,7 @@ describe('NotificationTasksSection', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Last check: 2026-04-02T01:23:45.000Z/)).toBeTruthy()
-      expect(screen.getByText(/Next check: 2026-04-02T01:23:45.000Z/)).toBeTruthy()
+      expect(screen.getByText(/Next retry: 2026-04-02T01:23:45.000Z/)).toBeTruthy()
     })
   })
 })
