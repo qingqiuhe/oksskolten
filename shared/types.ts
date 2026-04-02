@@ -157,6 +157,7 @@ export interface FeedNotificationRule {
   user_id: number | null
   feed_id: number
   enabled: number
+  delivery_mode: 'immediate' | 'digest'
   translate_enabled: number
   check_interval_minutes: number
   next_check_at: string | null
@@ -189,6 +190,7 @@ export interface NotificationTaskRecord {
     name: string
   }
   enabled: number
+  delivery_mode: 'immediate' | 'digest'
   translate_enabled: number
   check_interval_minutes: number
   next_check_at: string | null

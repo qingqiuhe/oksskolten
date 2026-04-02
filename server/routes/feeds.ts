@@ -56,8 +56,9 @@ const UpdateFeedBody = z.object({
 })
 const FeedNotificationRuleBody = z.object({
   enabled: z.boolean(),
+  delivery_mode: z.enum(['immediate', 'digest']).optional(),
   translate_enabled: z.boolean(),
-  check_interval_minutes: z.number().int().min(5).max(1440),
+  check_interval_minutes: z.number().int().min(5).max(1440).optional(),
   channel_ids: z.array(z.number().int()).max(32),
 })
 
@@ -215,6 +216,7 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       user_id: userId,
       feed_id: params.id,
       enabled: 0,
+      delivery_mode: 'immediate',
       translate_enabled: 0,
       check_interval_minutes: 60,
       next_check_at: null,
@@ -251,6 +253,10 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
         reply.status(400).send({ error: 'channel_ids must not be empty when notifications are enabled' })
         return
       }
+      if ((body.delivery_mode ?? 'immediate') === 'digest' && body.check_interval_minutes == null) {
+        reply.status(400).send({ error: 'check_interval_minutes is required for digest mode' })
+        return
+      }
 
       for (const channelId of body.channel_ids) {
         if (!availableChannels.has(channelId)) {
@@ -259,7 +265,10 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
         }
       }
 
-      const rule = upsertFeedNotificationRule(params.id, body, userId)
+      const rule = upsertFeedNotificationRule(params.id, {
+        ...body,
+        delivery_mode: body.delivery_mode ?? 'immediate',
+      }, userId)
       reply.send(rule)
     },
   )

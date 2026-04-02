@@ -57,6 +57,7 @@ const NotificationTaskQuery = z.object({
 })
 const NotificationTaskPatchBody = z.object({
   enabled: z.boolean().optional(),
+  delivery_mode: z.enum(['immediate', 'digest']).optional(),
   translate_enabled: z.boolean().optional(),
   check_interval_minutes: z.number().int().min(5).max(1440).optional(),
   channel_ids: z.array(z.number().int()).max(32).optional(),
@@ -465,6 +466,11 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
         reply.status(400).send({ error: 'Invalid notification channel' })
         return
       }
+    }
+    const nextDeliveryMode = body.delivery_mode ?? task.delivery_mode
+    if (nextDeliveryMode === 'digest' && body.check_interval_minutes === undefined && task.check_interval_minutes == null) {
+      reply.status(400).send({ error: 'check_interval_minutes is required for digest mode' })
+      return
     }
 
     const updated = updateNotificationTaskById(params.id, body)

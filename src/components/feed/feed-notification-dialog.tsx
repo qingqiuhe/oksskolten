@@ -25,6 +25,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
     { revalidateOnFocus: false },
   )
   const [enabled, setEnabled] = useState(false)
+  const [deliveryMode, setDeliveryMode] = useState<'immediate' | 'digest'>('immediate')
   const [translateEnabled, setTranslateEnabled] = useState(false)
   const [intervalMinutes, setIntervalMinutes] = useState('60')
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([])
@@ -34,6 +35,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
   useEffect(() => {
     if (!rule) return
     setEnabled(rule.enabled === 1)
+    setDeliveryMode(rule.delivery_mode ?? 'immediate')
     setTranslateEnabled(rule.translate_enabled === 1)
     setIntervalMinutes(String(rule.check_interval_minutes ?? 60))
     setSelectedChannelIds(rule.channel_ids ?? [])
@@ -58,6 +60,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
     try {
       await apiPut(`/api/feeds/${feed.id}/notification-rule`, {
         enabled,
+        delivery_mode: deliveryMode,
         translate_enabled: translateEnabled,
         check_interval_minutes: Number(intervalMinutes),
         channel_ids: selectedChannelIds,
@@ -81,6 +84,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
         user_id: null,
         feed_id: feed.id,
         enabled: 0,
+        delivery_mode: 'immediate',
         translate_enabled: 0,
         check_interval_minutes: 60,
         next_check_at: null,
@@ -90,6 +94,7 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
         channel_ids: [],
       }, { revalidate: false })
       setEnabled(false)
+      setDeliveryMode('immediate')
       setTranslateEnabled(false)
       setSelectedChannelIds([])
       setIntervalMinutes('60')
@@ -120,6 +125,35 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
             />
             {t('notifications.ruleEnabled')}
           </label>
+
+          <div>
+            <p className="text-xs text-muted mb-2">{t('notifications.feedDialogMode')}</p>
+            <div className="inline-flex rounded-lg border border-border bg-bg-card p-1">
+              <button
+                type="button"
+                onClick={() => setDeliveryMode('immediate')}
+                className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                  deliveryMode === 'immediate' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
+                }`}
+              >
+                {t('notifications.deliveryModeImmediate')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeliveryMode('digest')}
+                className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                  deliveryMode === 'digest' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
+                }`}
+              >
+                {t('notifications.deliveryModeDigest')}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-muted">
+              {deliveryMode === 'immediate'
+                ? t('notifications.feedDialogImmediateHint')
+                : t('notifications.feedDialogDigestHint')}
+            </p>
+          </div>
 
           <div className="rounded-lg border border-border bg-bg-subtle px-3 py-3">
             <label className="flex items-center justify-between gap-3 cursor-pointer">
@@ -174,18 +208,19 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
             )}
           </div>
 
-          <div>
-            <label className="block text-xs text-muted mb-1">{t('notifications.feedDialogInterval')}</label>
-            <Input
-              type="number"
-              min={5}
-              max={1440}
-              step={5}
-              value={intervalMinutes}
-              onChange={e => setIntervalMinutes(e.target.value)}
-            />
-            <p className="mt-2 text-xs text-muted">{t('notifications.feedDialogHint')}</p>
-          </div>
+          {deliveryMode === 'digest' && (
+            <div>
+              <label className="block text-xs text-muted mb-1">{t('notifications.feedDialogInterval')}</label>
+              <Input
+                type="number"
+                min={5}
+                max={1440}
+                step={5}
+                value={intervalMinutes}
+                onChange={e => setIntervalMinutes(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="min-w-0 rounded-lg border border-border bg-bg-subtle px-3 py-3">
             <p className="text-xs font-medium text-text mb-1">{t('notifications.previewTitle')}</p>

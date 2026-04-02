@@ -177,19 +177,15 @@ cronTasks.push(cron.schedule(CRON_SCHEDULE, async () => {
     } catch (err) {
       log.error('[cron] Feed fetch error:', err)
     }
+    try {
+      await runNotificationChecks()
+    } catch (err) {
+      log.error('[cron] Notification check error:', err)
+    }
   })()
   activeFetchPromise = p
   await p
   activeFetchPromise = null
-}))
-
-const NOTIFICATION_CRON_SCHEDULE = process.env.NOTIFICATION_CRON_SCHEDULE || '* * * * *'
-cronTasks.push(cron.schedule(NOTIFICATION_CRON_SCHEDULE, async () => {
-  try {
-    await runNotificationChecks()
-  } catch (err) {
-    log.error('[cron] Notification check error:', err)
-  }
 }))
 
 // --- Score recalculation ---
