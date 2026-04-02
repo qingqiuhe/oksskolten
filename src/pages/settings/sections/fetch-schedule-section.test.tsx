@@ -38,7 +38,7 @@ describe('FetchScheduleSection', () => {
   it('renders the current value from the API', () => {
     render(<FetchScheduleSection />)
     expect(screen.getByDisplayValue('15')).toBeTruthy()
-    expect(screen.getByText('This controls the minimum feed fetch interval only. Notification timing is unchanged.')).toBeTruthy()
+    expect(screen.getByText('This only controls feed fetching. Notifications still follow each feed rule: immediate or scheduled digest.')).toBeTruthy()
   })
 
   it('reverts invalid input on blur', async () => {

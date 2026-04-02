@@ -24,6 +24,7 @@ import { detectLanguage } from './fetcher/ai.js'
 import { logger } from './logger.js'
 import type { ArticleKind } from '../shared/article-kind.js'
 import { buildNotificationPreview } from './notifications/article-preview.js'
+import { deliverImmediateNotificationsForFeeds } from './notifications/runner.js'
 
 const log = logger.child('fetcher')
 
@@ -324,6 +325,12 @@ export async function fetchSingleFeed(
   emitProgress(completeEvent)
   onProgress?.(completeEvent)
 
+  try {
+    await deliverImmediateNotificationsForFeeds([feed.id])
+  } catch (err) {
+    log.error({ err, feedId: feed.id }, 'Immediate notification delivery failed after single-feed fetch')
+  }
+
   log.info(`Feed ${feed.name}: done`)
 }
 
@@ -478,6 +485,16 @@ export async function fetchAllFeeds(
       emitProgress(event)
       onProgress?.(event)
     }
+  }
+
+  try {
+    await deliverImmediateNotificationsForFeeds(
+      [...feedNewCounts.entries()]
+        .filter(([, count]) => count > 0)
+        .map(([feedId]) => feedId),
+    )
+  } catch (err) {
+    log.error({ err }, 'Immediate notification delivery failed after batch fetch')
   }
 
   log.info('Batch complete')

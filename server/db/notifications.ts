@@ -3,6 +3,11 @@ import { getCurrentUserId } from '../identity.js'
 import type { UserRole } from '../identity.js'
 import { DEFAULT_NOTIFICATION_TIMEZONE, type NotificationTimezone } from '../../shared/notification-timezone.js'
 
+export type NotificationDeliveryMode = 'immediate' | 'digest'
+
+const DEFAULT_NOTIFICATION_CHECK_INTERVAL_MINUTES = 60
+const IMMEDIATE_RETRY_DELAY_MINUTES = 1
+
 function resolveUserId(userId?: number | null): number | null {
   return userId ?? getCurrentUserId()
 }
@@ -25,6 +30,7 @@ export interface FeedNotificationRule {
   user_id: number | null
   feed_id: number
   enabled: number
+  delivery_mode: NotificationDeliveryMode
   translate_enabled: number
   check_interval_minutes: number
   next_check_at: string | null
@@ -73,6 +79,7 @@ export interface NotificationTaskRecord {
     name: string
   }
   enabled: number
+  delivery_mode: NotificationDeliveryMode
   translate_enabled: number
   check_interval_minutes: number
   next_check_at: string | null
@@ -97,6 +104,14 @@ function toIsoNoMillis(date: Date): string {
 
 function nextCheckAtFromMinutes(minutes: number): string {
   return toIsoNoMillis(new Date(Date.now() + minutes * 60_000))
+}
+
+function nextImmediateRetryAt(): string {
+  return nextCheckAtFromMinutes(IMMEDIATE_RETRY_DELAY_MINUTES)
+}
+
+function normalizeCheckIntervalMinutes(value: number | null | undefined): number {
+  return value ?? DEFAULT_NOTIFICATION_CHECK_INTERVAL_MINUTES
 }
 
 function getFeedNotificationRuleByRuleId(ruleId: number): FeedNotificationRule | undefined {
@@ -246,24 +261,42 @@ export function getFeedNotificationRule(feedId: number, userId?: number | null):
 
 export function upsertFeedNotificationRule(
   feedId: number,
-  data: { enabled: boolean; translate_enabled: boolean; check_interval_minutes: number; channel_ids: number[] },
+  data: {
+    enabled: boolean
+    delivery_mode?: NotificationDeliveryMode
+    translate_enabled: boolean
+    check_interval_minutes?: number | null
+    channel_ids: number[]
+  },
   userId?: number | null,
 ): FeedNotificationRuleRecord {
   const scopedUserId = resolveUserId(userId)
-  const nextCheckAt = data.enabled ? nextCheckAtFromMinutes(data.check_interval_minutes) : null
 
   return getDb().transaction(() => {
     let rule = getFeedNotificationRule(feedId, scopedUserId)
+    const deliveryMode = data.delivery_mode ?? rule?.delivery_mode ?? 'digest'
+    const checkIntervalMinutes = normalizeCheckIntervalMinutes(data.check_interval_minutes ?? rule?.check_interval_minutes)
+    const nextCheckAt = !data.enabled
+      ? null
+      : deliveryMode === 'digest'
+        ? nextCheckAtFromMinutes(checkIntervalMinutes)
+        : (rule?.delivery_mode === 'immediate' ? rule.next_check_at : null)
+
     if (!rule) {
       const result = runNamed(`
-        INSERT INTO feed_notification_rules (user_id, feed_id, enabled, translate_enabled, check_interval_minutes, next_check_at)
-        VALUES (@user_id, @feed_id, @enabled, @translate_enabled, @check_interval_minutes, @next_check_at)
+        INSERT INTO feed_notification_rules (
+          user_id, feed_id, enabled, delivery_mode, translate_enabled, check_interval_minutes, next_check_at
+        )
+        VALUES (
+          @user_id, @feed_id, @enabled, @delivery_mode, @translate_enabled, @check_interval_minutes, @next_check_at
+        )
       `, {
         user_id: scopedUserId,
         feed_id: feedId,
         enabled: data.enabled ? 1 : 0,
+        delivery_mode: deliveryMode,
         translate_enabled: data.translate_enabled ? 1 : 0,
-        check_interval_minutes: data.check_interval_minutes,
+        check_interval_minutes: checkIntervalMinutes,
         next_check_at: nextCheckAt,
       })
       rule = {
@@ -274,6 +307,7 @@ export function upsertFeedNotificationRule(
       runNamed(`
         UPDATE feed_notification_rules
         SET enabled = @enabled,
+            delivery_mode = @delivery_mode,
             translate_enabled = @translate_enabled,
             check_interval_minutes = @check_interval_minutes,
             next_check_at = @next_check_at,
@@ -282,8 +316,9 @@ export function upsertFeedNotificationRule(
       `, {
         id: rule.id,
         enabled: data.enabled ? 1 : 0,
+        delivery_mode: deliveryMode,
         translate_enabled: data.translate_enabled ? 1 : 0,
-        check_interval_minutes: data.check_interval_minutes,
+        check_interval_minutes: checkIntervalMinutes,
         next_check_at: nextCheckAt,
       })
       rule = getFeedNotificationRule(feedId, scopedUserId)!
@@ -345,6 +380,7 @@ export function listNotificationTasks(userId?: number | null): NotificationTaskR
       r.feed_id,
       f.name AS feed_name,
       r.enabled,
+      r.delivery_mode,
       r.translate_enabled,
       r.check_interval_minutes,
       r.next_check_at,
@@ -363,6 +399,7 @@ export function listNotificationTasks(userId?: number | null): NotificationTaskR
       r.feed_id,
       f.name,
       r.enabled,
+      r.delivery_mode,
       r.translate_enabled,
       r.check_interval_minutes,
       r.next_check_at,
@@ -379,6 +416,7 @@ export function listNotificationTasks(userId?: number | null): NotificationTaskR
     feed_id: number
     feed_name: string
     enabled: number
+    delivery_mode: NotificationDeliveryMode
     translate_enabled: number
     check_interval_minutes: number
     next_check_at: string | null
@@ -421,6 +459,7 @@ export function listNotificationTasks(userId?: number | null): NotificationTaskR
       name: row.feed_name,
     },
     enabled: row.enabled,
+    delivery_mode: row.delivery_mode,
     translate_enabled: row.translate_enabled,
     check_interval_minutes: row.check_interval_minutes,
     next_check_at: row.next_check_at,
@@ -437,20 +476,32 @@ export function getNotificationTaskById(ruleId: number): NotificationTaskRecord 
 
 export function updateNotificationTaskById(
   ruleId: number,
-  data: Partial<{ enabled: boolean; translate_enabled: boolean; check_interval_minutes: number; channel_ids: number[] }>,
+  data: Partial<{
+    enabled: boolean
+    delivery_mode: NotificationDeliveryMode
+    translate_enabled: boolean
+    check_interval_minutes: number
+    channel_ids: number[]
+  }>,
 ): FeedNotificationRuleRecord | null {
   return getDb().transaction(() => {
     const existing = getFeedNotificationRuleRecordByRuleId(ruleId)
     if (!existing) return null
 
     const nextEnabled = data.enabled ?? (existing.enabled === 1)
+    const nextDeliveryMode = data.delivery_mode ?? existing.delivery_mode
     const nextTranslateEnabled = data.translate_enabled ?? (existing.translate_enabled === 1)
-    const nextCheckInterval = data.check_interval_minutes ?? existing.check_interval_minutes
-    const nextCheckAt = nextEnabled ? nextCheckAtFromMinutes(nextCheckInterval) : null
+    const nextCheckInterval = normalizeCheckIntervalMinutes(data.check_interval_minutes ?? existing.check_interval_minutes)
+    const nextCheckAt = !nextEnabled
+      ? null
+      : nextDeliveryMode === 'digest'
+        ? nextCheckAtFromMinutes(nextCheckInterval)
+        : (existing.delivery_mode === 'immediate' ? existing.next_check_at : null)
 
     runNamed(`
       UPDATE feed_notification_rules
       SET enabled = @enabled,
+          delivery_mode = @delivery_mode,
           translate_enabled = @translate_enabled,
           check_interval_minutes = @check_interval_minutes,
           next_check_at = @next_check_at,
@@ -459,6 +510,7 @@ export function updateNotificationTaskById(
     `, {
       id: ruleId,
       enabled: nextEnabled ? 1 : 0,
+      delivery_mode: nextDeliveryMode,
       translate_enabled: nextTranslateEnabled ? 1 : 0,
       check_interval_minutes: nextCheckInterval,
       next_check_at: nextCheckAt,
@@ -516,6 +568,21 @@ export function listDueNotificationRules(): DueNotificationRule[] {
       AND r.next_check_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
     ORDER BY r.next_check_at ASC, r.id ASC
   `).all() as DueNotificationRule[]
+}
+
+export function listImmediateNotificationRulesByFeedIds(feedIds: number[]): DueNotificationRule[] {
+  if (feedIds.length === 0) return []
+  const placeholders = feedIds.map(() => '?').join(', ')
+  return getDb().prepare(`
+    SELECT r.*, f.name AS feed_name
+    FROM feed_notification_rules r
+    JOIN feeds f ON f.id = r.feed_id
+    WHERE r.enabled = 1
+      AND r.delivery_mode = 'immediate'
+      AND f.disabled = 0
+      AND r.feed_id IN (${placeholders})
+    ORDER BY r.id ASC
+  `).all(...feedIds) as DueNotificationRule[]
 }
 
 export function listRuleBindings(ruleId: number): FeedNotificationBinding[] {
@@ -578,7 +645,7 @@ export function markNotificationBindingError(ruleId: number, channelId: number, 
   `).run(error, ruleId, channelId)
 }
 
-export function markNotificationRuleChecked(ruleId: number, checkIntervalMinutes: number): void {
+export function markNotificationRuleDigestChecked(ruleId: number, checkIntervalMinutes: number): void {
   getDb().prepare(`
     UPDATE feed_notification_rules
     SET last_checked_at = ?,
@@ -586,4 +653,14 @@ export function markNotificationRuleChecked(ruleId: number, checkIntervalMinutes
         updated_at = datetime('now')
     WHERE id = ?
   `).run(toIsoNoMillis(new Date()), nextCheckAtFromMinutes(checkIntervalMinutes), ruleId)
+}
+
+export function markNotificationRuleImmediateChecked(ruleId: number, retryPending: boolean): void {
+  getDb().prepare(`
+    UPDATE feed_notification_rules
+    SET last_checked_at = datetime('now'),
+        next_check_at = ?,
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(retryPending ? nextImmediateRetryAt() : null, ruleId)
 }

@@ -43,6 +43,7 @@ describe('NotificationTasksSection', () => {
             owner: { user_id: 1, email: 'admin@example.com', role: 'admin' },
             feed: { id: 5, name: 'My Feed' },
             enabled: 1,
+            delivery_mode: 'digest',
             translate_enabled: 0,
             check_interval_minutes: 15,
             next_check_at: null,
@@ -60,6 +61,7 @@ describe('NotificationTasksSection', () => {
             owner: { user_id: 1, email: 'admin@example.com', role: 'admin' },
             feed: { id: 5, name: 'My Feed' },
             enabled: 1,
+            delivery_mode: 'digest',
             translate_enabled: 0,
             check_interval_minutes: 15,
             next_check_at: null,
@@ -72,6 +74,7 @@ describe('NotificationTasksSection', () => {
             owner: { user_id: 2, email: 'member@example.com', role: 'member' },
             feed: { id: 6, name: 'Member Feed' },
             enabled: 1,
+            delivery_mode: 'immediate',
             translate_enabled: 1,
             check_interval_minutes: 30,
             next_check_at: null,
@@ -115,6 +118,7 @@ describe('NotificationTasksSection', () => {
     await waitFor(() => {
       expect(mockApiPatch).toHaveBeenCalledWith('/api/settings/notification-tasks/10', {
         enabled: true,
+        delivery_mode: 'digest',
         translate_enabled: false,
         check_interval_minutes: 15,
         channel_ids: [101],

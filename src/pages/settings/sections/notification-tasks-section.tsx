@@ -13,6 +13,7 @@ type NotificationTaskScope = 'self' | 'all'
 interface TaskFormState {
   id: number
   enabled: boolean
+  delivery_mode: 'immediate' | 'digest'
   translate_enabled: boolean
   check_interval_minutes: string
   channel_ids: number[]
@@ -69,6 +70,7 @@ export function NotificationTasksSection() {
     setForm({
       id: task.id,
       enabled: task.enabled === 1,
+      delivery_mode: task.delivery_mode,
       translate_enabled: task.translate_enabled === 1,
       check_interval_minutes: String(task.check_interval_minutes),
       channel_ids: task.channels.map(channel => channel.id),
@@ -118,8 +120,11 @@ export function NotificationTasksSection() {
 
     const payload: Record<string, unknown> = {
       enabled: form.enabled,
+      delivery_mode: form.delivery_mode,
       translate_enabled: form.translate_enabled,
-      check_interval_minutes: interval,
+    }
+    if (form.delivery_mode === 'digest') {
+      payload.check_interval_minutes = interval
     }
     if (ownTask) {
       payload.channel_ids = form.channel_ids
@@ -195,8 +200,10 @@ export function NotificationTasksSection() {
                       {t('notifications.taskOwner')}: {task.owner.email ?? t('notifications.ownerLocal')}
                     </p>
                     <div className="mt-2 grid gap-1 text-xs text-muted md:grid-cols-2">
-                      <p>{t('notifications.taskInterval')}: {task.check_interval_minutes}{t('notifications.taskMinutesSuffix')}</p>
-                      <p>{t('notifications.taskNextCheck')}: {formatLocalDateTime(task.next_check_at, t('notifications.neverChecked'))}</p>
+                      <p>{t('notifications.taskMode')}: {task.delivery_mode === 'immediate' ? t('notifications.deliveryModeImmediate') : t('notifications.deliveryModeDigest')}</p>
+                      {task.delivery_mode === 'digest'
+                        ? <p>{t('notifications.taskInterval')}: {task.check_interval_minutes}{t('notifications.taskMinutesSuffix')}</p>
+                        : <p>{t('notifications.taskNextRetry')}: {formatLocalDateTime(task.next_check_at, t('notifications.neverChecked'))}</p>}
                       <p>{t('notifications.taskLastCheck')}: {formatLocalDateTime(task.last_checked_at, t('notifications.neverChecked'))}</p>
                       <p>{t('notifications.taskChannels')}: {task.channels.length > 0 ? task.channels.map(channel => channel.name).join(' / ') : t('notifications.noChannelsBound')}</p>
                     </div>
@@ -258,6 +265,35 @@ export function NotificationTasksSection() {
                       {t('notifications.ruleEnabled')}
                     </label>
 
+                    <div>
+                      <p className="text-xs text-muted mb-2">{t('notifications.feedDialogMode')}</p>
+                      <div className="inline-flex rounded-lg border border-border bg-bg-card p-1">
+                        <button
+                          type="button"
+                          onClick={() => setForm({ ...form, delivery_mode: 'immediate' })}
+                          className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                            form.delivery_mode === 'immediate' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
+                          }`}
+                        >
+                          {t('notifications.deliveryModeImmediate')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setForm({ ...form, delivery_mode: 'digest' })}
+                          className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                            form.delivery_mode === 'digest' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
+                          }`}
+                        >
+                          {t('notifications.deliveryModeDigest')}
+                        </button>
+                      </div>
+                      <p className="mt-2 text-xs text-muted">
+                        {form.delivery_mode === 'immediate'
+                          ? t('notifications.taskImmediateHint')
+                          : t('notifications.taskEditHint')}
+                      </p>
+                    </div>
+
                     <label className="flex items-center gap-2 text-sm text-text cursor-pointer">
                       <input
                         type="checkbox"
@@ -268,16 +304,18 @@ export function NotificationTasksSection() {
                       {t('notifications.translateEnabled')}
                     </label>
 
-                    <FormField label={t('notifications.feedDialogInterval')} compact hint={t('notifications.taskEditHint')}>
-                      <Input
-                        type="number"
-                        min={5}
-                        max={1440}
-                        step={5}
-                        value={form.check_interval_minutes}
-                        onChange={e => setForm({ ...form, check_interval_minutes: e.target.value })}
-                      />
-                    </FormField>
+                    {form.delivery_mode === 'digest' && (
+                      <FormField label={t('notifications.feedDialogInterval')} compact hint={t('notifications.taskEditHint')}>
+                        <Input
+                          type="number"
+                          min={5}
+                          max={1440}
+                          step={5}
+                          value={form.check_interval_minutes}
+                          onChange={e => setForm({ ...form, check_interval_minutes: e.target.value })}
+                        />
+                      </FormField>
+                    )}
 
                     <div>
                       <p className="text-xs text-muted mb-2">{t('notifications.feedDialogChannels')}</p>
