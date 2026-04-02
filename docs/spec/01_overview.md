@@ -19,6 +19,7 @@ Typical RSS readers only display the title and summary provided by the feed, req
 > - [85_feature_ollama.md](./85_feature_ollama.md) — Ollama LLM Provider
 > - [90_perf_retry_backoff.md](./90_perf_retry_backoff.md) — Exponential Backoff for Article Retry
 > - [91_perf_score_recalculation.md](./91_perf_score_recalculation.md) — Score Recalculation Optimization
+> - [92_perf_chat_scope_implementation.md](./92_perf_chat_scope_implementation.md) — Chat Scope Implementation Performance
 
 ## Tech Stack
 
