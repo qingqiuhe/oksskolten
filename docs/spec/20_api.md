@@ -219,6 +219,59 @@ Consumes the one-time exchange code and returns the associated JWT. The code can
 { "clientId": "Iv1.xxx", "clientSecret": "xxx", "allowedUsers": "your-github-username" }
 ```
 
+#### Member Management Endpoints
+
+**GET /api/users** — List members (owner/admin only)
+
+```json
+// Response: 200
+{
+  "users": [
+    {
+      "id": 1,
+      "email": "owner@example.com",
+      "role": "owner",
+      "status": "active",
+      "last_login_at": "2026-04-01T12:00:00Z"
+    }
+  ]
+}
+```
+
+**POST /api/users** — Invite a member (owner/admin only)
+
+```json
+// Request
+{
+  "email": "member@example.com",
+  "role": "member",
+  "import_feed_ids": [12, 13, 21]
+}
+```
+
+- `import_feed_ids` is optional.
+- Selected feeds must belong to the inviter and cannot include the clip feed.
+- Chosen feeds are cloned immediately to the invited user together with the minimal category set required by those feeds.
+- Only feed configuration is copied. Articles, read state, bookmarks, likes, and notification rules are not copied.
+
+```json
+// Response: 201
+{
+  "user": {
+    "id": 7,
+    "email": "member@example.com",
+    "role": "member",
+    "status": "invited"
+  },
+  "token": "invite-token",
+  "invite_url": "https://example.com/invite/invite-token",
+  "import_result": {
+    "imported_feed_count": 3,
+    "imported_category_count": 2
+  }
+}
+```
+
 If `clientSecret` is an empty string, the existing value is preserved (can be omitted). If GitHub OAuth is the only auth method, updates that clear `clientId` or `clientSecret` are blocked.
 
 **POST /api/oauth/github/toggle** — Toggle GitHub OAuth on/off (auth required)

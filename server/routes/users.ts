@@ -1,23 +1,31 @@
+import crypto from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { hashSync } from 'bcryptjs'
 import {
+  createCategory,
+  createFeed,
   createUser,
+  getDb,
   getUserById,
   issueInvitation,
   listUsers,
   revokeUserSessions,
   updateUser,
 } from '../db.js'
-import { getOrigin, getRequestIdentity, requireJson, requireRoles } from '../auth.js'
+import { getOrigin, getRequestIdentity, requireAuth, requireJson, requireRoles } from '../auth.js'
+import { fetchSingleFeed } from '../fetcher.js'
 import { roleCanManage, type UserRole, type UserStatus } from '../identity.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
+import type { Feed } from '../../shared/types.js'
 
 const BCRYPT_ROUNDS = process.env.NODE_ENV === 'test' ? 4 : 12
+const INVITE_TTL_DAYS = 7
 
 const CreateUserBody = z.object({
   email: z.string().email(),
   role: z.enum(['admin', 'member'] as const),
+  import_feed_ids: z.array(z.number().int().positive()).optional(),
 })
 
 const UpdateUserBody = z.object({
@@ -40,41 +48,166 @@ function invitationPayload(requestUrlOrigin: string, token: string) {
   }
 }
 
+function inviteExpiry(): string {
+  return new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString()
+}
+
+interface SourceFeedRow {
+  id: number
+  name: string
+  url: string
+  icon_url: string | null
+  rss_url: string | null
+  rss_bridge_url: string | null
+  view_type: Feed['view_type']
+  requires_js_challenge: number
+  category_id: number | null
+  category_name: string | null
+  type: Feed['type']
+}
+
 export async function userRoutes(api: FastifyInstance): Promise<void> {
-  api.get('/api/users', { preHandler: [requireRoles(['owner', 'admin'])] }, async (_request, reply) => {
+  api.get('/api/users', { preHandler: [requireAuth, requireRoles(['owner', 'admin'])] }, async (_request, reply) => {
     reply.send({ users: listUsers() })
   })
 
   api.post('/api/users', {
-    preHandler: [requireJson, requireRoles(['owner', 'admin'])],
+    preHandler: [requireAuth, requireJson, requireRoles(['owner', 'admin'])],
   }, async (request, reply) => {
     const body = parseOrBadRequest(CreateUserBody, request.body, reply)
     if (!body) return
 
     const identity = getRequestIdentity(request)
-    if (!identity?.role || !identity.userId) {
+    if (!identity?.role) {
       return reply.status(403).send({ error: 'Forbidden' })
     }
+    const inviterUserId = identity.userId ?? null
     if (identity.role === 'admin' && body.role !== 'member') {
       return reply.status(403).send({ error: 'Forbidden' })
     }
 
-    const user = createUser({
-      email: body.email,
-      passwordHash: hashSync(`${body.email}:${Date.now()}`, BCRYPT_ROUNDS),
-      role: body.role,
-      status: 'invited',
-      invitedBy: identity.userId,
-    })
-    const invite = issueInvitation(user.id, identity.userId)
+    const importFeedIds = Array.from(new Set(body.import_feed_ids ?? []))
+    const importedFeedsToFetch: Feed[] = []
+    const db = getDb()
+    const placeholders = importFeedIds.map(() => '?').join(',')
+    let sourceFeeds: SourceFeedRow[] = []
+
+    if (importFeedIds.length > 0) {
+      const sourceFeedQuery = inviterUserId == null
+        ? db.prepare(`
+        SELECT
+          f.id,
+          f.name,
+          f.url,
+          f.icon_url,
+          f.rss_url,
+          f.rss_bridge_url,
+          f.view_type,
+          f.requires_js_challenge,
+          f.category_id,
+          c.name AS category_name,
+          f.type
+        FROM feeds f
+        LEFT JOIN categories c ON c.id = f.category_id
+        WHERE f.user_id IS NULL
+          AND f.id IN (${placeholders})
+      `)
+        : db.prepare(`
+        SELECT
+          f.id,
+          f.name,
+          f.url,
+          f.icon_url,
+          f.rss_url,
+          f.rss_bridge_url,
+          f.view_type,
+          f.requires_js_challenge,
+          f.category_id,
+          c.name AS category_name,
+          f.type
+        FROM feeds f
+        LEFT JOIN categories c ON c.id = f.category_id
+        WHERE f.user_id = ?
+          AND f.id IN (${placeholders})
+      `)
+
+      sourceFeeds = (inviterUserId == null
+        ? sourceFeedQuery.all(...importFeedIds)
+        : sourceFeedQuery.all(inviterUserId, ...importFeedIds)) as SourceFeedRow[]
+
+      if (sourceFeeds.length !== importFeedIds.length) {
+        return reply.status(400).send({ error: 'Invalid import feed selection' })
+      }
+      if (sourceFeeds.some(feed => feed.type === 'clip')) {
+        return reply.status(400).send({ error: 'Clip feeds cannot be imported' })
+      }
+    }
+
+    const result = db.transaction(() => {
+      const user = createUser({
+        email: body.email,
+        passwordHash: hashSync(`${body.email}:${Date.now()}`, BCRYPT_ROUNDS),
+        role: body.role,
+        status: 'invited',
+        invitedBy: inviterUserId,
+      })
+
+      const categoryMap = new Map<number, number>()
+      let importedCategoryCount = 0
+
+      for (const feed of sourceFeeds) {
+        if (feed.category_id == null) continue
+        if (categoryMap.has(feed.category_id)) continue
+        const createdCategory = createCategory(feed.category_name ?? 'Imported', user.id)
+        categoryMap.set(feed.category_id, createdCategory.id)
+        importedCategoryCount++
+      }
+
+      for (const feed of sourceFeeds) {
+        const importedFeed = createFeed({
+          name: feed.name,
+          url: feed.url,
+          icon_url: feed.icon_url,
+          rss_url: feed.rss_url,
+          rss_bridge_url: feed.rss_bridge_url,
+          view_type: feed.view_type,
+          category_id: feed.category_id == null ? null : (categoryMap.get(feed.category_id) ?? null),
+          requires_js_challenge: feed.requires_js_challenge,
+          type: 'rss',
+        }, user.id)
+        importedFeedsToFetch.push(importedFeed)
+      }
+
+      const token = crypto.randomUUID()
+      db.prepare(`
+        INSERT INTO invitations (user_id, token, created_by, expires_at)
+        VALUES (?, ?, ?, ?)
+      `).run(user.id, token, inviterUserId, inviteExpiry())
+
+      return {
+        user,
+        token,
+        import_result: {
+          imported_feed_count: sourceFeeds.length,
+          imported_category_count: importedCategoryCount,
+        },
+      }
+    })()
+
+    for (const feed of importedFeedsToFetch) {
+      if (!feed.rss_url && !feed.rss_bridge_url) continue
+      fetchSingleFeed(feed).catch(() => {})
+    }
+
     reply.status(201).send({
-      user,
-      ...invitationPayload(getOrigin(request), invite.token),
+      user: result.user,
+      ...invitationPayload(getOrigin(request), result.token),
+      import_result: result.import_result,
     })
   })
 
   api.patch('/api/users/:id', {
-    preHandler: [requireJson, requireRoles(['owner', 'admin'])],
+    preHandler: [requireAuth, requireJson, requireRoles(['owner', 'admin'])],
   }, async (request, reply) => {
     const params = parseOrBadRequest(NumericIdParams, request.params, reply)
     if (!params) return
@@ -119,7 +252,7 @@ export async function userRoutes(api: FastifyInstance): Promise<void> {
   })
 
   api.post('/api/users/:id/invite/reset', {
-    preHandler: [requireRoles(['owner', 'admin'])],
+    preHandler: [requireAuth, requireRoles(['owner', 'admin'])],
   }, async (request, reply) => {
     const params = parseOrBadRequest(NumericIdParams, request.params, reply)
     if (!params) return
@@ -139,7 +272,7 @@ export async function userRoutes(api: FastifyInstance): Promise<void> {
   })
 
   api.post('/api/users/:id/sessions/revoke', {
-    preHandler: [requireRoles(['owner', 'admin'])],
+    preHandler: [requireAuth, requireRoles(['owner', 'admin'])],
   }, async (request, reply) => {
     const params = parseOrBadRequest(NumericIdParams, request.params, reply)
     if (!params) return
