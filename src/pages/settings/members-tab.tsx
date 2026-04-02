@@ -1,7 +1,22 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { apiPatch, apiPost, fetcher } from '../../lib/fetcher'
 import { Input } from '../../components/ui/input'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+
+interface CategoryRecord {
+  id: number
+  name: string
+  sort_order: number
+}
+
+interface FeedRecord {
+  id: number
+  name: string
+  url: string
+  type: 'rss' | 'clip'
+  category_id: number | null
+}
 
 interface MemberRecord {
   id: number
@@ -11,19 +26,108 @@ interface MemberRecord {
   last_login_at: string | null
 }
 
+interface InviteResult {
+  invite_url: string
+  import_result?: {
+    imported_feed_count: number
+    imported_category_count: number
+  }
+}
+
+function FeedImportCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+}: {
+  checked: boolean
+  indeterminate?: boolean
+  onChange: () => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.indeterminate = !!indeterminate
+    }
+  }, [indeterminate])
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      className="mt-0.5 accent-accent"
+    />
+  )
+}
+
 export function MembersTab() {
   const { data, mutate } = useSWR<{ users: MemberRecord[] }>('/api/users', fetcher)
+  const { data: feedsData } = useSWR<{ feeds: FeedRecord[] }>('/api/feeds', fetcher)
+  const { data: categoriesData } = useSWR<{ categories: CategoryRecord[] }>('/api/categories', fetcher)
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<'admin' | 'member'>('member')
   const [inviteLink, setInviteLink] = useState<string | null>(null)
+  const [inviteSummary, setInviteSummary] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const [selectedFeedIds, setSelectedFeedIds] = useState<Set<number>>(new Set())
+
+  const availableFeeds = useMemo(
+    () => (feedsData?.feeds ?? []).filter(feed => feed.type !== 'clip'),
+    [feedsData?.feeds],
+  )
+
+  const groupedFeeds = useMemo(() => {
+    const categoryOrder = new Map((categoriesData?.categories ?? []).map(category => [category.id, category]))
+    const groups = new Map<string, { key: string; categoryId: number | null; name: string; sortOrder: number; feeds: FeedRecord[] }>()
+
+    for (const feed of availableFeeds) {
+      const category = feed.category_id ? categoryOrder.get(feed.category_id) : null
+      const key = category ? `category-${category.id}` : 'uncategorized'
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          categoryId: category?.id ?? null,
+          name: category?.name ?? 'Uncategorized',
+          sortOrder: category?.sort_order ?? Number.MAX_SAFE_INTEGER,
+          feeds: [],
+        })
+      }
+      groups.get(key)!.feeds.push(feed)
+    }
+
+    return Array.from(groups.values())
+      .map(group => ({
+        ...group,
+        feeds: group.feeds.slice().sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+  }, [availableFeeds, categoriesData?.categories])
+
+  useEffect(() => {
+    setSelectedFeedIds(prev => {
+      if (prev.size > 0) return prev
+      if (availableFeeds.length === 0) return prev
+      return new Set(availableFeeds.map(feed => feed.id))
+    })
+  }, [availableFeeds])
 
   async function inviteMember() {
     setError(null)
     try {
-      const result = await apiPost('/api/users', { email, role }) as { invite_url: string }
+      const result = await apiPost('/api/users', {
+        email,
+        role,
+        import_feed_ids: Array.from(selectedFeedIds),
+      }) as InviteResult
       setInviteLink(result.invite_url)
+      setInviteSummary(
+        `Imported ${result.import_result?.imported_feed_count ?? 0} feeds across ${result.import_result?.imported_category_count ?? 0} folders.`,
+      )
       setEmail('')
+      setSelectedFeedIds(new Set(availableFeeds.map(feed => feed.id)))
       await mutate()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to invite member')
@@ -50,6 +154,37 @@ export function MembersTab() {
       setError(err instanceof Error ? err.message : 'Failed to reset invite')
     }
   }
+
+  function toggleFeed(feedId: number) {
+    setSelectedFeedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(feedId)) next.delete(feedId)
+      else next.add(feedId)
+      return next
+    })
+  }
+
+  function toggleGroup(feedIds: number[]) {
+    const allSelected = feedIds.every(id => selectedFeedIds.has(id))
+    setSelectedFeedIds(prev => {
+      const next = new Set(prev)
+      for (const id of feedIds) {
+        if (allSelected) next.delete(id)
+        else next.add(id)
+      }
+      return next
+    })
+  }
+
+  function selectAllFeeds() {
+    setSelectedFeedIds(new Set(availableFeeds.map(feed => feed.id)))
+  }
+
+  function deselectAllFeeds() {
+    setSelectedFeedIds(new Set())
+  }
+
+  const selectedCategoryCount = groupedFeeds.filter(group => group.feeds.some(feed => selectedFeedIds.has(feed.id))).length
 
   return (
     <section className="space-y-6">
@@ -82,9 +217,26 @@ export function MembersTab() {
             Invite
           </button>
         </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setIsPickerOpen(true)}
+            className="rounded-lg border border-border px-3 py-2 text-sm text-text hover:bg-hover"
+          >
+            Choose subscriptions
+          </button>
+          <p className="text-xs text-muted">
+            {selectedFeedIds.size} feeds selected across {selectedCategoryCount} folders.
+          </p>
+        </div>
         {inviteLink && (
-          <div className="rounded-lg bg-bg-input px-3 py-2 text-xs text-text break-all">
-            {inviteLink}
+          <div className="space-y-2">
+            <div className="rounded-lg bg-bg-input px-3 py-2 text-xs text-text break-all">
+              {inviteLink}
+            </div>
+            {inviteSummary && (
+              <p className="text-xs text-muted">{inviteSummary}</p>
+            )}
           </div>
         )}
         {error && <p className="text-sm text-red-500">{error}</p>}
@@ -151,6 +303,68 @@ export function MembersTab() {
           </tbody>
         </table>
       </div>
+
+      <Dialog open={isPickerOpen} onOpenChange={setIsPickerOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import subscriptions</DialogTitle>
+            <DialogDescription>
+              Choose which folders and feeds should be copied to the invited user.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex gap-3 text-xs">
+            <button type="button" onClick={selectAllFeeds} className="text-accent hover:underline">Select all</button>
+            <button type="button" onClick={deselectAllFeeds} className="text-accent hover:underline">Deselect all</button>
+          </div>
+
+          <div className="max-h-[60vh] overflow-y-auto space-y-4">
+            {groupedFeeds.map(group => {
+              const groupFeedIds = group.feeds.map(feed => feed.id)
+              const selectedCount = groupFeedIds.filter(id => selectedFeedIds.has(id)).length
+              const allSelected = selectedCount === groupFeedIds.length && groupFeedIds.length > 0
+              const partiallySelected = selectedCount > 0 && selectedCount < groupFeedIds.length
+
+              return (
+                <div key={group.key} className="space-y-2">
+                  <label className="flex items-center gap-2 border-b border-border pb-1">
+                    <FeedImportCheckbox
+                      checked={allSelected}
+                      indeterminate={partiallySelected}
+                      onChange={() => toggleGroup(groupFeedIds)}
+                    />
+                    <span className="text-xs font-medium uppercase tracking-wide text-muted">{group.name}</span>
+                  </label>
+                  <div className="space-y-1">
+                    {group.feeds.map(feed => (
+                      <label key={feed.id} className="flex items-start gap-2 rounded px-1 py-1 hover:bg-hover">
+                        <FeedImportCheckbox
+                          checked={selectedFeedIds.has(feed.id)}
+                          onChange={() => toggleFeed(feed.id)}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-sm text-text">{feed.name}</div>
+                          <div className="text-xs text-muted break-all">{feed.url}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setIsPickerOpen(false)}
+              className="rounded-lg border border-border px-3 py-1.5 text-sm text-text hover:bg-hover"
+            >
+              Done
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }
