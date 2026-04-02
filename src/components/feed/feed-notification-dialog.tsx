@@ -133,15 +133,29 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
             <p className="mt-1 text-xs text-muted">{feed.name}</p>
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-text cursor-pointer">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={e => setEnabled(e.target.checked)}
-              className="accent-accent"
-            />
-            {t('notifications.ruleEnabled')}
-          </label>
+          <div className="rounded-lg border border-border bg-bg-subtle px-3 py-3">
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+              <div className="min-w-0">
+                <div className="text-sm text-text">{t('notifications.ruleEnabled')}</div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-label={t('notifications.ruleEnabled')}
+                aria-checked={enabled}
+                onClick={() => setEnabled(value => !value)}
+                className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${
+                  enabled ? 'bg-accent' : 'bg-border'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                    enabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </label>
+          </div>
 
           <div>
             <p className="text-xs text-muted mb-2">{t('notifications.feedDialogMode')}</p>
@@ -206,15 +220,16 @@ export function FeedNotificationDialog({ feed, onClose }: FeedNotificationDialog
               <button
                 type="button"
                 role="switch"
+                aria-label={t('notifications.translateEnabled')}
                 aria-checked={translateEnabled}
                 onClick={() => setTranslateEnabled(value => !value)}
-                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${
                   translateEnabled ? 'bg-accent' : 'bg-border'
                 }`}
               >
                 <span
-                  className={`inline-block h-5 w-5 rounded-full bg-white transition-transform ${
-                    translateEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                  className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                    translateEnabled ? 'translate-x-5' : 'translate-x-0'
                   }`}
                 />
               </button>

@@ -56,6 +56,17 @@ export function summarizeScope(scope: ChatScope | null | undefined, t: Translate
   }
 }
 
+export function formatScopeSummaryDetail(summary: ScopeSummary | null | undefined, t: TranslateFn): string | null {
+  if (!summary) return null
+  if (summary.type !== 'list') return summary.detail ?? null
+  if (typeof summary.count_scoped === 'number' && typeof summary.count_total === 'number') {
+    return summary.count_total > summary.count_scoped
+      ? t('chat.scope.countClipped', { scoped: String(summary.count_scoped), total: String(summary.count_total) })
+      : t('chat.scope.countSingle', { count: String(summary.count_scoped) })
+  }
+  return summary.detail ?? null
+}
+
 export function isListScope(scope: ChatScope | null | undefined): scope is Extract<ChatScope, { type: 'list' }> {
   return !!scope && scope.type === 'list'
 }

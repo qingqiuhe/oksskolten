@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, MessagesSquare } from 'lucide-react'
+import { BookOpenText, ChevronDown, MessagesSquare } from 'lucide-react'
 import useSWR, { useSWRConfig } from 'swr'
 import { useChat } from '../../hooks/use-chat'
 import { useI18n } from '../../lib/i18n'
@@ -7,6 +7,7 @@ import { fetcher } from '../../lib/fetcher'
 import {
   buildFilteredListScope,
   buildLoadedListScope,
+  formatScopeSummaryDetail,
 } from '../../lib/chat-scope'
 import { ChatPanel, type ChatState } from './chat-panel'
 import { ConfirmDialog } from '../ui/confirm-dialog'
@@ -161,7 +162,7 @@ export function ListChatFab({ listLabel, articleIds, sourceFilters }: ListChatFa
     [conversationData, conversationId],
   )
 
-  const detailText = persistedSummary?.detail ?? activeSummary.detail ?? null
+  const detailText = formatScopeSummaryDetail(persistedSummary ?? activeSummary, t)
 
   useEffect(() => {
     if (!presets.some(preset => preset.key === selectedPresetKey)) {
@@ -192,12 +193,12 @@ export function ListChatFab({ listLabel, articleIds, sourceFilters }: ListChatFa
   }
 
   const scopeControl = (
-    <div className="min-w-0">
+    <div className="flex min-w-0 max-w-full items-center gap-2">
       <DropdownMenu>
         <DropdownMenuTrigger asChild disabled={streaming}>
           <button
             type="button"
-            className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-bg-subtle px-2 py-0.5 text-[11px] text-muted transition-colors hover:bg-hover disabled:opacity-50"
+            className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-border bg-bg-subtle px-2 py-0.5 text-[11px] text-muted transition-colors hover:bg-hover disabled:opacity-50"
           >
             <span className="truncate">{selectedPreset.label}</span>
             <ChevronDown className="h-3 w-3 shrink-0" />
@@ -214,9 +215,10 @@ export function ListChatFab({ listLabel, articleIds, sourceFilters }: ListChatFa
         </DropdownMenuContent>
       </DropdownMenu>
       {detailText && (
-        <div className="mt-1 text-xs text-muted truncate">
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-bg-subtle px-2 py-0.5 text-[11px] text-muted">
+          <BookOpenText className="h-3.5 w-3.5 shrink-0" />
           {detailText}
-        </div>
+        </span>
       )}
     </div>
   )

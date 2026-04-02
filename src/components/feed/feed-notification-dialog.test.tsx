@@ -117,6 +117,63 @@ describe('FeedNotificationDialog', () => {
     })
   })
 
+  it('renders feed enable as a switch and still saves the enabled flag', async () => {
+    render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <FeedNotificationDialog
+          feed={{
+            id: 7,
+            name: 'Example Feed',
+            url: 'https://example.com',
+            icon_url: null,
+            rss_url: null,
+            rss_bridge_url: null,
+            view_type: null,
+            category_id: null,
+            last_error: null,
+            error_count: 0,
+            disabled: 0,
+            requires_js_challenge: 0,
+            type: 'rss',
+            etag: null,
+            last_modified: null,
+            last_content_hash: null,
+            next_check_at: null,
+            check_interval: null,
+            created_at: '2026-03-31T00:00:00Z',
+            category_name: null,
+            article_count: 0,
+            unread_count: 0,
+            articles_per_week: 0,
+            latest_published_at: null,
+          }}
+          onClose={() => {}}
+        />
+      </SWRConfig>,
+    )
+
+    const enableSwitch = await screen.findByRole('switch', { name: 'Enable notifications for this feed' })
+    expect(enableSwitch.getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByRole('checkbox', { name: 'Enable notifications for this feed' })).toBeNull()
+
+    await user.click(enableSwitch)
+    expect(enableSwitch.getAttribute('aria-checked')).toBe('false')
+
+    await user.click(screen.getByText('Save changes'))
+
+    await waitFor(() => {
+      expect(apiPut).toHaveBeenCalledWith('/api/feeds/7/notification-rule', {
+        enabled: false,
+        delivery_mode: 'digest',
+        content_mode: 'title_and_body',
+        translate_enabled: true,
+        check_interval_minutes: 60,
+        max_articles_per_message: 5,
+        channel_ids: [1],
+      })
+    })
+  })
+
   it('hides the interval field in immediate mode', async () => {
     fetcher.mockImplementation(async (url: string) => {
       if (url === '/api/settings/notification-channels') {
