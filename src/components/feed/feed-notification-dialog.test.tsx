@@ -247,7 +247,7 @@ describe('FeedNotificationDialog', () => {
     expect(labelClassName).toContain('min-w-0')
   })
 
-  it('uses a viewport-bounded dialog shell and a scrollable form area', async () => {
+  it('uses a viewport-bounded and scrollable dialog shell', async () => {
     render(
       <SWRConfig value={{ provider: () => new Map() }}>
         <FeedNotificationDialog
@@ -284,11 +284,8 @@ describe('FeedNotificationDialog', () => {
 
     const dialog = await screen.findByRole('dialog')
     expect(dialog.className).toContain('max-h-[calc(100dvh-2rem)]')
-    expect(dialog.className).toContain('overflow-hidden')
-
-    const scrollArea = screen.getByTestId('feed-notification-scroll-area')
-    expect(scrollArea.className).toContain('flex-1')
-    expect(scrollArea.className).toContain('overflow-y-auto')
+    expect(dialog.className).toContain('overflow-y-auto')
+    expect(dialog.className).toContain('overflow-x-hidden')
   })
 
   it('switches preview copy for title-only mode', async () => {
