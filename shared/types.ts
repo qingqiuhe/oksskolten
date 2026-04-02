@@ -162,8 +162,10 @@ export interface FeedNotificationRule {
   feed_id: number
   enabled: number
   delivery_mode: 'immediate' | 'digest'
+  content_mode: 'title_only' | 'title_and_body'
   translate_enabled: number
   check_interval_minutes: number
+  max_articles_per_message: number
   next_check_at: string | null
   last_checked_at: string | null
   created_at: string
@@ -195,8 +197,10 @@ export interface NotificationTaskRecord {
   }
   enabled: number
   delivery_mode: 'immediate' | 'digest'
+  content_mode: 'title_only' | 'title_and_body'
   translate_enabled: number
   check_interval_minutes: number
+  max_articles_per_message: number
   next_check_at: string | null
   last_checked_at: string | null
   channels: NotificationTaskChannel[]

@@ -44,8 +44,10 @@ describe('NotificationTasksSection', () => {
             feed: { id: 5, name: 'My Feed' },
             enabled: 1,
             delivery_mode: 'digest',
+            content_mode: 'title_and_body',
             translate_enabled: 0,
             check_interval_minutes: 15,
+            max_articles_per_message: 5,
             next_check_at: null,
             last_checked_at: null,
             channels: [{ id: 101, name: 'My Channel', enabled: 1 }],
@@ -62,8 +64,10 @@ describe('NotificationTasksSection', () => {
             feed: { id: 5, name: 'My Feed' },
             enabled: 1,
             delivery_mode: 'digest',
+            content_mode: 'title_and_body',
             translate_enabled: 0,
             check_interval_minutes: 15,
+            max_articles_per_message: 5,
             next_check_at: null,
             last_checked_at: null,
             channels: [{ id: 101, name: 'My Channel', enabled: 1 }],
@@ -75,8 +79,10 @@ describe('NotificationTasksSection', () => {
             feed: { id: 6, name: 'Member Feed' },
             enabled: 1,
             delivery_mode: 'immediate',
+            content_mode: 'title_only',
             translate_enabled: 1,
             check_interval_minutes: 30,
+            max_articles_per_message: 3,
             next_check_at: null,
             last_checked_at: null,
             channels: [{ id: 202, name: 'Member Channel', enabled: 1 }],
@@ -119,8 +125,10 @@ describe('NotificationTasksSection', () => {
       expect(mockApiPatch).toHaveBeenCalledWith('/api/settings/notification-tasks/10', {
         enabled: true,
         delivery_mode: 'digest',
+        content_mode: 'title_and_body',
         translate_enabled: false,
         check_interval_minutes: 15,
+        max_articles_per_message: 5,
         channel_ids: [101],
       })
     })
@@ -147,8 +155,11 @@ describe('NotificationTasksSection', () => {
           owner: { user_id: 1, email: 'admin@example.com', role: 'admin' },
           feed: { id: 5, name: 'My Feed' },
           enabled: 1,
+          delivery_mode: 'immediate',
+          content_mode: 'title_and_body',
           translate_enabled: 0,
           check_interval_minutes: 15,
+          max_articles_per_message: 5,
           next_check_at: '2026-04-02T01:23:45Z',
           last_checked_at: '2026-04-02 01:23:45',
           channels: [{ id: 101, name: 'My Channel', enabled: 1 }],
@@ -165,6 +176,35 @@ describe('NotificationTasksSection', () => {
     await waitFor(() => {
       expect(screen.getByText(/Last check: 2026-04-02T01:23:45.000Z/)).toBeTruthy()
       expect(screen.getByText(/Next retry: 2026-04-02T01:23:45.000Z/)).toBeTruthy()
+    })
+  })
+
+  it('shows content mode and max articles in task summary and saves them', async () => {
+    mockApiPatch.mockResolvedValue({})
+    render(<NotificationTasksSection />)
+
+    await waitFor(() => expect(screen.getByText(/Content: Title and body/)).toBeTruthy())
+    expect(screen.getByText(/Max articles: 5/)).toBeTruthy()
+
+    const editButtons = screen.getAllByRole('button', { name: 'Edit task' })
+    await user.click(editButtons[0])
+    await user.click(screen.getByText('Title only'))
+    const maxInput = screen.getAllByRole('spinbutton').find(node => (node as HTMLInputElement).value === '5')
+    expect(maxInput).toBeTruthy()
+    await user.clear(maxInput as HTMLInputElement)
+    await user.type(maxInput as HTMLInputElement, '2')
+    await user.click(screen.getByText('Save changes'))
+
+    await waitFor(() => {
+      expect(mockApiPatch).toHaveBeenCalledWith('/api/settings/notification-tasks/10', {
+        enabled: true,
+        delivery_mode: 'digest',
+        content_mode: 'title_only',
+        translate_enabled: false,
+        check_interval_minutes: 15,
+        max_articles_per_message: 2,
+        channel_ids: [101],
+      })
     })
   })
 })

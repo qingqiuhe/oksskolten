@@ -48,6 +48,7 @@ describe('runNotificationChecks', () => {
       enabled: true,
       translate_enabled: false,
       check_interval_minutes: 5,
+      max_articles_per_message: 5,
       channel_ids: [channel.id],
     })
 
@@ -123,6 +124,7 @@ describe('runNotificationChecks', () => {
       enabled: true,
       translate_enabled: true,
       check_interval_minutes: 5,
+      max_articles_per_message: 5,
       channel_ids: [channel.id],
     })
 
@@ -177,6 +179,7 @@ describe('runNotificationChecks', () => {
       enabled: true,
       translate_enabled: true,
       check_interval_minutes: 5,
+      max_articles_per_message: 5,
       channel_ids: [channel.id],
     })
 
@@ -238,6 +241,7 @@ describe('runNotificationChecks', () => {
       delivery_mode: 'immediate',
       translate_enabled: false,
       check_interval_minutes: 5,
+      max_articles_per_message: 5,
       channel_ids: [channel.id],
     })
 
@@ -291,6 +295,7 @@ describe('runNotificationChecks', () => {
       delivery_mode: 'immediate',
       translate_enabled: false,
       check_interval_minutes: 5,
+      max_articles_per_message: 5,
       channel_ids: [channel.id],
     })
 
@@ -353,5 +358,112 @@ describe('runNotificationChecks', () => {
       WHERE id = ?
     `).get(rule.id) as { next_check_at: string | null }
     expect(recoveredRule.next_check_at).toBeNull()
+  })
+
+  it('omits body, translation, and images in title-only mode', async () => {
+    const feed = createFeed({ name: 'Example Feed', url: 'https://example.com/title-only' })
+    const channel = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Team',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-token',
+      secret: null,
+      enabled: 1,
+    })
+    upsertFeedNotificationRule(feed.id, {
+      enabled: true,
+      content_mode: 'title_only',
+      translate_enabled: true,
+      check_interval_minutes: 5,
+      max_articles_per_message: 5,
+      channel_ids: [channel.id],
+    })
+
+    insertArticle({
+      feed_id: feed.id,
+      title: 'Fresh article',
+      url: 'https://example.com/fresh-title-only',
+      published_at: '2026-03-31T10:15:00Z',
+      full_text: 'Fresh body',
+      notification_body_text: 'English body',
+      notification_media_json: JSON.stringify(['https://cdn.example.com/fresh.jpg']),
+    })
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 0, msg: 'success' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    getDb().prepare(`UPDATE feed_notification_rules SET next_check_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 minute')`).run()
+    await runNotificationChecks()
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as { card: { body: { elements: Array<{ text?: { content: string } }> } } }
+    const articleText = payload.card.body.elements.find(element => element.text)?.text?.content ?? ''
+    expect(articleText).toContain('Fresh article')
+    expect(articleText).not.toContain('English body')
+    expect(articleText).not.toContain('![](')
+    expect(mockTranslateNotificationBodyText).not.toHaveBeenCalled()
+  })
+
+  it('respects per-rule max articles and keeps the rest count', async () => {
+    const feed = createFeed({ name: 'Example Feed', url: 'https://example.com/limit' })
+    const channel = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Team',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-token',
+      secret: null,
+      enabled: 1,
+    })
+    upsertFeedNotificationRule(feed.id, {
+      enabled: true,
+      translate_enabled: false,
+      check_interval_minutes: 5,
+      max_articles_per_message: 2,
+      channel_ids: [channel.id],
+    })
+
+    insertArticle({
+      feed_id: feed.id,
+      title: 'Article A',
+      url: 'https://example.com/a',
+      published_at: '2026-03-31T10:15:00Z',
+      full_text: 'A body',
+      notification_body_text: 'A body',
+      notification_media_json: null,
+    })
+    insertArticle({
+      feed_id: feed.id,
+      title: 'Article B',
+      url: 'https://example.com/b',
+      published_at: '2026-03-31T10:16:00Z',
+      full_text: 'B body',
+      notification_body_text: 'B body',
+      notification_media_json: null,
+    })
+    insertArticle({
+      feed_id: feed.id,
+      title: 'Article C',
+      url: 'https://example.com/c',
+      published_at: '2026-03-31T10:17:00Z',
+      full_text: 'C body',
+      notification_body_text: 'C body',
+      notification_media_json: null,
+    })
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 0, msg: 'success' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    getDb().prepare(`UPDATE feed_notification_rules SET next_check_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 minute')`).run()
+    await runNotificationChecks()
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as { card: { body: { elements: Array<{ text?: { content: string } }> } } }
+    const textBlocks = payload.card.body.elements.map(element => element.text?.content ?? '').join('\n')
+    expect(textBlocks).toContain('Article C')
+    expect(textBlocks).toContain('Article B')
+    expect(textBlocks).not.toContain('Article A')
+    expect(textBlocks).toContain('另外 1 篇')
   })
 })

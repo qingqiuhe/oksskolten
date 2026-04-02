@@ -4,8 +4,10 @@ import type { UserRole } from '../identity.js'
 import { DEFAULT_NOTIFICATION_TIMEZONE, type NotificationTimezone } from '../../shared/notification-timezone.js'
 
 export type NotificationDeliveryMode = 'immediate' | 'digest'
+export type NotificationContentMode = 'title_only' | 'title_and_body'
 
 const DEFAULT_NOTIFICATION_CHECK_INTERVAL_MINUTES = 60
+const DEFAULT_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE = 5
 const IMMEDIATE_RETRY_DELAY_MINUTES = 1
 
 function resolveUserId(userId?: number | null): number | null {
@@ -31,8 +33,10 @@ export interface FeedNotificationRule {
   feed_id: number
   enabled: number
   delivery_mode: NotificationDeliveryMode
+  content_mode: NotificationContentMode
   translate_enabled: number
   check_interval_minutes: number
+  max_articles_per_message: number
   next_check_at: string | null
   last_checked_at: string | null
   created_at: string
@@ -80,8 +84,10 @@ export interface NotificationTaskRecord {
   }
   enabled: number
   delivery_mode: NotificationDeliveryMode
+  content_mode: NotificationContentMode
   translate_enabled: number
   check_interval_minutes: number
+  max_articles_per_message: number
   next_check_at: string | null
   last_checked_at: string | null
   channels: Array<{
@@ -112,6 +118,10 @@ function nextImmediateRetryAt(): string {
 
 function normalizeCheckIntervalMinutes(value: number | null | undefined): number {
   return value ?? DEFAULT_NOTIFICATION_CHECK_INTERVAL_MINUTES
+}
+
+function normalizeMaxArticlesPerMessage(value: number | null | undefined): number {
+  return value ?? DEFAULT_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE
 }
 
 function getFeedNotificationRuleByRuleId(ruleId: number): FeedNotificationRule | undefined {
@@ -264,8 +274,10 @@ export function upsertFeedNotificationRule(
   data: {
     enabled: boolean
     delivery_mode?: NotificationDeliveryMode
+    content_mode?: NotificationContentMode
     translate_enabled: boolean
     check_interval_minutes?: number | null
+    max_articles_per_message?: number | null
     channel_ids: number[]
   },
   userId?: number | null,
@@ -275,7 +287,9 @@ export function upsertFeedNotificationRule(
   return getDb().transaction(() => {
     let rule = getFeedNotificationRule(feedId, scopedUserId)
     const deliveryMode = data.delivery_mode ?? rule?.delivery_mode ?? 'digest'
+    const contentMode = data.content_mode ?? rule?.content_mode ?? 'title_and_body'
     const checkIntervalMinutes = normalizeCheckIntervalMinutes(data.check_interval_minutes ?? rule?.check_interval_minutes)
+    const maxArticlesPerMessage = normalizeMaxArticlesPerMessage(data.max_articles_per_message ?? rule?.max_articles_per_message)
     const nextCheckAt = !data.enabled
       ? null
       : deliveryMode === 'digest'
@@ -285,18 +299,20 @@ export function upsertFeedNotificationRule(
     if (!rule) {
       const result = runNamed(`
         INSERT INTO feed_notification_rules (
-          user_id, feed_id, enabled, delivery_mode, translate_enabled, check_interval_minutes, next_check_at
+          user_id, feed_id, enabled, delivery_mode, content_mode, translate_enabled, check_interval_minutes, max_articles_per_message, next_check_at
         )
         VALUES (
-          @user_id, @feed_id, @enabled, @delivery_mode, @translate_enabled, @check_interval_minutes, @next_check_at
+          @user_id, @feed_id, @enabled, @delivery_mode, @content_mode, @translate_enabled, @check_interval_minutes, @max_articles_per_message, @next_check_at
         )
       `, {
         user_id: scopedUserId,
         feed_id: feedId,
         enabled: data.enabled ? 1 : 0,
         delivery_mode: deliveryMode,
+        content_mode: contentMode,
         translate_enabled: data.translate_enabled ? 1 : 0,
         check_interval_minutes: checkIntervalMinutes,
+        max_articles_per_message: maxArticlesPerMessage,
         next_check_at: nextCheckAt,
       })
       rule = {
@@ -308,8 +324,10 @@ export function upsertFeedNotificationRule(
         UPDATE feed_notification_rules
         SET enabled = @enabled,
             delivery_mode = @delivery_mode,
+            content_mode = @content_mode,
             translate_enabled = @translate_enabled,
             check_interval_minutes = @check_interval_minutes,
+            max_articles_per_message = @max_articles_per_message,
             next_check_at = @next_check_at,
             updated_at = datetime('now')
         WHERE id = @id
@@ -317,8 +335,10 @@ export function upsertFeedNotificationRule(
         id: rule.id,
         enabled: data.enabled ? 1 : 0,
         delivery_mode: deliveryMode,
+        content_mode: contentMode,
         translate_enabled: data.translate_enabled ? 1 : 0,
         check_interval_minutes: checkIntervalMinutes,
+        max_articles_per_message: maxArticlesPerMessage,
         next_check_at: nextCheckAt,
       })
       rule = getFeedNotificationRule(feedId, scopedUserId)!
@@ -381,8 +401,10 @@ export function listNotificationTasks(userId?: number | null): NotificationTaskR
       f.name AS feed_name,
       r.enabled,
       r.delivery_mode,
+      r.content_mode,
       r.translate_enabled,
       r.check_interval_minutes,
+      r.max_articles_per_message,
       r.next_check_at,
       r.last_checked_at,
       MAX(NULLIF(rc.last_error, '')) AS last_error
@@ -400,8 +422,10 @@ export function listNotificationTasks(userId?: number | null): NotificationTaskR
       f.name,
       r.enabled,
       r.delivery_mode,
+      r.content_mode,
       r.translate_enabled,
       r.check_interval_minutes,
+      r.max_articles_per_message,
       r.next_check_at,
       r.last_checked_at
     ORDER BY
@@ -417,8 +441,10 @@ export function listNotificationTasks(userId?: number | null): NotificationTaskR
     feed_name: string
     enabled: number
     delivery_mode: NotificationDeliveryMode
+    content_mode: NotificationContentMode
     translate_enabled: number
     check_interval_minutes: number
+    max_articles_per_message: number
     next_check_at: string | null
     last_checked_at: string | null
     last_error: string | null
@@ -460,8 +486,10 @@ export function listNotificationTasks(userId?: number | null): NotificationTaskR
     },
     enabled: row.enabled,
     delivery_mode: row.delivery_mode,
+    content_mode: row.content_mode,
     translate_enabled: row.translate_enabled,
     check_interval_minutes: row.check_interval_minutes,
+    max_articles_per_message: row.max_articles_per_message,
     next_check_at: row.next_check_at,
     last_checked_at: row.last_checked_at,
     channels: channelsByRule.get(row.id) ?? [],
@@ -479,8 +507,10 @@ export function updateNotificationTaskById(
   data: Partial<{
     enabled: boolean
     delivery_mode: NotificationDeliveryMode
+    content_mode: NotificationContentMode
     translate_enabled: boolean
     check_interval_minutes: number
+    max_articles_per_message: number
     channel_ids: number[]
   }>,
 ): FeedNotificationRuleRecord | null {
@@ -490,8 +520,10 @@ export function updateNotificationTaskById(
 
     const nextEnabled = data.enabled ?? (existing.enabled === 1)
     const nextDeliveryMode = data.delivery_mode ?? existing.delivery_mode
+    const nextContentMode = data.content_mode ?? existing.content_mode
     const nextTranslateEnabled = data.translate_enabled ?? (existing.translate_enabled === 1)
     const nextCheckInterval = normalizeCheckIntervalMinutes(data.check_interval_minutes ?? existing.check_interval_minutes)
+    const nextMaxArticlesPerMessage = normalizeMaxArticlesPerMessage(data.max_articles_per_message ?? existing.max_articles_per_message)
     const nextCheckAt = !nextEnabled
       ? null
       : nextDeliveryMode === 'digest'
@@ -502,8 +534,10 @@ export function updateNotificationTaskById(
       UPDATE feed_notification_rules
       SET enabled = @enabled,
           delivery_mode = @delivery_mode,
+          content_mode = @content_mode,
           translate_enabled = @translate_enabled,
           check_interval_minutes = @check_interval_minutes,
+          max_articles_per_message = @max_articles_per_message,
           next_check_at = @next_check_at,
           updated_at = datetime('now')
       WHERE id = @id
@@ -511,8 +545,10 @@ export function updateNotificationTaskById(
       id: ruleId,
       enabled: nextEnabled ? 1 : 0,
       delivery_mode: nextDeliveryMode,
+      content_mode: nextContentMode,
       translate_enabled: nextTranslateEnabled ? 1 : 0,
       check_interval_minutes: nextCheckInterval,
+      max_articles_per_message: nextMaxArticlesPerMessage,
       next_check_at: nextCheckAt,
     })
 
@@ -597,6 +633,7 @@ export function listRuleBindings(ruleId: number): FeedNotificationBinding[] {
 export function getPendingNotificationArticles(
   feedId: number,
   lastNotifiedArticleId: number | null,
+  maxArticles: number,
 ): { total: number; maxArticleId: number | null; articles: NotificationArticleRecord[] } {
   const params = lastNotifiedArticleId == null ? [feedId] : [feedId, lastNotifiedArticleId]
   const filter = lastNotifiedArticleId == null ? '' : 'AND id > ?'
@@ -615,8 +652,8 @@ export function getPendingNotificationArticles(
       AND purged_at IS NULL
       ${filter}
     ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC
-    LIMIT 5
-  `).all(...params) as NotificationArticleRecord[]
+    LIMIT ?
+  `).all(...params, maxArticles) as NotificationArticleRecord[]
 
   return {
     total: totalRow.total ?? 0,

@@ -44,7 +44,7 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
     const channel = getNotificationChannelById(binding.channel_id, rule.user_id)
     if (!channel || channel.enabled !== 1) continue
 
-    const pending = getPendingNotificationArticles(rule.feed_id, binding.last_notified_article_id)
+    const pending = getPendingNotificationArticles(rule.feed_id, binding.last_notified_article_id, rule.max_articles_per_message)
     pendingByBinding.set(binding.channel_id, pending)
     if (pending.total === 0 || pending.maxArticleId == null) continue
     if (!pendingForTranslation || pending.total > pendingForTranslation.total) {
@@ -53,7 +53,7 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
   }
 
   const translationCache = new Map<number, string | null>()
-  if (rule.translate_enabled === 1 && pendingForTranslation) {
+  if (rule.content_mode === 'title_and_body' && rule.translate_enabled === 1 && pendingForTranslation) {
     await Promise.all(pendingForTranslation.articles.map(async (article) => {
       if (!article.notification_body_text) {
         translationCache.set(article.id, null)
@@ -77,7 +77,7 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
     const channel = getNotificationChannelById(binding.channel_id, rule.user_id)
     if (!channel || channel.enabled !== 1) continue
 
-    const pending = pendingByBinding.get(binding.channel_id) ?? getPendingNotificationArticles(rule.feed_id, binding.last_notified_article_id)
+    const pending = pendingByBinding.get(binding.channel_id) ?? getPendingNotificationArticles(rule.feed_id, binding.last_notified_article_id, rule.max_articles_per_message)
     if (pending.total === 0 || pending.maxArticleId == null) {
       continue
     }
@@ -88,6 +88,7 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
         feedName: rule.feed_name,
         totalCount: pending.total,
         restCount: Math.max(0, pending.total - pending.articles.length),
+        contentMode: rule.content_mode,
         articles: pending.articles.map(article => ({
           title: article.title,
           url: article.url,

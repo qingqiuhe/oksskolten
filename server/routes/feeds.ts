@@ -57,8 +57,10 @@ const UpdateFeedBody = z.object({
 const FeedNotificationRuleBody = z.object({
   enabled: z.boolean(),
   delivery_mode: z.enum(['immediate', 'digest']).optional(),
+  content_mode: z.enum(['title_only', 'title_and_body']).optional(),
   translate_enabled: z.boolean(),
   check_interval_minutes: z.number().int().min(5).max(1440).optional(),
+  max_articles_per_message: z.number().int().min(1).max(20).optional(),
   channel_ids: z.array(z.number().int()).max(32),
 })
 
@@ -217,8 +219,10 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       feed_id: params.id,
       enabled: 0,
       delivery_mode: 'immediate',
+      content_mode: 'title_and_body',
       translate_enabled: 0,
       check_interval_minutes: 60,
+      max_articles_per_message: 5,
       next_check_at: null,
       last_checked_at: null,
       created_at: null,

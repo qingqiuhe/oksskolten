@@ -195,7 +195,9 @@ describe('notification rule endpoints', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().enabled).toBe(0)
     expect(res.json().delivery_mode).toBe('immediate')
+    expect(res.json().content_mode).toBe('title_and_body')
     expect(res.json().translate_enabled).toBe(0)
+    expect(res.json().max_articles_per_message).toBe(5)
     expect(res.json().channel_ids).toEqual([])
   })
 
@@ -216,15 +218,19 @@ describe('notification rule endpoints', () => {
       payload: {
         enabled: true,
         delivery_mode: 'digest',
+        content_mode: 'title_only',
         translate_enabled: true,
         check_interval_minutes: 30,
+        max_articles_per_message: 3,
         channel_ids: [channel.id],
       },
     })
     expect(putRes.statusCode).toBe(200)
     expect(putRes.json().enabled).toBe(1)
     expect(putRes.json().delivery_mode).toBe('digest')
+    expect(putRes.json().content_mode).toBe('title_only')
     expect(putRes.json().translate_enabled).toBe(1)
+    expect(putRes.json().max_articles_per_message).toBe(3)
     expect(putRes.json().channel_ids).toEqual([channel.id])
 
     const getRes = await app.inject({
@@ -233,7 +239,9 @@ describe('notification rule endpoints', () => {
     })
     expect(getRes.json().check_interval_minutes).toBe(30)
     expect(getRes.json().delivery_mode).toBe('digest')
+    expect(getRes.json().content_mode).toBe('title_only')
     expect(getRes.json().translate_enabled).toBe(1)
+    expect(getRes.json().max_articles_per_message).toBe(3)
     expect(getRes.json().channel_ids).toEqual([channel.id])
   })
 })

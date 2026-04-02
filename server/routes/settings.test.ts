@@ -530,6 +530,7 @@ describe('notification task settings endpoints', () => {
       enabled: true,
       translate_enabled: true,
       check_interval_minutes: 15,
+      max_articles_per_message: 5,
       channel_ids: [channelA.id],
     }, member.userId)
     upsertFeedNotificationRule(feedB.id, {
@@ -571,12 +572,14 @@ describe('notification task settings endpoints', () => {
       enabled: true,
       translate_enabled: false,
       check_interval_minutes: 20,
+      max_articles_per_message: 4,
       channel_ids: [memberChannel.id],
     }, member.userId)
     const ownerRule = upsertFeedNotificationRule(ownerFeed.id, {
       enabled: true,
       translate_enabled: true,
       check_interval_minutes: 25,
+      max_articles_per_message: 6,
       channel_ids: [],
     }, owner.userId)
 
@@ -596,11 +599,15 @@ describe('notification task settings endpoints', () => {
       payload: {
         enabled: false,
         check_interval_minutes: 45,
+        content_mode: 'title_only',
+        max_articles_per_message: 7,
       },
     })
     expect(updateMemberRes.statusCode).toBe(200)
     expect(updateMemberRes.json().enabled).toBe(0)
     expect(updateMemberRes.json().check_interval_minutes).toBe(45)
+    expect(updateMemberRes.json().content_mode).toBe('title_only')
+    expect(updateMemberRes.json().max_articles_per_message).toBe(7)
 
     const updateOwnerRes = await app.inject({
       method: 'PATCH',
@@ -638,12 +645,14 @@ describe('notification task settings endpoints', () => {
       enabled: true,
       translate_enabled: false,
       check_interval_minutes: 10,
+      max_articles_per_message: 5,
       channel_ids: [ownerChannel.id],
     }, owner.userId)
     const memberRule = upsertFeedNotificationRule(memberFeed.id, {
       enabled: true,
       translate_enabled: false,
       check_interval_minutes: 12,
+      max_articles_per_message: 5,
       channel_ids: [memberChannel.id],
     }, member.userId)
 
@@ -677,6 +686,7 @@ describe('notification task settings endpoints', () => {
       enabled: true,
       translate_enabled: false,
       check_interval_minutes: 18,
+      max_articles_per_message: 5,
       channel_ids: [],
     }, admin.userId)
 
@@ -689,6 +699,28 @@ describe('notification task settings endpoints', () => {
     expect(res.statusCode).toBe(204)
     const remaining = getDb().prepare('SELECT COUNT(*) AS count FROM feed_notification_rules WHERE id = ?').get(adminRule.id) as { count: number }
     expect(remaining.count).toBe(0)
+  })
+
+  it('rejects invalid max_articles_per_message on task updates', async () => {
+    const member = createAuthedUserWithId('member')
+    const feed = createFeed({ name: 'Max Feed', url: 'https://example.com/max-feed' }, member.userId)
+    const rule = upsertFeedNotificationRule(feed.id, {
+      enabled: true,
+      translate_enabled: false,
+      check_interval_minutes: 15,
+      channel_ids: [],
+    }, member.userId)
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/notification-tasks/${rule.id}`,
+      headers: { ...json, ...member.headers },
+      payload: {
+        max_articles_per_message: 21,
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
   })
 })
 

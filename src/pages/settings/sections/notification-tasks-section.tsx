@@ -14,8 +14,10 @@ interface TaskFormState {
   id: number
   enabled: boolean
   delivery_mode: 'immediate' | 'digest'
+  content_mode: 'title_only' | 'title_and_body'
   translate_enabled: boolean
   check_interval_minutes: string
+  max_articles_per_message: string
   channel_ids: number[]
 }
 
@@ -71,8 +73,10 @@ export function NotificationTasksSection() {
       id: task.id,
       enabled: task.enabled === 1,
       delivery_mode: task.delivery_mode,
+      content_mode: task.content_mode,
       translate_enabled: task.translate_enabled === 1,
       check_interval_minutes: String(task.check_interval_minutes),
+      max_articles_per_message: String(task.max_articles_per_message),
       channel_ids: task.channels.map(channel => channel.id),
     })
     setMessage(null)
@@ -113,15 +117,22 @@ export function NotificationTasksSection() {
 
     const ownTask = canEditChannels(task)
     const interval = Number(form.check_interval_minutes)
+    const maxArticles = Number(form.max_articles_per_message)
     if (!Number.isInteger(interval) || interval < 5 || interval > 1440) {
       setMessage({ type: 'error', text: t('notifications.taskIntervalInvalid') })
+      return
+    }
+    if (!Number.isInteger(maxArticles) || maxArticles < 1 || maxArticles > 20) {
+      setMessage({ type: 'error', text: t('notifications.maxArticlesInvalid') })
       return
     }
 
     const payload: Record<string, unknown> = {
       enabled: form.enabled,
       delivery_mode: form.delivery_mode,
+      content_mode: form.content_mode,
       translate_enabled: form.translate_enabled,
+      max_articles_per_message: maxArticles,
     }
     if (form.delivery_mode === 'digest') {
       payload.check_interval_minutes = interval
@@ -201,9 +212,11 @@ export function NotificationTasksSection() {
                     </p>
                     <div className="mt-2 grid gap-1 text-xs text-muted md:grid-cols-2">
                       <p>{t('notifications.taskMode')}: {task.delivery_mode === 'immediate' ? t('notifications.deliveryModeImmediate') : t('notifications.deliveryModeDigest')}</p>
+                      <p>{t('notifications.taskContentMode')}: {task.content_mode === 'title_only' ? t('notifications.contentModeTitleOnly') : t('notifications.contentModeTitleAndBody')}</p>
                       {task.delivery_mode === 'digest'
                         ? <p>{t('notifications.taskInterval')}: {task.check_interval_minutes}{t('notifications.taskMinutesSuffix')}</p>
                         : <p>{t('notifications.taskNextRetry')}: {formatLocalDateTime(task.next_check_at, t('notifications.neverChecked'))}</p>}
+                      <p>{t('notifications.taskMaxArticles')}: {task.max_articles_per_message}</p>
                       <p>{t('notifications.taskLastCheck')}: {formatLocalDateTime(task.last_checked_at, t('notifications.neverChecked'))}</p>
                       <p>{t('notifications.taskChannels')}: {task.channels.length > 0 ? task.channels.map(channel => channel.name).join(' / ') : t('notifications.noChannelsBound')}</p>
                     </div>
@@ -294,6 +307,31 @@ export function NotificationTasksSection() {
                       </p>
                     </div>
 
+                    <div>
+                      <p className="text-xs text-muted mb-2">{t('notifications.feedDialogContentMode')}</p>
+                      <div className="inline-flex rounded-lg border border-border bg-bg-card p-1">
+                        <button
+                          type="button"
+                          onClick={() => setForm({ ...form, content_mode: 'title_only' })}
+                          className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                            form.content_mode === 'title_only' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
+                          }`}
+                        >
+                          {t('notifications.contentModeTitleOnly')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setForm({ ...form, content_mode: 'title_and_body' })}
+                          className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                            form.content_mode === 'title_and_body' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
+                          }`}
+                        >
+                          {t('notifications.contentModeTitleAndBody')}
+                        </button>
+                      </div>
+                      <p className="mt-2 text-xs text-muted">{t('notifications.feedDialogContentModeHint')}</p>
+                    </div>
+
                     <label className="flex items-center gap-2 text-sm text-text cursor-pointer">
                       <input
                         type="checkbox"
@@ -316,6 +354,17 @@ export function NotificationTasksSection() {
                         />
                       </FormField>
                     )}
+
+                    <FormField label={t('notifications.maxArticlesPerMessage')} compact hint={t('notifications.maxArticlesPerMessageHint')}>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={20}
+                        step={1}
+                        value={form.max_articles_per_message}
+                        onChange={e => setForm({ ...form, max_articles_per_message: e.target.value })}
+                      />
+                    </FormField>
 
                     <div>
                       <p className="text-xs text-muted mb-2">{t('notifications.feedDialogChannels')}</p>

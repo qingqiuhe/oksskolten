@@ -66,8 +66,10 @@ const NotificationTaskQuery = z.object({
 const NotificationTaskPatchBody = z.object({
   enabled: z.boolean().optional(),
   delivery_mode: z.enum(['immediate', 'digest']).optional(),
+  content_mode: z.enum(['title_only', 'title_and_body']).optional(),
   translate_enabled: z.boolean().optional(),
   check_interval_minutes: z.number().int().min(5).max(1440).optional(),
+  max_articles_per_message: z.number().int().min(1).max(20).optional(),
   channel_ids: z.array(z.number().int()).max(32).optional(),
 }).refine(body => Object.keys(body).length > 0, { message: 'No fields to update' })
 

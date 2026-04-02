@@ -61,18 +61,24 @@ export async function sendFeishuDigestMessage(args: {
   feedName: string
   totalCount: number
   restCount: number
+  contentMode: 'title_only' | 'title_and_body'
   articles: FeishuNotificationArticle[]
 }): Promise<void> {
   const elements: Array<Record<string, unknown>> = []
 
   for (const [index, article] of args.articles.entries()) {
-    const lines = [
-      `**[${article.title}](${article.url})**`,
-      article.displayTime,
-      article.bodyText ?? '',
-      article.bodyTextTranslated ?? '',
-      ...article.mediaUrls.map(url => `![](${url})`),
-    ].filter(Boolean)
+    const lines = args.contentMode === 'title_only'
+      ? [
+          `**[${article.title}](${article.url})**`,
+          article.displayTime,
+        ]
+      : [
+          `**[${article.title}](${article.url})**`,
+          article.displayTime,
+          article.bodyText ?? '',
+          article.bodyTextTranslated ?? '',
+          ...article.mediaUrls.map(url => `![](${url})`),
+        ].filter(Boolean)
 
     elements.push({
       tag: 'div',
