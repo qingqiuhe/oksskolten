@@ -5,6 +5,8 @@ import { fetcher, apiPost, apiPatch, apiDelete } from '../../../lib/fetcher'
 import { Input } from '@/components/ui/input'
 import { FormField } from '@/components/ui/form-field'
 import type { NotificationChannel } from '../../../../shared/types'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { DEFAULT_NOTIFICATION_TIMEZONE, NOTIFICATION_TIMEZONE_OPTIONS } from '../../../../shared/notification-timezone'
 
 type TFunc = (key: any, params?: Record<string, string>) => string
 
@@ -13,6 +15,7 @@ interface ChannelFormState {
   name: string
   webhook_url: string
   secret: string
+  timezone: string
   enabled: boolean
 }
 
@@ -21,6 +24,7 @@ const EMPTY_FORM: ChannelFormState = {
   name: '',
   webhook_url: '',
   secret: '',
+  timezone: DEFAULT_NOTIFICATION_TIMEZONE,
   enabled: true,
 }
 
@@ -54,6 +58,7 @@ export function NotificationChannelsSection({ t }: { t: TFunc }) {
         name: form.name.trim(),
         webhook_url: form.webhook_url.trim(),
         secret: form.secret.trim() || null,
+        timezone: form.timezone,
         enabled: form.enabled,
       }
       if (editing) {
@@ -130,6 +135,7 @@ export function NotificationChannelsSection({ t }: { t: TFunc }) {
                     <span className={`w-2 h-2 rounded-full shrink-0 ${channel.enabled === 1 ? 'bg-success' : 'bg-muted'}`} />
                     <span className="text-sm font-medium text-text truncate">{channel.name}</span>
                     <span className="text-[11px] text-muted">{t('notifications.channelTypeFeishu')}</span>
+                    <span className="text-[11px] text-muted">{channel.timezone}</span>
                   </div>
                   <p className="mt-1 text-xs text-muted truncate">{channel.webhook_url}</p>
                 </div>
@@ -148,6 +154,7 @@ export function NotificationChannelsSection({ t }: { t: TFunc }) {
                       name: channel.name,
                       webhook_url: channel.webhook_url,
                       secret: channel.secret ?? '',
+                      timezone: channel.timezone,
                       enabled: channel.enabled === 1,
                     })}
                     className="px-2 py-1 text-xs rounded-md border border-border text-muted hover:text-text hover:bg-hover transition-colors"
@@ -216,6 +223,19 @@ export function NotificationChannelsSection({ t }: { t: TFunc }) {
               onChange={e => setForm({ ...form, secret: e.target.value })}
               placeholder={t('notifications.secretPlaceholder')}
             />
+          </FormField>
+
+          <FormField label={t('notifications.channelTimezone')} compact hint={t('notifications.channelTimezoneHint')}>
+            <Select value={form.timezone} onValueChange={value => setForm({ ...form, timezone: value })}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {NOTIFICATION_TIMEZONE_OPTIONS.map(timezone => (
+                  <SelectItem key={timezone} value={timezone}>{timezone}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </FormField>
 
           <label className="flex items-center gap-2 text-sm text-text cursor-pointer">

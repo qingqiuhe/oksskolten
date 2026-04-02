@@ -75,6 +75,9 @@ describe('runNotificationChecks', () => {
     expect(payload.card.header.title.content).toBe('Example Feed · 1 条')
     const articleText = payload.card.body.elements.find(element => element.text)?.text?.content ?? ''
     expect(articleText).toContain('Fresh article')
+    expect(articleText).toContain('03-31 18:15')
+    expect(articleText).not.toContain('发布时间')
+    expect(articleText).not.toContain('2026-')
     expect(articleText).not.toContain('Old article')
 
     const binding = getDb().prepare(`
@@ -84,6 +87,13 @@ describe('runNotificationChecks', () => {
     `).get(channel.id) as { last_notified_article_id: number | null; last_error: string | null }
     expect(binding.last_notified_article_id).toBe(freshArticleId)
     expect(binding.last_error).toBeNull()
+
+    const rule = getDb().prepare(`
+      SELECT last_checked_at
+      FROM feed_notification_rules
+      LIMIT 1
+    `).get() as { last_checked_at: string | null }
+    expect(rule.last_checked_at).toMatch(/Z$/)
 
     getDb().prepare(`UPDATE feed_notification_rules SET next_check_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 minute')`).run()
     await runNotificationChecks()

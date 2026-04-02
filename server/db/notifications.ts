@@ -1,6 +1,7 @@
 import { getDb, runNamed } from './connection.js'
 import { getCurrentUserId } from '../identity.js'
 import type { UserRole } from '../identity.js'
+import { DEFAULT_NOTIFICATION_TIMEZONE, type NotificationTimezone } from '../../shared/notification-timezone.js'
 
 function resolveUserId(userId?: number | null): number | null {
   return userId ?? getCurrentUserId()
@@ -13,6 +14,7 @@ export interface NotificationChannel {
   name: string
   webhook_url: string
   secret: string | null
+  timezone: NotificationTimezone
   enabled: number
   created_at: string
   updated_at: string
@@ -141,19 +143,20 @@ export function getNotificationChannelById(id: number, userId?: number | null): 
 }
 
 export function createNotificationChannel(
-  data: Pick<NotificationChannel, 'name' | 'type' | 'webhook_url' | 'secret' | 'enabled'>,
+  data: Pick<NotificationChannel, 'name' | 'type' | 'webhook_url' | 'secret' | 'enabled'> & { timezone?: NotificationTimezone },
   userId?: number | null,
 ): NotificationChannel {
   const scopedUserId = resolveUserId(userId)
   const result = runNamed(`
-    INSERT INTO notification_channels (user_id, type, name, webhook_url, secret, enabled)
-    VALUES (@user_id, @type, @name, @webhook_url, @secret, @enabled)
+    INSERT INTO notification_channels (user_id, type, name, webhook_url, secret, timezone, enabled)
+    VALUES (@user_id, @type, @name, @webhook_url, @secret, @timezone, @enabled)
   `, {
     user_id: scopedUserId,
     type: data.type,
     name: data.name,
     webhook_url: data.webhook_url,
     secret: data.secret,
+    timezone: data.timezone ?? DEFAULT_NOTIFICATION_TIMEZONE,
     enabled: data.enabled,
   })
 
@@ -162,7 +165,7 @@ export function createNotificationChannel(
 
 export function updateNotificationChannel(
   id: number,
-  data: Partial<Pick<NotificationChannel, 'name' | 'webhook_url' | 'secret' | 'enabled'>>,
+  data: Partial<Pick<NotificationChannel, 'name' | 'webhook_url' | 'secret' | 'timezone' | 'enabled'>>,
   userId?: number | null,
 ): NotificationChannel | undefined {
   const existing = getNotificationChannelById(id, userId)
@@ -578,9 +581,9 @@ export function markNotificationBindingError(ruleId: number, channelId: number, 
 export function markNotificationRuleChecked(ruleId: number, checkIntervalMinutes: number): void {
   getDb().prepare(`
     UPDATE feed_notification_rules
-    SET last_checked_at = datetime('now'),
+    SET last_checked_at = ?,
         next_check_at = ?,
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(nextCheckAtFromMinutes(checkIntervalMinutes), ruleId)
+  `).run(toIsoNoMillis(new Date()), nextCheckAtFromMinutes(checkIntervalMinutes), ruleId)
 }

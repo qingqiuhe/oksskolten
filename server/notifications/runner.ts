@@ -10,20 +10,26 @@ import {
 import { logger } from '../logger.js'
 import { sendFeishuDigestMessage } from './feishu.js'
 import { translateNotificationBodyText } from './translation.js'
+import { DEFAULT_NOTIFICATION_TIMEZONE, parseNotificationTimezoneOffsetMinutes } from '../../shared/notification-timezone.js'
 
 const log = logger.child('notifications')
 
-function formatArticleTime(value: string | null): string {
-  const date = value ? new Date(value) : new Date()
-  const formatter = new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
-  return formatter.format(date).replace(/\//g, '-')
+function parseUtcLikeDate(value: string | null): Date {
+  const normalized = value
+    ? (/(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`)
+    : new Date().toISOString()
+  return new Date(normalized)
+}
+
+function formatArticleTime(value: string | null, timezone: string): string {
+  const offsetMinutes = parseNotificationTimezoneOffsetMinutes(timezone) ?? parseNotificationTimezoneOffsetMinutes(DEFAULT_NOTIFICATION_TIMEZONE) ?? 0
+  const base = parseUtcLikeDate(value)
+  const shifted = new Date(base.getTime() + offsetMinutes * 60_000)
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(shifted.getUTCDate()).padStart(2, '0')
+  const hour = String(shifted.getUTCHours()).padStart(2, '0')
+  const minute = String(shifted.getUTCMinutes()).padStart(2, '0')
+  return `${month}-${day} ${hour}:${minute}`
 }
 
 export async function runNotificationChecks(): Promise<void> {
@@ -83,7 +89,7 @@ export async function runNotificationChecks(): Promise<void> {
           articles: pending.articles.map(article => ({
             title: article.title,
             url: article.url,
-            displayTime: formatArticleTime(article.published_at ?? article.fetched_at),
+            displayTime: formatArticleTime(article.published_at ?? article.fetched_at, channel.timezone),
             bodyText: article.notification_body_text,
             bodyTextTranslated: translationCache.get(article.id) ?? null,
             mediaUrls: article.notification_media_json ? JSON.parse(article.notification_media_json) as string[] : [],

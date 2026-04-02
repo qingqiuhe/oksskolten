@@ -27,6 +27,12 @@ import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 import { sendFeishuTestMessage } from '../notifications/feishu.js'
 import { FETCH_MIN_INTERVAL_SETTING_KEY, getFetchScheduleConfig } from '../fetcher/schedule.js'
 import { isAdminLike, roleCanManage, type UserRole } from '../identity.js'
+import {
+  DEFAULT_NOTIFICATION_TIMEZONE,
+  isNotificationTimezone,
+  NOTIFICATION_TIMEZONE_OPTIONS,
+  type NotificationTimezone,
+} from '../../shared/notification-timezone.js'
 
 const ProfileBody = z.object({
   account_name: z.string().optional(),
@@ -41,12 +47,14 @@ const NotificationChannelBody = z.object({
   name: z.string().trim().min(1, 'name is required'),
   webhook_url: z.string().url('webhook_url must be a valid URL'),
   secret: z.string().nullable().optional(),
+  timezone: z.string().optional(),
   enabled: z.boolean().optional(),
 })
 const NotificationChannelPatchBody = z.object({
   name: z.string().trim().min(1, 'name is required').optional(),
   webhook_url: z.string().url('webhook_url must be a valid URL').optional(),
   secret: z.string().nullable().optional(),
+  timezone: z.string().optional(),
   enabled: z.boolean().optional(),
 })
 const FetchScheduleBody = z.object({
@@ -162,6 +170,16 @@ function validateFeishuWebhookUrl(url: string): string | null {
   } catch {
     return 'webhook_url must be a valid URL'
   }
+}
+
+function validateNotificationTimezone(value: string | undefined): string | null {
+  if (value === undefined) return null
+  if (isNotificationTimezone(value)) return null
+  return `timezone must be one of: ${NOTIFICATION_TIMEZONE_OPTIONS.join(', ')}`
+}
+
+function normalizeNotificationTimezone(value: string | undefined): NotificationTimezone | undefined {
+  return value && isNotificationTimezone(value) ? value : undefined
 }
 
 function assertCanManageNotificationTask(actorRole: UserRole, targetRole: UserRole | null): string | null {
@@ -337,12 +355,18 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
         reply.status(400).send({ error: webhookError })
         return
       }
+      const timezoneError = validateNotificationTimezone(body.timezone)
+      if (timezoneError) {
+        reply.status(400).send({ error: timezoneError })
+        return
+      }
 
       const channel = createNotificationChannel({
         type: body.type,
         name: body.name,
         webhook_url: body.webhook_url,
         secret: body.secret?.trim() || null,
+        timezone: normalizeNotificationTimezone(body.timezone) ?? DEFAULT_NOTIFICATION_TIMEZONE,
         enabled: body.enabled === false ? 0 : 1,
       }, getRequestUserId(request))
       reply.status(201).send(channel)
@@ -365,11 +389,17 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
           return
         }
       }
+      const timezoneError = validateNotificationTimezone(body.timezone)
+      if (timezoneError) {
+        reply.status(400).send({ error: timezoneError })
+        return
+      }
 
       const updated = updateNotificationChannel(params.id, {
         name: body.name,
         webhook_url: body.webhook_url,
         secret: body.secret === undefined ? undefined : (body.secret?.trim() || null),
+        timezone: normalizeNotificationTimezone(body.timezone),
         enabled: body.enabled === undefined ? undefined : (body.enabled ? 1 : 0),
       }, getRequestUserId(request))
 

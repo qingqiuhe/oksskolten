@@ -692,6 +692,57 @@ describe('notification task settings endpoints', () => {
   })
 })
 
+describe('notification channel settings endpoints', () => {
+  it('creates channels with default timezone and updates timezone explicitly', async () => {
+    const member = createAuthedUserWithId('member')
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/settings/notification-channels',
+      headers: { ...json, ...member.headers },
+      payload: {
+        type: 'feishu_webhook',
+        name: 'Team',
+        webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-token',
+      },
+    })
+
+    expect(createRes.statusCode).toBe(201)
+    expect(createRes.json().timezone).toBe('UTC+8')
+
+    const updateRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/notification-channels/${createRes.json().id}`,
+      headers: { ...json, ...member.headers },
+      payload: {
+        timezone: 'UTC+9',
+      },
+    })
+
+    expect(updateRes.statusCode).toBe(200)
+    expect(updateRes.json().timezone).toBe('UTC+9')
+  })
+
+  it('rejects invalid channel timezone', async () => {
+    const member = createAuthedUserWithId('member')
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/settings/notification-channels',
+      headers: { ...json, ...member.headers },
+      payload: {
+        type: 'feishu_webhook',
+        name: 'Team',
+        webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-token',
+        timezone: 'Asia/Shanghai',
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/timezone must be one of/)
+  })
+})
+
 // =========================================================================
 // Boolean/on-off preferences
 // =========================================================================

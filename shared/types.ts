@@ -2,6 +2,7 @@
 // Canonical source of truth — server/db.ts re-exports these.
 
 import type { ArticleKind, FeedViewType } from './article-kind.js'
+import type { NotificationTimezone } from './notification-timezone.js'
 
 export interface Category {
   id: number
@@ -147,6 +148,7 @@ export interface NotificationChannel {
   name: string
   webhook_url: string
   secret: string | null
+  timezone: NotificationTimezone
   enabled: number
   created_at: string
   updated_at: string

@@ -68,7 +68,7 @@ export async function sendFeishuDigestMessage(args: {
   for (const [index, article] of args.articles.entries()) {
     const lines = [
       `**[${article.title}](${article.url})**`,
-      `发布时间：${article.displayTime}`,
+      article.displayTime,
       article.bodyText ?? '',
       article.bodyTextTranslated ?? '',
       ...article.mediaUrls.map(url => `![](${url})`),

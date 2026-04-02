@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { NotificationTasksSection } from './notification-tasks-section'
@@ -24,6 +24,7 @@ vi.mock('swr', () => ({
 
 describe('NotificationTasksSection', () => {
   const user = userEvent.setup({ pointerEventsCheck: 0 })
+  const realToLocaleString = Date.prototype.toLocaleString
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -31,7 +32,7 @@ describe('NotificationTasksSection', () => {
       '/api/me': { id: 1, role: 'admin' },
       '/api/settings/notification-channels': {
         channels: [
-          { id: 101, user_id: 1, type: 'feishu_webhook', name: 'My Channel', webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/my', secret: null, enabled: 1, created_at: '', updated_at: '' },
+          { id: 101, user_id: 1, type: 'feishu_webhook', name: 'My Channel', webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/my', secret: null, timezone: 'UTC+8', enabled: 1, created_at: '', updated_at: '' },
         ],
       },
       '/api/settings/notification-tasks?scope=self': {
@@ -83,6 +84,10 @@ describe('NotificationTasksSection', () => {
     }
   })
 
+  afterEach(() => {
+    Date.prototype.toLocaleString = realToLocaleString
+  })
+
   it('shows admin scope filters and owner column content', () => {
     render(<NotificationTasksSection />)
     expect(screen.getByText('All users')).toBeTruthy()
@@ -127,5 +132,35 @@ describe('NotificationTasksSection', () => {
     expect(screen.getByText('Member Channel')).toBeTruthy()
     expect(screen.getByText('Channel bindings for other users are read-only here.')).toBeTruthy()
     expect(screen.queryByRole('checkbox', { name: /Member Channel/ })).toBeNull()
+  })
+
+  it('parses legacy UTC timestamps without timezone suffix as UTC for last check display', async () => {
+    swrData['/api/settings/notification-tasks?scope=all'] = {
+      scope: 'all',
+      tasks: [
+        {
+          id: 10,
+          owner: { user_id: 1, email: 'admin@example.com', role: 'admin' },
+          feed: { id: 5, name: 'My Feed' },
+          enabled: 1,
+          translate_enabled: 0,
+          check_interval_minutes: 15,
+          next_check_at: '2026-04-02T01:23:45Z',
+          last_checked_at: '2026-04-02 01:23:45',
+          channels: [{ id: 101, name: 'My Channel', enabled: 1 }],
+          last_error: null,
+        },
+      ],
+    }
+    Date.prototype.toLocaleString = vi.fn(function (this: Date) {
+      return this.toISOString()
+    }) as typeof Date.prototype.toLocaleString
+
+    render(<NotificationTasksSection />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/Last check: 2026-04-02T01:23:45.000Z/)).toBeTruthy()
+      expect(screen.getByText(/Next check: 2026-04-02T01:23:45.000Z/)).toBeTruthy()
+    })
   })
 })

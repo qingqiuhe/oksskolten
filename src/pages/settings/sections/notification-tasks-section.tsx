@@ -6,6 +6,7 @@ import { useI18n } from '../../../lib/i18n'
 import { FormField } from '@/components/ui/form-field'
 import { Input } from '@/components/ui/input'
 import type { NotificationChannel, NotificationTaskRecord } from '../../../../shared/types'
+import { formatLocalDateTime } from '../../../lib/dateTime'
 
 type NotificationTaskScope = 'self' | 'all'
 
@@ -15,11 +16,6 @@ interface TaskFormState {
   translate_enabled: boolean
   check_interval_minutes: string
   channel_ids: number[]
-}
-
-function formatDateTime(value: string | null, emptyLabel: string) {
-  if (!value) return emptyLabel
-  return new Date(value).toLocaleString()
 }
 
 export function NotificationTasksSection() {
@@ -200,8 +196,8 @@ export function NotificationTasksSection() {
                     </p>
                     <div className="mt-2 grid gap-1 text-xs text-muted md:grid-cols-2">
                       <p>{t('notifications.taskInterval')}: {task.check_interval_minutes}{t('notifications.taskMinutesSuffix')}</p>
-                      <p>{t('notifications.taskNextCheck')}: {formatDateTime(task.next_check_at, t('notifications.neverChecked'))}</p>
-                      <p>{t('notifications.taskLastCheck')}: {formatDateTime(task.last_checked_at, t('notifications.neverChecked'))}</p>
+                      <p>{t('notifications.taskNextCheck')}: {formatLocalDateTime(task.next_check_at, t('notifications.neverChecked'))}</p>
+                      <p>{t('notifications.taskLastCheck')}: {formatLocalDateTime(task.last_checked_at, t('notifications.neverChecked'))}</p>
                       <p>{t('notifications.taskChannels')}: {task.channels.length > 0 ? task.channels.map(channel => channel.name).join(' / ') : t('notifications.noChannelsBound')}</p>
                     </div>
                     {task.last_error && (
