@@ -17,6 +17,8 @@ const ScopeFiltersSchema = z.object({
   read: z.boolean().optional(),
   article_kind: z.enum(['original', 'repost', 'quote']).optional(),
   no_floor: z.boolean().optional(),
+  since: z.string().optional(),
+  until: z.string().optional(),
 })
 
 const ChatScopeSchema = z.union([

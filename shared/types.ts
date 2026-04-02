@@ -110,6 +110,8 @@ export interface ListChatScopeFilters {
   read?: boolean
   article_kind?: ArticleKind
   no_floor?: boolean
+  since?: string
+  until?: string
 }
 
 export interface GlobalChatScope {

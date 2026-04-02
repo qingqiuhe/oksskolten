@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link as RouterLink } from 'react-router-dom'
 import { Maximize2, Minimize2, X } from 'lucide-react'
@@ -39,6 +39,7 @@ interface ChatPanelProps {
   chatState?: ChatState
   scope?: ChatScope
   scopeSummary?: ScopeSummary | null
+  scopeControl?: ReactNode
   conversationId?: string
   onConversationCreated?: (id: string) => void
   onClose?: () => void
@@ -53,7 +54,7 @@ interface Conversation {
   article_og_image?: string | null
 }
 
-export function ChatPanel({ variant, chatState: externalChatState, scope, scopeSummary, conversationId: initialConversationId, onConversationCreated, onClose }: ChatPanelProps) {
+export function ChatPanel({ variant, chatState: externalChatState, scope, scopeSummary, scopeControl, conversationId: initialConversationId, onConversationCreated, onClose }: ChatPanelProps) {
   const { t } = useI18n()
   const articleId = scope?.type === 'article' ? scope.article_id : undefined
 
@@ -201,6 +202,8 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
     />
   )
 
+  const inlineScopeMeta = scopeControl ?? <ChatScopeBadge summary={scopeSummary} />
+
   // Expanded overlay (inline variant only) — rendered via portal
   if (isInline && expanded) {
     const overlay = (
@@ -215,7 +218,7 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
               <div className="min-w-0">
                 <span className="text-sm font-medium text-text">{t('chat.title')}</span>
                 <div className="mt-1">
-                  <ChatScopeBadge summary={scopeSummary} />
+                  {inlineScopeMeta}
                 </div>
               </div>
               <IconButton
@@ -245,7 +248,7 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
             <div className="min-w-0">
               <span className="text-sm font-medium text-text">{t('chat.title')}</span>
               <div className="mt-1">
-                <ChatScopeBadge summary={scopeSummary} />
+                {inlineScopeMeta}
               </div>
             </div>
             <IconButton
@@ -271,7 +274,7 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
           <div className="min-w-0">
             <span className="text-sm font-medium text-text">{t('chat.title')}</span>
             <div className="mt-1">
-              <ChatScopeBadge summary={scopeSummary} />
+              {inlineScopeMeta}
             </div>
           </div>
           <div className="flex items-center gap-0.5">

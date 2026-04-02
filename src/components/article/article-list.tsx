@@ -21,13 +21,13 @@ import { Mascot } from '../ui/mascot'
 import { FeedErrorBanner } from '../feed/feed-error-banner'
 import { Skeleton } from '../ui/skeleton'
 import { ActionChip } from '../ui/action-chip'
+import { ListChatFab } from '../chat/list-chat-fab'
 import { useKeyboardNavigationContext } from '../../contexts/keyboard-navigation-context'
 import { useKeyboardNavigation } from '../../hooks/use-keyboard-navigation'
 import { apiPatch } from '../../lib/fetcher'
 import type { ArticleListItem, FeedWithCounts } from '../../../shared/types'
 import type { LayoutName } from '../../data/layouts'
 import { isXFeedSource, type ArticleKind } from '../../../shared/article-kind'
-import { buildFilteredListScope, buildLoadedListScope } from '../../lib/chat-scope'
 
 interface ArticlesResponse {
   articles: ArticleListItem[]
@@ -404,15 +404,6 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     ...(articleKindFilter !== 'all' ? { article_kind: articleKindFilter } : {}),
     ...(noFloor ? { no_floor: true } : {}),
   }), [feedId, categoryId, unreadOnly, bookmarkedOnly, likedOnly, readOnly, articleKindFilter, noFloor])
-  const loadedScope = useMemo(
-    () => buildLoadedListScope(listLabel, articles.map(article => article.id), sourceFilters),
-    [listLabel, articles, sourceFilters],
-  )
-  const filteredScope = useMemo(
-    () => buildFilteredListScope(listLabel, sourceFilters),
-    [listLabel, sourceFilters],
-  )
-
   return (
     <main ref={listRef} className="max-w-2xl mx-auto" role={!isGridLayout ? 'listbox' : undefined}>
       {isTouchDevice && <PullToRefresh onRefresh={async () => {
@@ -430,23 +421,6 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       {currentFeed && currentFeed.type !== 'clip' && settings.showFeedActivity === 'on' && (
         <FeedMetricsBar feed={currentFeed} />
       )}
-
-      <div className="flex flex-wrap gap-2 px-4 md:px-6 py-3">
-        <ActionChip
-          onClick={() => void navigate('/chat', {
-            state: {
-              initialScope: loadedScope,
-              scopeOptions: {
-                loadedList: loadedScope,
-                filteredList: filteredScope,
-              },
-            },
-          })}
-          disabled={articles.length === 0}
-        >
-          {t('chat.currentList')}
-        </ActionChip>
-      </div>
 
       {showArticleKindFilter && (
         <div className="flex flex-wrap gap-2 px-4 md:px-6 py-3">
@@ -604,6 +578,14 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         escapeDebounceRef.current = true
         setTimeout(() => { escapeDebounceRef.current = false }, 100)
       }} />
+
+      {articles.length > 0 && (
+        <ListChatFab
+          listLabel={listLabel}
+          articleIds={articles.map(article => article.id)}
+          sourceFilters={sourceFilters}
+        />
+      )}
     </main>
   )
 })

@@ -120,6 +120,7 @@ describe('FeedNotificationDialog', () => {
               name: 'Team',
               webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-token',
               secret: null,
+              timezone: 'UTC+8',
               enabled: 1,
               created_at: '2026-03-31T00:00:00Z',
               updated_at: '2026-03-31T00:00:00Z',

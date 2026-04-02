@@ -147,6 +147,8 @@ export function getArticles(opts: {
   bookmarked?: boolean
   liked?: boolean
   read?: boolean
+  since?: string
+  until?: string
   sort?: 'score'
   limit: number
   offset: number
@@ -186,6 +188,14 @@ export function getArticles(opts: {
   if (opts.read) {
     conditions.push('a.read_at IS NOT NULL')
   }
+  if (opts.since) {
+    conditions.push('COALESCE(a.published_at, a.fetched_at) >= @since')
+    params.since = opts.since
+  }
+  if (opts.until) {
+    conditions.push('COALESCE(a.published_at, a.fetched_at) <= @until')
+    params.until = opts.until
+  }
 
   // Smart floor: limit the displayed range to keep lists manageable.
   // Pick the floor that yields the MOST articles (= earliest date) among:
@@ -197,7 +207,7 @@ export function getArticles(opts: {
 
   let floorApplied = false
 
-  if (opts.smartFloor) {
+  if (opts.smartFloor && !opts.since && !opts.until) {
     const scopeWhere = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''
 
     // Candidate 1: SMART_FLOOR_DAYS ago
