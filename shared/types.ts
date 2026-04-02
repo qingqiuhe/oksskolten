@@ -168,3 +168,31 @@ export interface FeedNotificationRule {
 export interface FeedNotificationRuleRecord extends FeedNotificationRule {
   channel_ids: number[]
 }
+
+export interface NotificationTaskOwner {
+  user_id: number | null
+  email: string | null
+  role: 'owner' | 'admin' | 'member' | null
+}
+
+export interface NotificationTaskChannel {
+  id: number
+  name: string
+  enabled: number
+}
+
+export interface NotificationTaskRecord {
+  id: number
+  owner: NotificationTaskOwner
+  feed: {
+    id: number
+    name: string
+  }
+  enabled: number
+  translate_enabled: number
+  check_interval_minutes: number
+  next_check_at: string | null
+  last_checked_at: string | null
+  channels: NotificationTaskChannel[]
+  last_error: string | null
+}

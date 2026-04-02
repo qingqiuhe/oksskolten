@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { buildApp } from '../__tests__/helpers/buildApp.js'
-import { upsertSetting, getSetting, createFeed, insertArticle, markArticleSeen, getDb } from '../db.js'
+import { upsertSetting, getSetting, createFeed, createNotificationChannel, upsertFeedNotificationRule, insertArticle, markArticleSeen, getDb } from '../db.js'
 import { hashSync } from 'bcryptjs'
 import type { FastifyInstance } from 'fastify'
 
@@ -48,6 +48,27 @@ function createAuthedUser(role: 'owner' | 'admin' | 'member') {
       role,
       token_version: 0,
     })}`,
+  }
+}
+
+function createAuthedUserWithId(role: 'owner' | 'admin' | 'member') {
+  const email = `${role}-${Date.now()}@example.com`
+  const info = getDb().prepare(`
+    INSERT INTO users (email, password_hash, role, status)
+    VALUES (?, ?, ?, 'active')
+  `).run(email, hashSync('password123', 4), role)
+
+  const userId = Number(info.lastInsertRowid)
+  return {
+    userId,
+    headers: {
+      authorization: `Bearer ${app.jwt.sign({
+        sub: userId,
+        email,
+        role,
+        token_version: 0,
+      })}`,
+    },
   }
 }
 
@@ -465,6 +486,209 @@ describe('fetch schedule settings endpoints', () => {
         delete process.env.AUTH_DISABLED
       }
     }
+  })
+})
+
+describe('notification task settings endpoints', () => {
+  let savedAuthDisabled: string | undefined
+
+  beforeEach(() => {
+    savedAuthDisabled = process.env.AUTH_DISABLED
+    delete process.env.AUTH_DISABLED
+  })
+
+  afterEach(() => {
+    if (savedAuthDisabled !== undefined) {
+      process.env.AUTH_DISABLED = savedAuthDisabled
+    } else {
+      delete process.env.AUTH_DISABLED
+    }
+  })
+
+  it('lists only the current user tasks for members', async () => {
+    const member = createAuthedUserWithId('member')
+    const otherMember = createAuthedUserWithId('member')
+
+    const feedA = createFeed({ name: 'My Feed', url: 'https://example.com/a' }, member.userId)
+    const feedB = createFeed({ name: 'Other Feed', url: 'https://example.com/b' }, otherMember.userId)
+    const channelA = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Mine',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/mine',
+      secret: null,
+      enabled: 1,
+    }, member.userId)
+    createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Other',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/other',
+      secret: null,
+      enabled: 1,
+    }, otherMember.userId)
+
+    upsertFeedNotificationRule(feedA.id, {
+      enabled: true,
+      translate_enabled: true,
+      check_interval_minutes: 15,
+      channel_ids: [channelA.id],
+    }, member.userId)
+    upsertFeedNotificationRule(feedB.id, {
+      enabled: true,
+      translate_enabled: false,
+      check_interval_minutes: 30,
+      channel_ids: [],
+    }, otherMember.userId)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/settings/notification-tasks',
+      headers: member.headers,
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().scope).toBe('self')
+    expect(res.json().tasks).toHaveLength(1)
+    expect(res.json().tasks[0].feed.name).toBe('My Feed')
+    expect(res.json().tasks[0].channels).toEqual([{ id: channelA.id, name: 'Mine', enabled: 1 }])
+  })
+
+  it('lets admin view all tasks and manage member tasks only', async () => {
+    const admin = createAuthedUserWithId('admin')
+    const member = createAuthedUserWithId('member')
+    const owner = createAuthedUserWithId('owner')
+
+    const memberFeed = createFeed({ name: 'Member Feed', url: 'https://example.com/member' }, member.userId)
+    const ownerFeed = createFeed({ name: 'Owner Feed', url: 'https://example.com/owner' }, owner.userId)
+    const memberChannel = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Member Channel',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/member',
+      secret: null,
+      enabled: 1,
+    }, member.userId)
+
+    const memberRule = upsertFeedNotificationRule(memberFeed.id, {
+      enabled: true,
+      translate_enabled: false,
+      check_interval_minutes: 20,
+      channel_ids: [memberChannel.id],
+    }, member.userId)
+    const ownerRule = upsertFeedNotificationRule(ownerFeed.id, {
+      enabled: true,
+      translate_enabled: true,
+      check_interval_minutes: 25,
+      channel_ids: [],
+    }, owner.userId)
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/api/settings/notification-tasks?scope=all',
+      headers: admin.headers,
+    })
+    expect(listRes.statusCode).toBe(200)
+    expect(listRes.json().scope).toBe('all')
+    expect(listRes.json().tasks).toHaveLength(2)
+
+    const updateMemberRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/notification-tasks/${memberRule.id}`,
+      headers: { ...json, ...admin.headers },
+      payload: {
+        enabled: false,
+        check_interval_minutes: 45,
+      },
+    })
+    expect(updateMemberRes.statusCode).toBe(200)
+    expect(updateMemberRes.json().enabled).toBe(0)
+    expect(updateMemberRes.json().check_interval_minutes).toBe(45)
+
+    const updateOwnerRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/notification-tasks/${ownerRule.id}`,
+      headers: { ...json, ...admin.headers },
+      payload: {
+        enabled: false,
+      },
+    })
+    expect(updateOwnerRes.statusCode).toBe(403)
+  })
+
+  it('rejects cross-user channel edits but allows own channel edits', async () => {
+    const owner = createAuthedUserWithId('owner')
+    const member = createAuthedUserWithId('member')
+
+    const ownerFeed = createFeed({ name: 'Owner Feed', url: 'https://example.com/owner-feed' }, owner.userId)
+    const memberFeed = createFeed({ name: 'Member Feed', url: 'https://example.com/member-feed' }, member.userId)
+    const ownerChannel = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Owner Channel',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/owner',
+      secret: null,
+      enabled: 1,
+    }, owner.userId)
+    const memberChannel = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Member Channel',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/member2',
+      secret: null,
+      enabled: 1,
+    }, member.userId)
+
+    const ownerRule = upsertFeedNotificationRule(ownerFeed.id, {
+      enabled: true,
+      translate_enabled: false,
+      check_interval_minutes: 10,
+      channel_ids: [ownerChannel.id],
+    }, owner.userId)
+    const memberRule = upsertFeedNotificationRule(memberFeed.id, {
+      enabled: true,
+      translate_enabled: false,
+      check_interval_minutes: 12,
+      channel_ids: [memberChannel.id],
+    }, member.userId)
+
+    const ownUpdateRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/notification-tasks/${ownerRule.id}`,
+      headers: { ...json, ...owner.headers },
+      payload: {
+        channel_ids: [],
+      },
+    })
+    expect(ownUpdateRes.statusCode).toBe(200)
+    expect(ownUpdateRes.json().channels).toEqual([])
+
+    const crossUserRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/notification-tasks/${memberRule.id}`,
+      headers: { ...json, ...owner.headers },
+      payload: {
+        channel_ids: [],
+      },
+    })
+    expect(crossUserRes.statusCode).toBe(403)
+  })
+
+  it('allows owner to delete admin tasks', async () => {
+    const owner = createAuthedUserWithId('owner')
+    const admin = createAuthedUserWithId('admin')
+    const adminFeed = createFeed({ name: 'Admin Feed', url: 'https://example.com/admin-feed' }, admin.userId)
+    const adminRule = upsertFeedNotificationRule(adminFeed.id, {
+      enabled: true,
+      translate_enabled: false,
+      check_interval_minutes: 18,
+      channel_ids: [],
+    }, admin.userId)
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/settings/notification-tasks/${adminRule.id}`,
+      headers: owner.headers,
+    })
+
+    expect(res.statusCode).toBe(204)
+    const remaining = getDb().prepare('SELECT COUNT(*) AS count FROM feed_notification_rules WHERE id = ?').get(adminRule.id) as { count: number }
+    expect(remaining.count).toBe(0)
   })
 })
 

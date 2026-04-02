@@ -12,8 +12,12 @@ import {
   createNotificationChannel,
   updateNotificationChannel,
   deleteNotificationChannel,
+  listNotificationTasks,
+  getNotificationTaskById,
+  updateNotificationTaskById,
+  deleteNotificationTaskById,
 } from '../db.js'
-import { requireJson, getAuthUser, getRequestUserId, requireRoles } from '../auth.js'
+import { requireJson, getAuthUser, getRequestIdentity, getRequestUserId, requireRoles } from '../auth.js'
 import { getAllModelValues, getModelValues } from '../../shared/models.js'
 import { assertSafeUrl } from '../fetcher/ssrf.js'
 import { extractByDotPath } from '../fetcher/article-images.js'
@@ -22,6 +26,7 @@ import { getDeeplMonthlyUsage } from '../providers/translate/deepl.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 import { sendFeishuTestMessage } from '../notifications/feishu.js'
 import { FETCH_MIN_INTERVAL_SETTING_KEY, getFetchScheduleConfig } from '../fetcher/schedule.js'
+import { isAdminLike, roleCanManage, type UserRole } from '../identity.js'
 
 const ProfileBody = z.object({
   account_name: z.string().optional(),
@@ -47,6 +52,15 @@ const NotificationChannelPatchBody = z.object({
 const FetchScheduleBody = z.object({
   min_interval_minutes: z.number().int().min(1).max(240),
 })
+const NotificationTaskQuery = z.object({
+  scope: z.enum(['self', 'all']).optional(),
+})
+const NotificationTaskPatchBody = z.object({
+  enabled: z.boolean().optional(),
+  translate_enabled: z.boolean().optional(),
+  check_interval_minutes: z.number().int().min(5).max(1440).optional(),
+  channel_ids: z.array(z.number().int()).max(32).optional(),
+}).refine(body => Object.keys(body).length > 0, { message: 'No fields to update' })
 
 const PREF_KEYS = [
   'appearance.color_theme',
@@ -148,6 +162,14 @@ function validateFeishuWebhookUrl(url: string): string | null {
   } catch {
     return 'webhook_url must be a valid URL'
   }
+}
+
+function assertCanManageNotificationTask(actorRole: UserRole, targetRole: UserRole | null): string | null {
+  if (!targetRole) return null
+  if (!roleCanManage(actorRole, targetRole)) {
+    return 'Forbidden'
+  }
+  return null
 }
 
 export async function settingsRoutes(api: FastifyInstance): Promise<void> {
@@ -387,6 +409,104 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
       const message = err instanceof Error ? err.message : String(err)
       reply.status(502).send({ error: message })
     }
+  })
+
+  api.get('/api/settings/notification-tasks', async (request, reply) => {
+    const query = parseOrBadRequest(NotificationTaskQuery, request.query, reply)
+    if (!query) return
+
+    const identity = getRequestIdentity(request)
+    const wantsAll = query.scope === 'all'
+    const canViewAll = wantsAll && isAdminLike(identity?.role)
+    const tasks = canViewAll ? listNotificationTasks(null) : listNotificationTasks(getRequestUserId(request))
+    reply.send({ tasks, scope: canViewAll ? 'all' : 'self' })
+  })
+
+  api.patch('/api/settings/notification-tasks/:id', {
+    preHandler: [requireJson],
+  }, async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+    const body = parseOrBadRequest(NotificationTaskPatchBody, request.body, reply)
+    if (!body) return
+
+    const identity = getRequestIdentity(request)
+    if (!identity?.role) {
+      reply.status(403).send({ error: 'Forbidden' })
+      return
+    }
+
+    const task = getNotificationTaskById(params.id)
+    if (!task) {
+      reply.status(404).send({ error: 'Notification task not found' })
+      return
+    }
+
+    const isOwnTask = task.owner.user_id === identity.userId
+    if (!isOwnTask) {
+      if (!isAdminLike(identity.role)) {
+        reply.status(403).send({ error: 'Forbidden' })
+        return
+      }
+      const denied = assertCanManageNotificationTask(identity.role, task.owner.role)
+      if (denied) {
+        reply.status(403).send({ error: denied })
+        return
+      }
+      if (body.channel_ids !== undefined) {
+        reply.status(403).send({ error: 'Forbidden' })
+        return
+      }
+    }
+
+    if (body.channel_ids !== undefined) {
+      const channels = body.channel_ids.map(channelId => getNotificationChannelById(channelId, getRequestUserId(request)))
+      if (channels.some(channel => !channel || channel.enabled !== 1)) {
+        reply.status(400).send({ error: 'Invalid notification channel' })
+        return
+      }
+    }
+
+    const updated = updateNotificationTaskById(params.id, body)
+    if (!updated) {
+      reply.status(404).send({ error: 'Notification task not found' })
+      return
+    }
+
+    reply.send(getNotificationTaskById(params.id))
+  })
+
+  api.delete('/api/settings/notification-tasks/:id', async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+
+    const identity = getRequestIdentity(request)
+    if (!identity?.role) {
+      reply.status(403).send({ error: 'Forbidden' })
+      return
+    }
+
+    const task = getNotificationTaskById(params.id)
+    if (!task) {
+      reply.status(404).send({ error: 'Notification task not found' })
+      return
+    }
+
+    const isOwnTask = task.owner.user_id === identity.userId
+    if (!isOwnTask) {
+      if (!isAdminLike(identity.role)) {
+        reply.status(403).send({ error: 'Forbidden' })
+        return
+      }
+      const denied = assertCanManageNotificationTask(identity.role, task.owner.role)
+      if (denied) {
+        reply.status(403).send({ error: denied })
+        return
+      }
+    }
+
+    deleteNotificationTaskById(params.id)
+    reply.status(204).send()
   })
 
   // --- Feed fetch schedule settings ---

@@ -11,6 +11,7 @@ import { ImageStorageSettings } from '../components/settings/image-storage-setti
 import { GeneralTab } from './settings/general-tab'
 const AppearanceTab = lazy(() => import('./settings/appearance-tab').then(m => ({ default: m.AppearanceTab })))
 import { IntegrationTab } from './settings/integration-tab'
+import { NotificationsTab } from './settings/notifications-tab'
 import { DataTab } from './settings/data-tab'
 import { MembersTab } from './settings/members-tab'
 import { Separator } from '@/components/ui/separator'
@@ -18,7 +19,7 @@ import { fetcher } from '../lib/fetcher'
 
 declare const __APP_VERSION__: string
 
-const BASE_TABS = ['general', 'appearance', 'integration', 'plugins', 'security', 'data', 'viewer', 'about'] as const
+const BASE_TABS = ['general', 'appearance', 'integration', 'notifications', 'plugins', 'security', 'data', 'viewer', 'about'] as const
 
 export function SettingsPage() {
   const { tab: tabParam } = useParams<{ tab?: string }>()
@@ -97,6 +98,10 @@ export function SettingsPage() {
 
           {tab === 'integration' && (
             <IntegrationTab />
+          )}
+
+          {tab === 'notifications' && (
+            <NotificationsTab />
           )}
 
           {tab === 'security' && (

@@ -1,5 +1,6 @@
 import { getDb, runNamed } from './connection.js'
 import { getCurrentUserId } from '../identity.js'
+import type { UserRole } from '../identity.js'
 
 function resolveUserId(userId?: number | null): number | null {
   return userId ?? getCurrentUserId()
@@ -58,6 +59,30 @@ export interface NotificationArticleRecord {
   notification_media_json: string | null
 }
 
+export interface NotificationTaskRecord {
+  id: number
+  owner: {
+    user_id: number | null
+    email: string | null
+    role: UserRole | null
+  }
+  feed: {
+    id: number
+    name: string
+  }
+  enabled: number
+  translate_enabled: number
+  check_interval_minutes: number
+  next_check_at: string | null
+  last_checked_at: string | null
+  channels: Array<{
+    id: number
+    name: string
+    enabled: number
+  }>
+  last_error: string | null
+}
+
 function scopeWhere(column: string, userId: number | null): { clause: string; params: unknown[] } {
   return userId == null
     ? { clause: `${column} IS NULL`, params: [] }
@@ -70,6 +95,27 @@ function toIsoNoMillis(date: Date): string {
 
 function nextCheckAtFromMinutes(minutes: number): string {
   return toIsoNoMillis(new Date(Date.now() + minutes * 60_000))
+}
+
+function getFeedNotificationRuleByRuleId(ruleId: number): FeedNotificationRule | undefined {
+  return getDb().prepare(`
+    SELECT *
+    FROM feed_notification_rules
+    WHERE id = ?
+  `).get(ruleId) as FeedNotificationRule | undefined
+}
+
+function getFeedNotificationRuleRecordByRuleId(ruleId: number): FeedNotificationRuleRecord | null {
+  const rule = getFeedNotificationRuleByRuleId(ruleId)
+  if (!rule) return null
+  const rows = getDb().prepare(`
+    SELECT channel_id
+    FROM feed_notification_rule_channels
+    WHERE rule_id = ?
+    ORDER BY channel_id
+  `).all(rule.id) as Array<{ channel_id: number }>
+
+  return { ...rule, channel_ids: rows.map(row => row.channel_id) }
 }
 
 export function listNotificationChannels(userId?: number | null): NotificationChannel[] {
@@ -152,6 +198,14 @@ export function deleteNotificationChannel(id: number, userId?: number | null): b
     ? getDb().prepare('DELETE FROM notification_channels WHERE id = ? AND user_id IS NULL').run(id)
     : getDb().prepare('DELETE FROM notification_channels WHERE id = ? AND user_id = ?').run(id, scopedUserId)
   return result.changes > 0
+}
+
+export function getNotificationChannelByIdAnyUser(id: number): NotificationChannel | undefined {
+  return getDb().prepare(`
+    SELECT *
+    FROM notification_channels
+    WHERE id = ?
+  `).get(id) as NotificationChannel | undefined
 }
 
 function latestFeedArticleId(feedId: number): number | null {
@@ -273,6 +327,178 @@ export function deleteFeedNotificationRule(feedId: number, userId?: number | nul
     WHERE feed_id = ?
       AND ${scope.clause}
   `).run(feedId, ...scope.params)
+  return result.changes > 0
+}
+
+export function listNotificationTasks(userId?: number | null): NotificationTaskRecord[] {
+  const scopedUserId = userId === undefined ? getCurrentUserId() : userId
+  const where = scopedUserId == null ? '' : 'WHERE r.user_id = ?'
+  const rows = getDb().prepare(`
+    SELECT
+      r.id,
+      r.user_id,
+      u.email AS owner_email,
+      u.role AS owner_role,
+      r.feed_id,
+      f.name AS feed_name,
+      r.enabled,
+      r.translate_enabled,
+      r.check_interval_minutes,
+      r.next_check_at,
+      r.last_checked_at,
+      MAX(NULLIF(rc.last_error, '')) AS last_error
+    FROM feed_notification_rules r
+    JOIN feeds f ON f.id = r.feed_id
+    LEFT JOIN users u ON u.id = r.user_id
+    LEFT JOIN feed_notification_rule_channels rc ON rc.rule_id = r.id
+    ${where}
+    GROUP BY
+      r.id,
+      r.user_id,
+      u.email,
+      u.role,
+      r.feed_id,
+      f.name,
+      r.enabled,
+      r.translate_enabled,
+      r.check_interval_minutes,
+      r.next_check_at,
+      r.last_checked_at
+    ORDER BY
+      COALESCE(lower(u.email), ''),
+      lower(f.name),
+      r.id
+  `).all(...(scopedUserId == null ? [] : [scopedUserId])) as Array<{
+    id: number
+    user_id: number | null
+    owner_email: string | null
+    owner_role: UserRole | null
+    feed_id: number
+    feed_name: string
+    enabled: number
+    translate_enabled: number
+    check_interval_minutes: number
+    next_check_at: string | null
+    last_checked_at: string | null
+    last_error: string | null
+  }>
+
+  if (rows.length === 0) return []
+
+  const ruleIds = rows.map(row => row.id)
+  const placeholders = ruleIds.map(() => '?').join(', ')
+  const channelRows = getDb().prepare(`
+    SELECT
+      rc.rule_id,
+      c.id,
+      c.name,
+      c.enabled
+    FROM feed_notification_rule_channels rc
+    JOIN notification_channels c ON c.id = rc.channel_id
+    WHERE rc.rule_id IN (${placeholders})
+    ORDER BY rc.rule_id ASC, c.id ASC
+  `).all(...ruleIds) as Array<{ rule_id: number; id: number; name: string; enabled: number }>
+
+  const channelsByRule = new Map<number, NotificationTaskRecord['channels']>()
+  for (const row of channelRows) {
+    const existing = channelsByRule.get(row.rule_id) ?? []
+    existing.push({ id: row.id, name: row.name, enabled: row.enabled })
+    channelsByRule.set(row.rule_id, existing)
+  }
+
+  return rows.map(row => ({
+    id: row.id,
+    owner: {
+      user_id: row.user_id,
+      email: row.owner_email,
+      role: row.owner_role,
+    },
+    feed: {
+      id: row.feed_id,
+      name: row.feed_name,
+    },
+    enabled: row.enabled,
+    translate_enabled: row.translate_enabled,
+    check_interval_minutes: row.check_interval_minutes,
+    next_check_at: row.next_check_at,
+    last_checked_at: row.last_checked_at,
+    channels: channelsByRule.get(row.id) ?? [],
+    last_error: row.last_error,
+  }))
+}
+
+export function getNotificationTaskById(ruleId: number): NotificationTaskRecord | null {
+  const tasks = listNotificationTasks(null)
+  return tasks.find(task => task.id === ruleId) ?? null
+}
+
+export function updateNotificationTaskById(
+  ruleId: number,
+  data: Partial<{ enabled: boolean; translate_enabled: boolean; check_interval_minutes: number; channel_ids: number[] }>,
+): FeedNotificationRuleRecord | null {
+  return getDb().transaction(() => {
+    const existing = getFeedNotificationRuleRecordByRuleId(ruleId)
+    if (!existing) return null
+
+    const nextEnabled = data.enabled ?? (existing.enabled === 1)
+    const nextTranslateEnabled = data.translate_enabled ?? (existing.translate_enabled === 1)
+    const nextCheckInterval = data.check_interval_minutes ?? existing.check_interval_minutes
+    const nextCheckAt = nextEnabled ? nextCheckAtFromMinutes(nextCheckInterval) : null
+
+    runNamed(`
+      UPDATE feed_notification_rules
+      SET enabled = @enabled,
+          translate_enabled = @translate_enabled,
+          check_interval_minutes = @check_interval_minutes,
+          next_check_at = @next_check_at,
+          updated_at = datetime('now')
+      WHERE id = @id
+    `, {
+      id: ruleId,
+      enabled: nextEnabled ? 1 : 0,
+      translate_enabled: nextTranslateEnabled ? 1 : 0,
+      check_interval_minutes: nextCheckInterval,
+      next_check_at: nextCheckAt,
+    })
+
+    if (data.channel_ids !== undefined) {
+      const desired = new Set(data.channel_ids)
+      const existingIds = new Set(existing.channel_ids)
+
+      for (const channelId of existing.channel_ids) {
+        if (!desired.has(channelId)) {
+          getDb().prepare(`
+            DELETE FROM feed_notification_rule_channels
+            WHERE rule_id = ? AND channel_id = ?
+          `).run(ruleId, channelId)
+        }
+      }
+
+      const initialLastArticleId = latestFeedArticleId(existing.feed_id)
+      for (const channelId of desired) {
+        if (existingIds.has(channelId)) continue
+        runNamed(`
+          INSERT INTO feed_notification_rule_channels (
+            rule_id, channel_id, last_notified_article_id, last_notified_at, last_error, updated_at
+          )
+          VALUES (@rule_id, @channel_id, @last_notified_article_id, NULL, NULL, datetime('now'))
+        `, {
+          rule_id: ruleId,
+          channel_id: channelId,
+          last_notified_article_id: initialLastArticleId,
+        })
+      }
+    }
+
+    return getFeedNotificationRuleRecordByRuleId(ruleId)
+  })()
+}
+
+export function deleteNotificationTaskById(ruleId: number): boolean {
+  const result = getDb().prepare(`
+    DELETE FROM feed_notification_rules
+    WHERE id = ?
+  `).run(ruleId)
   return result.changes > 0
 }
 
