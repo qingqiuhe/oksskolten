@@ -116,6 +116,12 @@ vi.mock('../ui/skeleton', () => ({
   Skeleton: ({ className }: { className?: string }) => <div data-testid="skeleton" className={`animate-pulse ${className ?? ''}`} />,
 }))
 
+vi.mock('../chat/list-chat-fab', () => ({
+  ListChatFab: ({ listLabel, articleIds }: { listLabel: string; articleIds: number[] }) => (
+    <div data-testid="list-chat-fab" data-list-label={listLabel} data-article-count={articleIds.length} />
+  ),
+}))
+
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
 }))
@@ -270,6 +276,30 @@ describe('ArticleList', () => {
     renderArticleList()
     expect(screen.getByText('First Article')).toBeTruthy()
     expect(screen.getByText('Second Article')).toBeTruthy()
+  })
+
+  it('renders list chat fab when articles are present', () => {
+    swrInfiniteReturn = {
+      data: [{
+        articles: [
+          makeArticle({ id: 1, title: 'First Article' }),
+          makeArticle({ id: 2, title: 'Second Article' }),
+        ],
+        total: 2,
+        has_more: false,
+      }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList()
+
+    expect(screen.getByTestId('list-chat-fab').getAttribute('data-article-count')).toBe('2')
+    expect(screen.queryByText('Chat This List')).toBeNull()
   })
 
   it('passes social feed view type to cards', () => {

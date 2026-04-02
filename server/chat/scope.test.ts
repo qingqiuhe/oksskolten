@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
-import { createFeed, insertArticle } from '../db.js'
+import { createFeed, insertArticle, getDb } from '../db.js'
 import {
   MAX_SCOPE_ARTICLES,
   CHAT_SCOPE_OUT_OF_SCOPE_ERROR,
@@ -52,6 +52,38 @@ describe('normalizeChatScope', () => {
     expect(scope.count_scoped).toBe(MAX_SCOPE_ARTICLES)
     expect(scope.article_ids).toHaveLength(MAX_SCOPE_ARTICLES)
     expect(scope.source_filters).toEqual({ feed_id: feed.id, unread: true })
+  })
+
+  it('supports time-window filters using published_at with fetched_at fallback', () => {
+    const feed = seedFeed()
+    insertArticle({
+      feed_id: feed.id,
+      title: 'Too old',
+      url: 'https://example.com/old',
+      published_at: '2025-01-01T00:00:00Z',
+    })
+    const fallbackId = insertArticle({
+      feed_id: feed.id,
+      title: 'Fetched recently',
+      url: 'https://example.com/fallback',
+      published_at: null as unknown as string,
+    })
+    getDb().prepare("UPDATE articles SET fetched_at = '2025-01-10T08:00:00Z' WHERE id = ?").run(fallbackId)
+
+    const scope = normalizeChatScope({
+      scope: {
+        type: 'list',
+        mode: 'filtered_list',
+        label: 'Recent in feed',
+        source_filters: { feed_id: feed.id, since: '2025-01-10T00:00:00Z' },
+      },
+    })
+
+    expect(scope.type).toBe('list')
+    if (scope.type !== 'list') throw new Error('expected list scope')
+    expect(scope.count_total).toBe(1)
+    expect(scope.article_ids).toEqual([fallbackId])
+    expect(scope.source_filters).toEqual({ feed_id: feed.id, since: '2025-01-10T00:00:00Z' })
   })
 })
 

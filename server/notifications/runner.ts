@@ -91,7 +91,7 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
         articles: pending.articles.map(article => ({
           title: article.title,
           url: article.url,
-          displayTime: formatArticleTime(article.published_at ?? article.fetched_at),
+          displayTime: formatArticleTime(article.published_at ?? article.fetched_at, channel.timezone),
           bodyText: article.notification_body_text,
           bodyTextTranslated: translationCache.get(article.id) ?? null,
           mediaUrls: article.notification_media_json ? JSON.parse(article.notification_media_json) as string[] : [],

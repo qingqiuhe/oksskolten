@@ -120,6 +120,30 @@ describe('getArticles read filter', () => {
     expect(socialArticles.articles[0].feed_view_type).toBe('social')
     expect(forcedArticles.articles[0].feed_view_type).toBe('social')
   })
+
+  it('filters by since using published_at with fetched_at fallback', () => {
+    const feed = seedFeed()
+    seedArticle(feed.id, {
+      url: 'https://example.com/old',
+      published_at: '2025-01-01T00:00:00Z',
+    })
+    const fallbackId = seedArticle(feed.id, {
+      url: 'https://example.com/fallback',
+      published_at: null as unknown as string,
+    })
+    getDb().prepare("UPDATE articles SET fetched_at = '2025-01-10T08:00:00Z' WHERE id = ?").run(fallbackId)
+
+    const { articles, total } = getArticles({
+      feedId: feed.id,
+      since: '2025-01-10T00:00:00Z',
+      limit: 100,
+      offset: 0,
+    })
+
+    expect(total).toBe(1)
+    expect(articles).toHaveLength(1)
+    expect(articles[0].url).toBe('https://example.com/fallback')
+  })
 })
 
 // --- searchArticles ---

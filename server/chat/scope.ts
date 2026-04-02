@@ -69,8 +69,10 @@ function buildFilteredListScope(scope: Extract<IncomingListChatScope, { mode: 'f
   const bookmarked = filters.bookmarked === true
   const liked = filters.liked === true
   const read = filters.read === true
+  const since = filters.since
+  const until = filters.until
   const isClipFeed = feedId != null && getClipFeed(userId)?.id === feedId
-  const smartFloor = !filters.no_floor && !isClipFeed && !unread && !bookmarked && !liked && !read
+  const smartFloor = !filters.no_floor && !filters.since && !filters.until && !isClipFeed && !unread && !bookmarked && !liked && !read
 
   const { articles, total } = getArticles({
     feedId,
@@ -80,6 +82,8 @@ function buildFilteredListScope(scope: Extract<IncomingListChatScope, { mode: 'f
     bookmarked,
     liked,
     read,
+    since,
+    until,
     limit: MAX_SCOPE_ARTICLES,
     offset: 0,
     smartFloor,
