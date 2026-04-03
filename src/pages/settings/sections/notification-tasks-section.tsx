@@ -3,30 +3,22 @@ import useSWR from 'swr'
 import { BellRing, Pencil, Trash2 } from 'lucide-react'
 import { apiDelete, apiPatch, fetcher } from '../../../lib/fetcher'
 import { useI18n } from '../../../lib/i18n'
-import { FormField } from '@/components/ui/form-field'
-import { Input } from '@/components/ui/input'
 import type { NotificationChannel, NotificationTaskRecord } from '../../../../shared/types'
 import { formatLocalDateTime } from '../../../lib/dateTime'
+import {
+  NotificationRuleEditor,
+  type NotificationRuleFormState,
+  validateNotificationRuleForm,
+} from '../../../components/notifications/notification-rule-editor'
 
 type NotificationTaskScope = 'self' | 'all'
-
-interface TaskFormState {
-  id: number
-  enabled: boolean
-  delivery_mode: 'immediate' | 'digest'
-  content_mode: 'title_only' | 'title_and_body'
-  translate_enabled: boolean
-  check_interval_minutes: string
-  max_articles_per_message: string
-  channel_ids: number[]
-}
 
 export function NotificationTasksSection() {
   const { t } = useI18n()
   const { data: me } = useSWR<{ id: number; role?: 'owner' | 'admin' | 'member' }>('/api/me', fetcher, { revalidateOnFocus: false })
   const isAdminLike = me?.role === 'owner' || me?.role === 'admin'
   const [scope, setScope] = useState<NotificationTaskScope>('self')
-  const [form, setForm] = useState<TaskFormState | null>(null)
+  const [form, setForm] = useState<(NotificationRuleFormState & { id: number }) | null>(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -77,6 +69,8 @@ export function NotificationTasksSection() {
       translate_enabled: task.translate_enabled === 1,
       check_interval_minutes: String(task.check_interval_minutes),
       max_articles_per_message: String(task.max_articles_per_message),
+      max_title_chars: String(task.max_title_chars),
+      max_body_chars: String(task.max_body_chars),
       channel_ids: task.channels.map(channel => channel.id),
     })
     setMessage(null)
@@ -116,14 +110,9 @@ export function NotificationTasksSection() {
     if (!form || saving) return
 
     const ownTask = canEditChannels(task)
-    const interval = Number(form.check_interval_minutes)
-    const maxArticles = Number(form.max_articles_per_message)
-    if (!Number.isInteger(interval) || interval < 5 || interval > 1440) {
-      setMessage({ type: 'error', text: t('notifications.taskIntervalInvalid') })
-      return
-    }
-    if (!Number.isInteger(maxArticles) || maxArticles < 1 || maxArticles > 20) {
-      setMessage({ type: 'error', text: t('notifications.maxArticlesInvalid') })
+    const parsed = validateNotificationRuleForm(form, t)
+    if (!parsed.values) {
+      setMessage({ type: 'error', text: parsed.error ?? t('modal.genericError') })
       return
     }
 
@@ -132,10 +121,10 @@ export function NotificationTasksSection() {
       delivery_mode: form.delivery_mode,
       content_mode: form.content_mode,
       translate_enabled: form.translate_enabled,
-      max_articles_per_message: maxArticles,
-    }
-    if (form.delivery_mode === 'digest') {
-      payload.check_interval_minutes = interval
+      check_interval_minutes: parsed.values.check_interval_minutes,
+      max_articles_per_message: parsed.values.max_articles_per_message,
+      max_title_chars: parsed.values.max_title_chars,
+      max_body_chars: parsed.values.max_body_chars,
     }
     if (ownTask) {
       payload.channel_ids = form.channel_ids
@@ -217,6 +206,7 @@ export function NotificationTasksSection() {
                         ? <p>{t('notifications.taskInterval')}: {task.check_interval_minutes}{t('notifications.taskMinutesSuffix')}</p>
                         : <p>{t('notifications.taskNextRetry')}: {formatLocalDateTime(task.next_check_at, t('notifications.neverChecked'))}</p>}
                       <p>{t('notifications.taskMaxArticles')}: {task.max_articles_per_message}</p>
+                      <p>{t('notifications.taskLengthSummary', { title: String(task.max_title_chars), body: String(task.max_body_chars) })}</p>
                       <p>{t('notifications.taskLastCheck')}: {formatLocalDateTime(task.last_checked_at, t('notifications.neverChecked'))}</p>
                       <p>{t('notifications.taskChannels')}: {task.channels.length > 0 ? task.channels.map(channel => channel.name).join(' / ') : t('notifications.noChannelsBound')}</p>
                     </div>
@@ -268,140 +258,15 @@ export function NotificationTasksSection() {
                       </button>
                     </div>
 
-                    <label className="flex items-center gap-2 text-sm text-text cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={form.enabled}
-                        onChange={e => setForm({ ...form, enabled: e.target.checked })}
-                        className="accent-accent"
-                      />
-                      {t('notifications.ruleEnabled')}
-                    </label>
-
-                    <div>
-                      <p className="text-xs text-muted mb-2">{t('notifications.feedDialogMode')}</p>
-                      <div className="inline-flex rounded-lg border border-border bg-bg-card p-1">
-                        <button
-                          type="button"
-                          onClick={() => setForm({ ...form, delivery_mode: 'immediate' })}
-                          className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
-                            form.delivery_mode === 'immediate' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
-                          }`}
-                        >
-                          {t('notifications.deliveryModeImmediate')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setForm({ ...form, delivery_mode: 'digest' })}
-                          className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
-                            form.delivery_mode === 'digest' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
-                          }`}
-                        >
-                          {t('notifications.deliveryModeDigest')}
-                        </button>
-                      </div>
-                      <p className="mt-2 text-xs text-muted">
-                        {form.delivery_mode === 'immediate'
-                          ? t('notifications.taskImmediateHint')
-                          : t('notifications.taskEditHint')}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-xs text-muted mb-2">{t('notifications.feedDialogContentMode')}</p>
-                      <div className="inline-flex rounded-lg border border-border bg-bg-card p-1">
-                        <button
-                          type="button"
-                          onClick={() => setForm({ ...form, content_mode: 'title_only' })}
-                          className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
-                            form.content_mode === 'title_only' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
-                          }`}
-                        >
-                          {t('notifications.contentModeTitleOnly')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setForm({ ...form, content_mode: 'title_and_body' })}
-                          className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
-                            form.content_mode === 'title_and_body' ? 'bg-hover-sidebar text-text font-medium' : 'text-muted hover:text-text'
-                          }`}
-                        >
-                          {t('notifications.contentModeTitleAndBody')}
-                        </button>
-                      </div>
-                      <p className="mt-2 text-xs text-muted">{t('notifications.feedDialogContentModeHint')}</p>
-                    </div>
-
-                    <label className="flex items-center gap-2 text-sm text-text cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={form.translate_enabled}
-                        onChange={e => setForm({ ...form, translate_enabled: e.target.checked })}
-                        className="accent-accent"
-                      />
-                      {t('notifications.translateEnabled')}
-                    </label>
-
-                    {form.delivery_mode === 'digest' && (
-                      <FormField label={t('notifications.feedDialogInterval')} compact hint={t('notifications.taskEditHint')}>
-                        <Input
-                          type="number"
-                          min={5}
-                          max={1440}
-                          step={5}
-                          value={form.check_interval_minutes}
-                          onChange={e => setForm({ ...form, check_interval_minutes: e.target.value })}
-                        />
-                      </FormField>
-                    )}
-
-                    <FormField label={t('notifications.maxArticlesPerMessage')} compact hint={t('notifications.maxArticlesPerMessageHint')}>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={20}
-                        step={1}
-                        value={form.max_articles_per_message}
-                        onChange={e => setForm({ ...form, max_articles_per_message: e.target.value })}
-                      />
-                    </FormField>
-
-                    <div>
-                      <p className="text-xs text-muted mb-2">{t('notifications.feedDialogChannels')}</p>
-                      {allowChannelEdit ? (
-                        availableChannels.length === 0 ? (
-                          <div className="rounded-lg border border-dashed border-border px-3 py-4 text-sm text-muted">
-                            {t('notifications.feedDialogNoChannels')}
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {availableChannels.map(channel => (
-                              <label key={channel.id} className="flex items-start gap-2 rounded-lg border border-border bg-bg-card px-3 py-2 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={form.channel_ids.includes(channel.id)}
-                                  onChange={() => {
-                                    const selected = form.channel_ids.includes(channel.id)
-                                      ? form.channel_ids.filter(id => id !== channel.id)
-                                      : [...form.channel_ids, channel.id]
-                                    setForm({ ...form, channel_ids: selected })
-                                  }}
-                                  className="mt-0.5 accent-accent"
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-sm text-text truncate">{channel.name}</div>
-                                  <div className="text-xs text-muted truncate">{channel.webhook_url}</div>
-                                </div>
-                              </label>
-                            ))}
-                          </div>
-                        )
-                      ) : (
-                        <div className="rounded-lg border border-border bg-bg-card px-3 py-3 text-xs text-muted">
-                          {task.channels.length > 0 ? task.channels.map(channel => channel.name).join(' / ') : t('notifications.noChannelsBound')}
-                        </div>
-                      )}
-                    </div>
+                    <NotificationRuleEditor
+                      feedName={task.feed.name}
+                      form={form}
+                      onChange={next => setForm({ ...next, id: task.id })}
+                      availableChannels={availableChannels}
+                      allowChannelEdit={allowChannelEdit}
+                      readOnlyChannelsText={task.channels.length > 0 ? task.channels.map(channel => channel.name).join(' / ') : t('notifications.noChannelsBound')}
+                      readOnlyChannelsHint={!allowChannelEdit ? t('notifications.crossUserChannelReadonly') : null}
+                    />
 
                     <div className="flex items-center gap-2">
                       <button
@@ -412,9 +277,6 @@ export function NotificationTasksSection() {
                       >
                         {saving ? '...' : t('settings.save')}
                       </button>
-                      {!allowChannelEdit && (
-                        <span className="text-xs text-muted">{t('notifications.crossUserChannelReadonly')}</span>
-                      )}
                     </div>
                   </div>
                 )}

@@ -17,8 +17,8 @@ ${'A'.repeat(1200)}`,
 
     expect(preview.notification_body_text).toContain('Hello world')
     expect(preview.notification_body_text).not.toContain('![')
-    expect(preview.notification_body_text!.length).toBeLessThanOrEqual(1003)
-    expect(preview.notification_body_text!.endsWith('...')).toBe(true)
+    expect(Array.from(preview.notification_body_text!).length).toBeLessThanOrEqual(1000)
+    expect(preview.notification_body_text!.endsWith('…')).toBe(true)
   })
 
   it('extracts images in order, including video posters, and falls back to og image', () => {

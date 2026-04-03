@@ -14,6 +14,7 @@ import { logger } from '../logger.js'
 import { sendFeishuDigestMessage } from './feishu.js'
 import { translateNotificationBodyText } from './translation.js'
 import { DEFAULT_NOTIFICATION_TIMEZONE, parseNotificationTimezoneOffsetMinutes } from '../../shared/notification-timezone.js'
+import { truncateNotificationText } from '../../shared/notification-message.js'
 
 const log = logger.child('notifications')
 
@@ -55,7 +56,8 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
   const translationCache = new Map<number, string | null>()
   if (rule.content_mode === 'title_and_body' && rule.translate_enabled === 1 && pendingForTranslation) {
     await Promise.all(pendingForTranslation.articles.map(async (article) => {
-      if (!article.notification_body_text) {
+      const truncatedBody = truncateNotificationText(article.notification_body_text, rule.max_body_chars)
+      if (!truncatedBody) {
         translationCache.set(article.id, null)
         return
       }
@@ -63,7 +65,10 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
       try {
         translationCache.set(
           article.id,
-          await translateNotificationBodyText(article.notification_body_text, rule.user_id),
+          truncateNotificationText(
+            await translateNotificationBodyText(truncatedBody, rule.user_id),
+            rule.max_body_chars,
+          ),
         )
       } catch (err) {
         translationCache.set(article.id, null)
@@ -90,10 +95,10 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
         restCount: Math.max(0, pending.total - pending.articles.length),
         contentMode: rule.content_mode,
         articles: pending.articles.map(article => ({
-          title: article.title,
+          title: truncateNotificationText(article.title, rule.max_title_chars) ?? '',
           url: article.url,
           displayTime: formatArticleTime(article.published_at ?? article.fetched_at, channel.timezone),
-          bodyText: article.notification_body_text,
+          bodyText: truncateNotificationText(article.notification_body_text, rule.max_body_chars),
           bodyTextTranslated: translationCache.get(article.id) ?? null,
           mediaUrls: article.notification_media_json ? JSON.parse(article.notification_media_json) as string[] : [],
         })),

@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom'
+import { DEFAULT_NOTIFICATION_MAX_BODY_CHARS, truncateNotificationText } from '../../shared/notification-message.js'
 
-const MAX_NOTIFICATION_BODY_LEN = 1000
 const MAX_NOTIFICATION_MEDIA = 3
 const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\(([^)\s]+(?:\s+"[^"]*")?)\)/g
 const MARKDOWN_LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/g
@@ -43,9 +43,7 @@ function normalizeBodyText(text: string | null): string | null {
   if (!text) return null
   const normalized = text.replace(/\s+/g, ' ').trim()
   if (!normalized) return null
-  return normalized.length > MAX_NOTIFICATION_BODY_LEN
-    ? `${normalized.slice(0, MAX_NOTIFICATION_BODY_LEN).trim()}...`
-    : normalized
+  return truncateNotificationText(normalized, DEFAULT_NOTIFICATION_MAX_BODY_CHARS)
 }
 
 function markdownImagesToHtml(content: string): string {

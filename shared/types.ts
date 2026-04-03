@@ -166,6 +166,8 @@ export interface FeedNotificationRule {
   translate_enabled: number
   check_interval_minutes: number
   max_articles_per_message: number
+  max_title_chars: number
+  max_body_chars: number
   next_check_at: string | null
   last_checked_at: string | null
   created_at: string
@@ -201,6 +203,8 @@ export interface NotificationTaskRecord {
   translate_enabled: number
   check_interval_minutes: number
   max_articles_per_message: number
+  max_title_chars: number
+  max_body_chars: number
   next_check_at: string | null
   last_checked_at: string | null
   channels: NotificationTaskChannel[]

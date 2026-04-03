@@ -198,6 +198,8 @@ describe('notification rule endpoints', () => {
     expect(res.json().content_mode).toBe('title_and_body')
     expect(res.json().translate_enabled).toBe(0)
     expect(res.json().max_articles_per_message).toBe(5)
+    expect(res.json().max_title_chars).toBe(100)
+    expect(res.json().max_body_chars).toBe(1000)
     expect(res.json().channel_ids).toEqual([])
   })
 
@@ -222,6 +224,8 @@ describe('notification rule endpoints', () => {
         translate_enabled: true,
         check_interval_minutes: 30,
         max_articles_per_message: 3,
+        max_title_chars: 120,
+        max_body_chars: 800,
         channel_ids: [channel.id],
       },
     })
@@ -231,6 +235,8 @@ describe('notification rule endpoints', () => {
     expect(putRes.json().content_mode).toBe('title_only')
     expect(putRes.json().translate_enabled).toBe(1)
     expect(putRes.json().max_articles_per_message).toBe(3)
+    expect(putRes.json().max_title_chars).toBe(120)
+    expect(putRes.json().max_body_chars).toBe(800)
     expect(putRes.json().channel_ids).toEqual([channel.id])
 
     const getRes = await app.inject({
@@ -242,6 +248,8 @@ describe('notification rule endpoints', () => {
     expect(getRes.json().content_mode).toBe('title_only')
     expect(getRes.json().translate_enabled).toBe(1)
     expect(getRes.json().max_articles_per_message).toBe(3)
+    expect(getRes.json().max_title_chars).toBe(120)
+    expect(getRes.json().max_body_chars).toBe(800)
     expect(getRes.json().channel_ids).toEqual([channel.id])
   })
 })

@@ -48,6 +48,8 @@ describe('NotificationTasksSection', () => {
             translate_enabled: 0,
             check_interval_minutes: 15,
             max_articles_per_message: 5,
+            max_title_chars: 100,
+            max_body_chars: 1000,
             next_check_at: null,
             last_checked_at: null,
             channels: [{ id: 101, name: 'My Channel', enabled: 1 }],
@@ -68,6 +70,8 @@ describe('NotificationTasksSection', () => {
             translate_enabled: 0,
             check_interval_minutes: 15,
             max_articles_per_message: 5,
+            max_title_chars: 100,
+            max_body_chars: 1000,
             next_check_at: null,
             last_checked_at: null,
             channels: [{ id: 101, name: 'My Channel', enabled: 1 }],
@@ -83,6 +87,8 @@ describe('NotificationTasksSection', () => {
             translate_enabled: 1,
             check_interval_minutes: 30,
             max_articles_per_message: 3,
+            max_title_chars: 80,
+            max_body_chars: 600,
             next_check_at: null,
             last_checked_at: null,
             channels: [{ id: 202, name: 'Member Channel', enabled: 1 }],
@@ -129,6 +135,8 @@ describe('NotificationTasksSection', () => {
         translate_enabled: false,
         check_interval_minutes: 15,
         max_articles_per_message: 5,
+        max_title_chars: 100,
+        max_body_chars: 1000,
         channel_ids: [101],
       })
     })
@@ -160,6 +168,8 @@ describe('NotificationTasksSection', () => {
           translate_enabled: 0,
           check_interval_minutes: 15,
           max_articles_per_message: 5,
+          max_title_chars: 100,
+          max_body_chars: 1000,
           next_check_at: '2026-04-02T01:23:45Z',
           last_checked_at: '2026-04-02 01:23:45',
           channels: [{ id: 101, name: 'My Channel', enabled: 1 }],
@@ -185,10 +195,12 @@ describe('NotificationTasksSection', () => {
 
     await waitFor(() => expect(screen.getByText(/Content: Title and body/)).toBeTruthy())
     expect(screen.getByText(/Max articles: 5/)).toBeTruthy()
+    expect(screen.getByText(/Title 100 \/ Body 1000/)).toBeTruthy()
 
     const editButtons = screen.getAllByRole('button', { name: 'Edit task' })
     await user.click(editButtons[0])
     await user.click(screen.getByText('Title only'))
+    await user.click(screen.getByRole('button', { name: 'Advanced settings' }))
     const maxInput = screen.getAllByRole('spinbutton').find(node => (node as HTMLInputElement).value === '5')
     expect(maxInput).toBeTruthy()
     await user.clear(maxInput as HTMLInputElement)
@@ -203,6 +215,8 @@ describe('NotificationTasksSection', () => {
         translate_enabled: false,
         check_interval_minutes: 15,
         max_articles_per_message: 2,
+        max_title_chars: 100,
+        max_body_chars: 1000,
         channel_ids: [101],
       })
     })

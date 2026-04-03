@@ -30,6 +30,20 @@ import { fetchSingleFeed, discoverRssUrl } from '../fetcher.js'
 import { queryRssBridge, inferCssSelectorBridge } from '../rss-bridge.js'
 import { parseOpml, generateOpml } from '../opml.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
+import {
+  DEFAULT_NOTIFICATION_CHECK_INTERVAL_MINUTES,
+  DEFAULT_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE,
+  DEFAULT_NOTIFICATION_MAX_BODY_CHARS,
+  DEFAULT_NOTIFICATION_MAX_TITLE_CHARS,
+  MAX_NOTIFICATION_CHECK_INTERVAL_MINUTES,
+  MAX_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE,
+  MAX_NOTIFICATION_MAX_BODY_CHARS,
+  MAX_NOTIFICATION_MAX_TITLE_CHARS,
+  MIN_NOTIFICATION_CHECK_INTERVAL_MINUTES,
+  MIN_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE,
+  MIN_NOTIFICATION_MAX_BODY_CHARS,
+  MIN_NOTIFICATION_MAX_TITLE_CHARS,
+} from '../../shared/notification-message.js'
 
 const httpsUrl = z
   .string({ error: 'url is required' })
@@ -59,8 +73,10 @@ const FeedNotificationRuleBody = z.object({
   delivery_mode: z.enum(['immediate', 'digest']).optional(),
   content_mode: z.enum(['title_only', 'title_and_body']).optional(),
   translate_enabled: z.boolean(),
-  check_interval_minutes: z.number().int().min(5).max(1440).optional(),
-  max_articles_per_message: z.number().int().min(1).max(20).optional(),
+  check_interval_minutes: z.number().int().min(MIN_NOTIFICATION_CHECK_INTERVAL_MINUTES).max(MAX_NOTIFICATION_CHECK_INTERVAL_MINUTES).optional(),
+  max_articles_per_message: z.number().int().min(MIN_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE).max(MAX_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE).optional(),
+  max_title_chars: z.number().int().min(MIN_NOTIFICATION_MAX_TITLE_CHARS).max(MAX_NOTIFICATION_MAX_TITLE_CHARS).optional(),
+  max_body_chars: z.number().int().min(MIN_NOTIFICATION_MAX_BODY_CHARS).max(MAX_NOTIFICATION_MAX_BODY_CHARS).optional(),
   channel_ids: z.array(z.number().int()).max(32),
 })
 
@@ -221,8 +237,10 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       delivery_mode: 'immediate',
       content_mode: 'title_and_body',
       translate_enabled: 0,
-      check_interval_minutes: 60,
-      max_articles_per_message: 5,
+      check_interval_minutes: DEFAULT_NOTIFICATION_CHECK_INTERVAL_MINUTES,
+      max_articles_per_message: DEFAULT_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE,
+      max_title_chars: DEFAULT_NOTIFICATION_MAX_TITLE_CHARS,
+      max_body_chars: DEFAULT_NOTIFICATION_MAX_BODY_CHARS,
       next_check_at: null,
       last_checked_at: null,
       created_at: null,

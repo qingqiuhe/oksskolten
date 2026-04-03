@@ -550,6 +550,8 @@ describe('notification task settings endpoints', () => {
     expect(res.json().scope).toBe('self')
     expect(res.json().tasks).toHaveLength(1)
     expect(res.json().tasks[0].feed.name).toBe('My Feed')
+    expect(res.json().tasks[0].max_title_chars).toBe(100)
+    expect(res.json().tasks[0].max_body_chars).toBe(1000)
     expect(res.json().tasks[0].channels).toEqual([{ id: channelA.id, name: 'Mine', enabled: 1 }])
   })
 
@@ -601,6 +603,8 @@ describe('notification task settings endpoints', () => {
         check_interval_minutes: 45,
         content_mode: 'title_only',
         max_articles_per_message: 7,
+        max_title_chars: 140,
+        max_body_chars: 640,
       },
     })
     expect(updateMemberRes.statusCode).toBe(200)
@@ -608,6 +612,8 @@ describe('notification task settings endpoints', () => {
     expect(updateMemberRes.json().check_interval_minutes).toBe(45)
     expect(updateMemberRes.json().content_mode).toBe('title_only')
     expect(updateMemberRes.json().max_articles_per_message).toBe(7)
+    expect(updateMemberRes.json().max_title_chars).toBe(140)
+    expect(updateMemberRes.json().max_body_chars).toBe(640)
 
     const updateOwnerRes = await app.inject({
       method: 'PATCH',
@@ -717,6 +723,28 @@ describe('notification task settings endpoints', () => {
       headers: { ...json, ...member.headers },
       payload: {
         max_articles_per_message: 21,
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('rejects invalid max_title_chars on task updates', async () => {
+    const member = createAuthedUserWithId('member')
+    const feed = createFeed({ name: 'Title Feed', url: 'https://example.com/title-feed' }, member.userId)
+    const rule = upsertFeedNotificationRule(feed.id, {
+      enabled: true,
+      translate_enabled: false,
+      check_interval_minutes: 15,
+      channel_ids: [],
+    }, member.userId)
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/notification-tasks/${rule.id}`,
+      headers: { ...json, ...member.headers },
+      payload: {
+        max_title_chars: 301,
       },
     })
 

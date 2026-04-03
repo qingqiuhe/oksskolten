@@ -33,6 +33,16 @@ import {
   NOTIFICATION_TIMEZONE_OPTIONS,
   type NotificationTimezone,
 } from '../../shared/notification-timezone.js'
+import {
+  MAX_NOTIFICATION_CHECK_INTERVAL_MINUTES,
+  MAX_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE,
+  MAX_NOTIFICATION_MAX_BODY_CHARS,
+  MAX_NOTIFICATION_MAX_TITLE_CHARS,
+  MIN_NOTIFICATION_CHECK_INTERVAL_MINUTES,
+  MIN_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE,
+  MIN_NOTIFICATION_MAX_BODY_CHARS,
+  MIN_NOTIFICATION_MAX_TITLE_CHARS,
+} from '../../shared/notification-message.js'
 
 const ProfileBody = z.object({
   account_name: z.string().optional(),
@@ -68,8 +78,10 @@ const NotificationTaskPatchBody = z.object({
   delivery_mode: z.enum(['immediate', 'digest']).optional(),
   content_mode: z.enum(['title_only', 'title_and_body']).optional(),
   translate_enabled: z.boolean().optional(),
-  check_interval_minutes: z.number().int().min(5).max(1440).optional(),
-  max_articles_per_message: z.number().int().min(1).max(20).optional(),
+  check_interval_minutes: z.number().int().min(MIN_NOTIFICATION_CHECK_INTERVAL_MINUTES).max(MAX_NOTIFICATION_CHECK_INTERVAL_MINUTES).optional(),
+  max_articles_per_message: z.number().int().min(MIN_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE).max(MAX_NOTIFICATION_MAX_ARTICLES_PER_MESSAGE).optional(),
+  max_title_chars: z.number().int().min(MIN_NOTIFICATION_MAX_TITLE_CHARS).max(MAX_NOTIFICATION_MAX_TITLE_CHARS).optional(),
+  max_body_chars: z.number().int().min(MIN_NOTIFICATION_MAX_BODY_CHARS).max(MAX_NOTIFICATION_MAX_BODY_CHARS).optional(),
   channel_ids: z.array(z.number().int()).max(32).optional(),
 }).refine(body => Object.keys(body).length > 0, { message: 'No fields to update' })
 

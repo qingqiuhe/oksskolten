@@ -466,4 +466,54 @@ describe('runNotificationChecks', () => {
     expect(textBlocks).not.toContain('Article A')
     expect(textBlocks).toContain('另外 1 篇')
   })
+
+  it('truncates titles and body text with per-rule character limits', async () => {
+    const feed = createFeed({ name: 'Example Feed', url: 'https://example.com/truncate' })
+    const channel = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Team',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-token',
+      secret: null,
+      enabled: 1,
+    })
+    upsertFeedNotificationRule(feed.id, {
+      enabled: true,
+      translate_enabled: true,
+      check_interval_minutes: 5,
+      max_articles_per_message: 5,
+      max_title_chars: 5,
+      max_body_chars: 5,
+      channel_ids: [channel.id],
+    })
+
+    insertArticle({
+      feed_id: feed.id,
+      title: '123456789',
+      url: 'https://example.com/truncated',
+      published_at: '2026-03-31T10:17:00Z',
+      full_text: 'ABCDEFGHIJK',
+      notification_body_text: 'ABCDEFGHIJK',
+      notification_media_json: null,
+    })
+
+    mockTranslateNotificationBodyText.mockResolvedValue('中文翻译测试')
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 0, msg: 'success' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    getDb().prepare(`UPDATE feed_notification_rules SET next_check_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 minute')`).run()
+    await runNotificationChecks()
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as { card: { body: { elements: Array<{ text?: { content: string } }> } } }
+    const articleText = payload.card.body.elements.find(element => element.text)?.text?.content ?? ''
+    expect(articleText).toContain('1234…')
+    expect(articleText).not.toContain('123456789')
+    expect(articleText).toContain('ABCD…')
+    expect(articleText).not.toContain('ABCDEFGHIJK')
+    expect(articleText).toContain('中文翻译…')
+    expect(mockTranslateNotificationBodyText).toHaveBeenCalledWith('ABCD…', null)
+  })
 })
