@@ -23,6 +23,7 @@ vi.mock('../fetcher.js', async () => {
     streamSummarizeArticle: (...args: unknown[]) => mockStreamSummarize(...args),
     translateArticle: vi.fn().mockResolvedValue({ fullTextTranslated: '翻訳テキスト', inputTokens: 10, outputTokens: 5, billingMode: 'standard', model: 'sonnet' }),
     streamTranslateArticle: (...args: unknown[]) => mockStreamTranslate(...args),
+    translateText: vi.fn(async (text: string) => ({ fullTextTranslated: `${text} (translated)`, inputTokens: 1, outputTokens: 1, billingMode: 'standard', model: 'sonnet' })),
     fetchProgress: new EventEmitter(),
     getFeedState: vi.fn(),
   }
@@ -302,6 +303,26 @@ describe('POST /api/articles/:id/translate?stream=1', () => {
     const errorEvent = events.find((e: any) => e.type === 'error')
     expect(errorEvent).toBeDefined()
     expect(errorEvent.error).toBe('TRANSLATION_FAILED')
+  })
+})
+
+describe('POST /api/articles/translate-titles', () => {
+  it('translates non-target-language titles and keeps target-language titles unchanged', async () => {
+    const feed = seedFeed()
+    const frId = seedArticle(feed.id, { title: 'Bonjour le monde', lang: 'fr' })
+    const enId = seedArticle(feed.id, { title: 'Already English', lang: 'en' })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/articles/translate-titles',
+      headers: json,
+      payload: { ids: [frId, enId] },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().translated_titles[frId]).toBe('Bonjour le monde (translated)')
+    expect(res.json().translated_titles[enId]).toBe('Already English')
+    expect(res.json().target_lang).toBe('en')
   })
 })
 

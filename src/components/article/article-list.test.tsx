@@ -43,6 +43,7 @@ vi.mock('../feed/feed-metrics-bar', () => ({
 vi.mock('../../lib/fetcher', () => ({
   fetcher: vi.fn(),
   apiPatch: vi.fn(() => Promise.resolve()),
+  apiPost: vi.fn(() => Promise.resolve({ translated_titles: {} })),
 }))
 
 vi.mock('../../lib/markSeenWithQueue', () => ({
