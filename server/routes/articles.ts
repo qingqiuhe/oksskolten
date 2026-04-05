@@ -28,7 +28,7 @@ import type { MeiliArticleDoc } from '../search/client.js'
 import { buildMeiliFilter, meiliSearch } from '../search/client.js'
 import { isSearchReady, syncArticleToSearch } from '../search/sync.js'
 import { requireJson, getRequestUserId } from '../auth.js'
-import { summarizeArticle, translateArticle, streamSummarizeArticle, streamTranslateArticle, fetchArticleContent } from '../fetcher.js'
+import { summarizeArticle, translateArticle, streamSummarizeArticle, streamTranslateArticle, translateText, fetchArticleContent } from '../fetcher.js'
 import type { AiTextResult } from '../fetcher.js'
 import { archiveArticleImages, isImageArchivingEnabled, deleteArticleImages } from '../fetcher/article-images.js'
 import { getSetting } from '../db/settings.js'
@@ -107,6 +107,9 @@ const SeenBody = z.object({ seen: z.boolean({ message: 'seen must be a boolean' 
 const BookmarkBody = z.object({ bookmarked: z.boolean({ message: 'bookmarked must be a boolean' }) })
 const LikeBody = z.object({ liked: z.boolean({ message: 'liked must be a boolean' }) })
 const BatchSeenBody = z.object({
+  ids: z.array(z.number()).min(1, 'ids must be a non-empty array').max(MAX_BATCH_SEEN, `Maximum ${MAX_BATCH_SEEN} ids per request`),
+})
+const TranslateTitlesBody = z.object({
   ids: z.array(z.number()).min(1, 'ids must be a non-empty array').max(MAX_BATCH_SEEN, `Maximum ${MAX_BATCH_SEEN} ids per request`),
 })
 const StreamQuery = z.object({ stream: z.string().optional() })
@@ -453,6 +456,40 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       if (!body) return
       const result = markArticlesSeen(body.ids, getRequestUserId(request))
       reply.send(result)
+    },
+  )
+
+  api.post(
+    '/api/articles/translate-titles',
+    { preHandler: [requireJson] },
+    async (request, reply) => {
+      const body = parseOrBadRequest(TranslateTitlesBody, request.body, reply)
+      if (!body) return
+
+      const userId = getRequestUserId(request)
+      const targetLang = getTranslateTargetLang(userId)
+      const articles = getArticlesByIds(body.ids, undefined, userId)
+      const byId = new Map(articles.map(article => [article.id, article]))
+      const translated_titles: Record<number, string> = {}
+
+      for (const id of body.ids) {
+        const article = byId.get(id)
+        if (!article) continue
+        if (!article.title?.trim()) continue
+        if (article.lang === targetLang) {
+          translated_titles[id] = article.title
+          continue
+        }
+        try {
+          const result = await translateText(article.title, targetLang, userId)
+          translated_titles[id] = result.fullTextTranslated.trim() || article.title
+        } catch (err) {
+          request.log.warn({ err, articleId: id }, 'translate title failed')
+          translated_titles[id] = article.title
+        }
+      }
+
+      reply.send({ translated_titles, target_lang: targetLang })
     },
   )
 

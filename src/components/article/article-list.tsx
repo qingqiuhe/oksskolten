@@ -26,7 +26,7 @@ import { ActionChip } from '../ui/action-chip'
 import { ListChatFab } from '../chat/list-chat-fab'
 import { useKeyboardNavigationContext } from '../../contexts/keyboard-navigation-context'
 import { useKeyboardNavigation } from '../../hooks/use-keyboard-navigation'
-import { apiPatch } from '../../lib/fetcher'
+import { apiPatch, apiPost } from '../../lib/fetcher'
 import type { ArticleListItem, FeedWithCounts } from '../../../shared/types'
 import type { LayoutName } from '../../data/layouts'
 import { isXFeedSource, type ArticleKind } from '../../../shared/article-kind'
@@ -120,6 +120,9 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   }), [mutate])
 
   const articles = useMemo(() => data ? data.flatMap(page => page.articles) : [], [data])
+  const [translateTitlesEnabled, setTranslateTitlesEnabled] = useState(false)
+  const [translatedTitles, setTranslatedTitles] = useState<Record<number, string>>({})
+  const translatingTitleIdsRef = useRef<Set<number>>(new Set())
   const hasMore = data ? data[data.length - 1]?.has_more ?? false : false
   const isEmpty = data?.[0]?.articles.length === 0
   const totalAll = data?.[0]?.total_all
@@ -388,7 +391,37 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     setShowReadArticles(false)
     setArticleKindFilter('all')
     setFocusedItemId(null)
+    setTranslateTitlesEnabled(false)
+    setTranslatedTitles({})
+    translatingTitleIdsRef.current.clear()
   }, [feedId, categoryId, setFocusedItemId])
+
+  useEffect(() => {
+    if (!translateTitlesEnabled || articles.length === 0) return
+    const pending = articles
+      .filter(article =>
+        article.lang &&
+        article.lang !== locale &&
+        translatedTitles[article.id] == null &&
+        !translatingTitleIdsRef.current.has(article.id),
+      )
+      .map(article => article.id)
+    if (pending.length === 0) return
+
+    for (const id of pending) translatingTitleIdsRef.current.add(id)
+
+    apiPost('/api/articles/translate-titles', { ids: pending })
+      .then((res) => {
+        const payload = (res as { translated_titles?: Record<number, string> } | undefined)?.translated_titles ?? {}
+        setTranslatedTitles(prev => ({ ...prev, ...payload }))
+      })
+      .catch(() => {
+        toast.error(t('articles.loadError'))
+      })
+      .finally(() => {
+        for (const id of pending) translatingTitleIdsRef.current.delete(id)
+      })
+  }, [translateTitlesEnabled, articles, locale, translatedTitles, t])
 
   const articleKindOptions: Array<{ value: ArticleKind | 'all'; label: string }> = [
     { value: 'all', label: t('articleKind.all') },
@@ -441,6 +474,17 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
           ))}
         </div>
       )}
+
+      <div className="flex flex-wrap gap-2 px-4 md:px-6 py-2">
+        <ActionChip
+          active={translateTitlesEnabled}
+          onClick={() => {
+            setTranslateTitlesEnabled(prev => !prev)
+          }}
+        >
+          {t('article.translate')}
+        </ActionChip>
+      </div>
 
       {isLoading && <ArticleListSkeleton layout={layout} showThumbnails={displayConfig.showThumbnails} />}
 
@@ -500,16 +544,20 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
           const effectiveArticle = isAutoRead
             ? { ...article, seen_at: article.seen_at ?? new Date().toISOString() }
             : article
+          const translatedTitle = translateTitlesEnabled ? translatedTitles[article.id] : undefined
+          const articleWithTranslatedTitle = translatedTitle
+            ? { ...effectiveArticle, title: translatedTitle }
+            : effectiveArticle
           const handleOverlayOpen = articleOpenMode === 'overlay' ? (e: React.MouseEvent<HTMLAnchorElement>) => {
             if (e.metaKey || e.ctrlKey || e.button === 1) return
             e.preventDefault()
             setOverlayUrl(article.url)
           } : undefined
           const cardProps = {
-            article: effectiveArticle,
+            article: articleWithTranslatedTitle,
             layout,
             isFeatured: layout === 'magazine' && index === 0,
-            feedViewType: effectiveArticle.feed_view_type,
+            feedViewType: articleWithTranslatedTitle.feed_view_type,
             onClick: handleOverlayOpen,
             ...displayConfig,
           }
