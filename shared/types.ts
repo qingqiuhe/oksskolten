@@ -101,6 +101,13 @@ export interface ArticleDetail extends ArticleListItem {
   imageArchivingEnabled: boolean
 }
 
+export interface InboxSummary {
+  unread_total: number
+  new_today: number
+  oldest_unread_at: string | null
+  source_feed_count: number
+}
+
 export interface ListChatScopeFilters {
   feed_id?: number
   category_id?: number

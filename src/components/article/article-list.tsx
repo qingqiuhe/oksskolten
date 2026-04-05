@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import useSWR from 'swr'
 import useSWRInfinite from 'swr/infinite'
 import { useSWRConfig } from 'swr'
-import { Languages } from 'lucide-react'
+import { Languages, MessageSquare, Plus, RefreshCw } from 'lucide-react'
 import { fetcher } from '../../lib/fetcher'
 import { markSeenOnServer } from '../../lib/markSeenWithQueue'
 import { useI18n } from '../../lib/i18n'
@@ -27,9 +27,11 @@ import { ListChatFab } from '../chat/list-chat-fab'
 import { useKeyboardNavigationContext } from '../../contexts/keyboard-navigation-context'
 import { useKeyboardNavigation } from '../../hooks/use-keyboard-navigation'
 import { apiPatch, apiPost } from '../../lib/fetcher'
-import type { ArticleListItem, FeedWithCounts } from '../../../shared/types'
+import type { ArticleListItem, FeedWithCounts, InboxSummary } from '../../../shared/types'
 import type { LayoutName } from '../../data/layouts'
 import { isXFeedSource, type ArticleKind } from '../../../shared/article-kind'
+import { InboxHeader, type InboxSort } from './inbox-header'
+import { ArticleInlineActions } from './article-inline-actions'
 
 interface ArticlesResponse {
   articles: ArticleListItem[]
@@ -40,6 +42,7 @@ interface ArticlesResponse {
 }
 
 const PAGE_SIZE = 20
+const INBOX_SORT_STORAGE_KEY = 'oksskolten.inbox.sort'
 
 /** How often (ms) to flush the batch of read article IDs to the server */
 const BATCH_FLUSH_INTERVAL = 1500
@@ -50,6 +53,12 @@ export interface ArticleListHandle {
 
 interface ArticleListProps {
   listLabel: string
+}
+
+function readStoredInboxSort(): InboxSort {
+  if (typeof window === 'undefined') return 'newest'
+  const stored = window.localStorage.getItem(INBOX_SORT_STORAGE_KEY)
+  return stored === 'score' || stored === 'oldest_unread' ? stored : 'newest'
 }
 
 export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(function ArticleList({ listLabel }, ref) {
@@ -72,6 +81,8 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const categoryId = categoryIdParam ? Number(categoryIdParam) : undefined
   const [showReadArticles, setShowReadArticles] = useState(false)
   const [articleKindFilter, setArticleKindFilter] = useState<ArticleKind | 'all'>('all')
+  const [inboxSort, setInboxSort] = useState<InboxSort>(() => readStoredInboxSort())
+  const [inboxChatOpenSignal, setInboxChatOpenSignal] = useState(0)
   const categoryUnreadOnly = !!categoryId && settings.categoryUnreadOnly === 'on'
   const unreadOnly = isInbox || (categoryUnreadOnly && !showReadArticles)
   const bookmarkedOnly = isBookmarks
@@ -91,6 +102,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const { t, locale } = useI18n()
   const { progress, startFeedFetch } = useFetchProgressContext()
   const { mutate: globalMutate } = useSWRConfig()
+  const { data: inboxSummary, mutate: mutateInboxSummary } = useSWR<InboxSummary>(isInbox ? '/api/inbox/summary' : null, fetcher)
   const getKey = (pageIndex: number, previousPageData: ArticlesResponse | null) => {
     if (previousPageData && !previousPageData.has_more) return null
     const params = new URLSearchParams()
@@ -101,6 +113,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     if (bookmarkedOnly) params.set('bookmarked', '1')
     if (likedOnly) params.set('liked', '1')
     if (readOnly) params.set('read', '1')
+    if (isInbox && inboxSort !== 'newest') params.set('sort', inboxSort)
     if (noFloor) params.set('no_floor', '1')
     params.set('limit', String(PAGE_SIZE))
     params.set('offset', String(pageIndex * PAGE_SIZE))
@@ -127,9 +140,15 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const isEmpty = data?.[0]?.articles.length === 0
   const totalAll = data?.[0]?.total_all
   const allReadEmpty = isEmpty && categoryUnreadOnly && !showReadArticles && totalAll != null && totalAll > 0
+  const inboxAllReadEmpty = isInbox && isEmpty && totalAll != null && totalAll > 0
   const hiddenByFloor = data?.[0]?.total_without_floor != null
     ? data[0].total_without_floor - (data[0].total ?? 0)
     : 0
+
+  useEffect(() => {
+    if (!isInbox || typeof window === 'undefined') return
+    window.localStorage.setItem(INBOX_SORT_STORAGE_KEY, inboxSort)
+  }, [inboxSort, isInbox])
 
   // ---------------------------------------------------------------------------
   // Keyboard navigation
@@ -439,6 +458,111 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     ...(articleKindFilter !== 'all' ? { article_kind: articleKindFilter } : {}),
     ...(noFloor ? { no_floor: true } : {}),
   }), [feedId, categoryId, unreadOnly, bookmarkedOnly, likedOnly, readOnly, articleKindFilter, noFloor])
+
+  const mutateArticleInPages = useCallback((
+    articleId: number,
+    updater: (article: ArticleListItem) => ArticleListItem,
+  ) => {
+    void mutate((pages) => pages?.map((page, index) => {
+      let changed = false
+      const nextArticles = page.articles.flatMap((article) => {
+        if (article.id !== articleId) return [article]
+        changed = true
+        const nextArticle = updater(article)
+        const keepVisible = (!unreadOnly || nextArticle.seen_at == null)
+          && (!bookmarkedOnly || nextArticle.bookmarked_at != null)
+          && (!likedOnly || nextArticle.liked_at != null)
+        return keepVisible ? [nextArticle] : []
+      })
+
+      if (!changed) return page
+      const removed = page.articles.length - nextArticles.length
+      return {
+        ...page,
+        articles: nextArticles,
+        total: Math.max(0, page.total - removed),
+        ...(index === 0 && removed > 0 ? { total_all: Math.max(page.total_all ?? page.total, page.total) } : {}),
+      }
+    }), { revalidate: false })
+  }, [bookmarkedOnly, likedOnly, mutate, unreadOnly])
+
+  const refreshListMeta = useCallback(() => {
+    void mutate()
+    void mutateInboxSummary()
+    void globalMutate((key: string) => typeof key === 'string' && key.startsWith('/api/feeds'))
+  }, [globalMutate, mutate, mutateInboxSummary])
+
+  const handleToggleSeen = useCallback((article: ArticleListItem) => {
+    const nextSeenAt = article.seen_at ? null : new Date().toISOString()
+    mutateArticleInPages(article.id, current => ({ ...current, seen_at: nextSeenAt }))
+    apiPatch(`/api/articles/${article.id}/seen`, { seen: !article.seen_at })
+      .then(() => {
+        refreshListMeta()
+      })
+      .catch(() => {
+        void mutate()
+      })
+  }, [mutate, mutateArticleInPages, refreshListMeta])
+
+  const handleToggleBookmark = useCallback((article: ArticleListItem) => {
+    const nextBookmarkedAt = article.bookmarked_at ? null : new Date().toISOString()
+    mutateArticleInPages(article.id, current => ({ ...current, bookmarked_at: nextBookmarkedAt }))
+    apiPatch(`/api/articles/${article.id}/bookmark`, { bookmarked: !article.bookmarked_at })
+      .then(() => {
+        refreshListMeta()
+      })
+      .catch(() => {
+        void mutate()
+      })
+  }, [mutate, mutateArticleInPages, refreshListMeta])
+
+  const handleToggleLike = useCallback((article: ArticleListItem) => {
+    const nextLikedAt = article.liked_at ? null : new Date().toISOString()
+    mutateArticleInPages(article.id, current => ({ ...current, liked_at: nextLikedAt }))
+    apiPatch(`/api/articles/${article.id}/like`, { liked: !article.liked_at })
+      .then(() => {
+        refreshListMeta()
+      })
+      .catch(() => {
+        void mutate()
+      })
+  }, [mutate, mutateArticleInPages, refreshListMeta])
+
+  const handleFetchAllInboxFeeds = useCallback(async () => {
+    const activeFeeds = (feedsData?.feeds ?? []).filter(feed => feed.type !== 'clip' && !feed.disabled)
+    if (activeFeeds.length === 0) return
+    const results = await Promise.all(activeFeeds.map(feed => startFeedFetch(feed.id)))
+    const totalNew = results.reduce((sum, result) => sum + (result.totalNew ?? 0), 0)
+    if (results.some(result => result.error)) {
+      toast.error(t('toast.fetchError', { name: t('feeds.inbox') }))
+      return
+    }
+    if (totalNew > 0) toast.success(t('toast.fetchedArticles', { count: String(totalNew), name: t('feeds.inbox') }))
+    else toast(t('toast.noNewArticles', { name: t('feeds.inbox') }))
+    void mutate()
+    void mutateInboxSummary()
+  }, [feedsData?.feeds, mutate, mutateInboxSummary, startFeedFetch, t])
+
+  const inboxChatTrigger = (
+    <ListChatFab
+      listLabel={listLabel}
+      articleIds={articles.map(article => article.id)}
+      sourceFilters={sourceFilters}
+      hideDefaultTrigger
+      openSignal={inboxChatOpenSignal}
+      renderTrigger={({ toggle }) => (
+        <button
+          type="button"
+          onClick={toggle}
+          className="inline-flex items-center gap-2 rounded-full border border-border bg-bg px-3 py-1.5 text-sm text-muted transition hover:text-text"
+        >
+          <MessageSquare className="h-4 w-4" />
+          {t('inbox.chat')}
+        </button>
+      )}
+    />
+  )
+
   return (
     <main ref={listRef} className="max-w-2xl mx-auto" role={!isGridLayout ? 'listbox' : undefined}>
       {isTouchDevice && <PullToRefresh onRefresh={async () => {
@@ -455,6 +579,29 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
 
       {currentFeed && currentFeed.type !== 'clip' && settings.showFeedActivity === 'on' && (
         <FeedMetricsBar feed={currentFeed} />
+      )}
+
+      {isInbox && (
+        <InboxHeader
+          summary={inboxSummary}
+          sort={inboxSort}
+          onSortChange={(nextSort) => {
+            setInboxSort(nextSort)
+            setNoFloor(false)
+            void setSize(1)
+          }}
+          chatTrigger={inboxChatTrigger}
+          labels={{
+            unreadTotal: t('inbox.unreadTotal'),
+            newToday: t('inbox.newToday'),
+            oldestUnread: t('inbox.oldestUnread'),
+            sourceCount: t('inbox.sourceCount'),
+            latest: t('inbox.sort.latest'),
+            backlog: t('inbox.sort.backlog'),
+            highValue: t('inbox.sort.highValue'),
+            noUnread: t('inbox.noUnread'),
+          }}
+        />
       )}
 
       {showArticleKindFilter && (
@@ -497,7 +644,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         </div>
       )}
 
-      {allReadEmpty && !isLoading && (
+      {allReadEmpty && !isLoading && !isInbox && (
         <div className="text-center py-12">
           <p className="text-muted mb-3">{t('articles.allRead')}</p>
           <button
@@ -509,6 +656,44 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         </div>
       )}
 
+      {inboxAllReadEmpty && !isLoading && (
+        <div className="px-4 md:px-6 py-12 text-center">
+          <p className="text-muted mb-5">{t('inbox.allRead')}</p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => { void handleFetchAllInboxFeeds() }}
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-bg px-4 py-2 text-sm text-text transition hover:bg-hover"
+            >
+              <RefreshCw className="h-4 w-4" />
+              {t('inbox.fetchUpdates')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void navigate('/bookmarks')}
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-bg px-4 py-2 text-sm text-text transition hover:bg-hover"
+            >
+              {t('inbox.viewBookmarks')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void navigate('/history')}
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-bg px-4 py-2 text-sm text-text transition hover:bg-hover"
+            >
+              {t('inbox.browseHistory')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setInboxChatOpenSignal(signal => signal + 1)}
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-bg px-4 py-2 text-sm text-text transition hover:bg-hover"
+            >
+              <MessageSquare className="h-4 w-4" />
+              {t('inbox.chat')}
+            </button>
+          </div>
+        </div>
+      )}
+
       {isEmpty && !allReadEmpty && !isLoading && currentFeed && feedId && progress.has(feedId) && (
         <FeedErrorBanner
           lastError={currentFeed.last_error ?? ''}
@@ -517,7 +702,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         />
       )}
 
-      {isEmpty && !allReadEmpty && !isLoading && !(feedId && progress.has(feedId)) && (
+      {isEmpty && !allReadEmpty && !inboxAllReadEmpty && !isLoading && !(feedId && progress.has(feedId)) && (
         currentFeed?.last_error ? (
           <FeedErrorBanner
             lastError={currentFeed.last_error}
@@ -534,7 +719,21 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
             } : undefined}
           />
         ) : (
-          <p className="text-muted text-center py-12">{t('articles.empty')}</p>
+          isInbox ? (
+            <div className="px-4 md:px-6 py-12 text-center">
+              <p className="text-muted mb-5">{t('inbox.empty')}</p>
+              <button
+                type="button"
+                onClick={() => void navigate('/')}
+                className="inline-flex items-center gap-2 rounded-full border border-border bg-bg px-4 py-2 text-sm text-text transition hover:bg-hover"
+              >
+                <Plus className="h-4 w-4" />
+                {t('inbox.addFeed')}
+              </button>
+            </div>
+          ) : (
+            <p className="text-muted text-center py-12">{t('articles.empty')}</p>
+          )
         )
       )}
 
@@ -584,6 +783,25 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
               ) : (
                 <ArticleCard {...cardProps} />
               )}
+              <ArticleInlineActions
+                isSeen={articleWithTranslatedTitle.seen_at != null}
+                isBookmarked={articleWithTranslatedTitle.bookmarked_at != null}
+                isLiked={articleWithTranslatedTitle.liked_at != null}
+                isTouchDevice={isTouchDevice}
+                onToggleSeen={() => handleToggleSeen(article)}
+                onToggleBookmark={() => handleToggleBookmark(article)}
+                onToggleLike={() => handleToggleLike(article)}
+                onOpenOverlay={() => setOverlayUrl(article.url)}
+                labels={{
+                  markRead: t('inbox.markRead'),
+                  markUnread: t('inbox.markUnread'),
+                  bookmark: t('article.addBookmark'),
+                  unbookmark: t('article.removeBookmark'),
+                  like: t('article.addLike'),
+                  unlike: t('article.removeLike'),
+                  openOverlay: t('inbox.openOverlay'),
+                }}
+              />
               {article.lang && article.lang !== locale && (
                 <button
                   type="button"
@@ -592,7 +810,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
                     e.stopPropagation()
                     void navigate(`${articleUrlToPath(article.url)}?translate=1`)
                   }}
-                  className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-md border border-border bg-bg/90 px-2 py-1 text-xs text-muted opacity-0 backdrop-blur transition hover:text-text group-hover:opacity-100 focus-visible:opacity-100"
+                  className="absolute left-3 top-3 z-10 inline-flex items-center gap-1 rounded-md border border-border bg-bg/90 px-2 py-1 text-xs text-muted opacity-0 backdrop-blur transition hover:text-text group-hover:opacity-100 focus-visible:opacity-100"
                   aria-label={t('article.translate')}
                   title={t('article.translate')}
                 >
@@ -645,7 +863,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         setTimeout(() => { escapeDebounceRef.current = false }, 100)
       }} />
 
-      {articles.length > 0 && (
+      {articles.length > 0 && !isInbox && (
         <ListChatFab
           listLabel={listLabel}
           articleIds={articles.map(article => article.id)}

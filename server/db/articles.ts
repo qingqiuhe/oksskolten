@@ -1,5 +1,5 @@
 import { getDb, runNamed, getNamed, allNamed } from './connection.js'
-import type { Article, ArticleListItem, ArticleDetail } from './types.js'
+import type { Article, ArticleListItem, ArticleDetail, InboxSummary } from './types.js'
 import type { MeiliArticleDoc } from '../search/client.js'
 import { syncArticleToSearch, deleteArticleFromSearch, deleteArticlesFromSearch, syncArticleScoreToSearch, syncArticleFiltersToSearch } from '../search/sync.js'
 import { RETRY_MAX_ATTEMPTS, RETRY_BATCH_LIMIT } from '../fetcher/util.js'
@@ -149,7 +149,7 @@ export function getArticles(opts: {
   read?: boolean
   since?: string
   until?: string
-  sort?: 'score'
+  sort?: 'score' | 'oldest_unread'
   limit: number
   offset: number
   smartFloor?: boolean
@@ -253,7 +253,9 @@ export function getArticles(opts: {
   const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''
   const orderBy = opts.sort === 'score'
     ? 'a.score DESC, a.published_at DESC'
-    : opts.liked ? 'a.liked_at DESC' : opts.read ? 'a.read_at DESC' : 'a.published_at DESC'
+    : opts.sort === 'oldest_unread'
+      ? "CASE WHEN a.seen_at IS NULL THEN 0 ELSE 1 END, COALESCE(a.published_at, a.fetched_at) ASC"
+      : opts.liked ? 'a.liked_at DESC' : opts.read ? 'a.read_at DESC' : 'a.published_at DESC'
 
   const totalRow = getNamed<{ cnt: number }>(`
     SELECT COUNT(*) AS cnt FROM active_articles a ${where}
@@ -279,6 +281,29 @@ export function getArticles(opts: {
   `, { ...params, _limit: Number(opts.limit), _offset: Number(opts.offset) }).map((row) => mapArticleListItem(row as ArticleListItemRow))
 
   return { articles, total, ...(totalWithoutFloor != null && totalWithoutFloor > total ? { totalWithoutFloor } : {}) }
+}
+
+export function getInboxSummary(userId?: number | null): InboxSummary {
+  const scopedUserId = resolveUserId(userId)
+  const row = getNamed<InboxSummary>(`
+    SELECT
+      COUNT(*) AS unread_total,
+      COUNT(CASE WHEN a.published_at >= date('now', 'start of day') THEN 1 END) AS new_today,
+      MIN(a.published_at) AS oldest_unread_at,
+      COUNT(DISTINCT a.feed_id) AS source_feed_count
+    FROM active_articles a
+    JOIN feeds f ON a.feed_id = f.id
+    WHERE a.seen_at IS NULL
+      AND f.type != 'clip'
+      ${scopedUserId == null ? '' : 'AND a.user_id = @userId'}
+  `, scopedUserId == null ? {} : { userId: scopedUserId })
+
+  return {
+    unread_total: row?.unread_total ?? 0,
+    new_today: row?.new_today ?? 0,
+    oldest_unread_at: row?.oldest_unread_at ?? null,
+    source_feed_count: row?.source_feed_count ?? 0,
+  }
 }
 
 export function getArticleByUrl(url: string, userId?: number | null): ArticleDetail | undefined {

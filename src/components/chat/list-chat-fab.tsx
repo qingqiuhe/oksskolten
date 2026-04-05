@@ -24,6 +24,9 @@ interface ListChatFabProps {
   listLabel: string
   articleIds: number[]
   sourceFilters: ListChatScopeFilters
+  renderTrigger?: (args: { open: boolean; toggle: () => void }) => ReactNode
+  hideDefaultTrigger?: boolean
+  openSignal?: number
 }
 
 interface ConversationSummaryResponse {
@@ -95,7 +98,7 @@ function buildPresetSummary(label: string, detail: string | null = null): ScopeS
   return { type: 'list', label, detail }
 }
 
-export function ListChatFab({ listLabel, articleIds, sourceFilters }: ListChatFabProps) {
+export function ListChatFab({ listLabel, articleIds, sourceFilters, renderTrigger, hideDefaultTrigger = false, openSignal }: ListChatFabProps) {
   const { t } = useI18n()
   const { mutate: globalMutate } = useSWRConfig()
   const [panelOpen, setPanelOpen] = useState(false)
@@ -107,6 +110,7 @@ export function ListChatFab({ listLabel, articleIds, sourceFilters }: ListChatFa
   const [frozenScope, setFrozenScope] = useState<ChatScope | null>(null)
   const [streaming, setStreaming] = useState(false)
   const currentScopeRef = useRef<ChatScope | null>(null)
+  const lastOpenSignalRef = useRef<number | null>(null)
 
   const presets = useMemo<ListScopePreset[]>(() => {
     const loadedLabel = t('chat.scope.loadedList')
@@ -169,6 +173,18 @@ export function ListChatFab({ listLabel, articleIds, sourceFilters }: ListChatFa
       setSelectedPresetKey('loaded')
     }
   }, [presets, selectedPresetKey])
+
+  useEffect(() => {
+    if (openSignal == null) return
+    if (lastOpenSignalRef.current === null) {
+      lastOpenSignalRef.current = openSignal
+      return
+    }
+    if (lastOpenSignalRef.current === openSignal) return
+    lastOpenSignalRef.current = openSignal
+    setMounted(true)
+    setPanelOpen(true)
+  }, [openSignal])
 
   const handleToggle = () => {
     setPanelOpen(prev => !prev)
@@ -245,14 +261,18 @@ export function ListChatFab({ listLabel, articleIds, sourceFilters }: ListChatFa
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={handleToggle}
-        className="fixed bottom-[calc(1.5rem+var(--safe-area-inset-bottom))] right-6 z-50 w-12 h-12 rounded-full bg-accent text-accent-text flex items-center justify-center shadow-lg hover:opacity-90 transition-opacity select-none"
-        aria-label={t('chat.title')}
-      >
-        <MessagesSquare className="w-5 h-5" />
-      </button>
+      {renderTrigger?.({ open: panelOpen, toggle: handleToggle })}
+
+      {!hideDefaultTrigger && (
+        <button
+          type="button"
+          onClick={handleToggle}
+          className="fixed bottom-[calc(1.5rem+var(--safe-area-inset-bottom))] right-6 z-50 w-12 h-12 rounded-full bg-accent text-accent-text flex items-center justify-center shadow-lg hover:opacity-90 transition-opacity select-none"
+          aria-label={t('chat.title')}
+        >
+          <MessagesSquare className="w-5 h-5" />
+        </button>
+      )}
 
       {pendingPresetKey && (
         <ConfirmDialog

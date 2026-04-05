@@ -9,6 +9,7 @@ import {
   getArticleByUrl,
   getArticleById,
   getArticlesByIds,
+  getInboxSummary,
   markArticleSeen,
   markArticlesSeen,
   recordArticleRead,
@@ -64,7 +65,7 @@ const ArticlesQuery = z.object({
   bookmarked: z.string().optional(),
   liked: z.string().optional(),
   read: z.string().optional(),
-  sort: z.string().optional(),
+  sort: z.enum(['score', 'oldest_unread']).optional(),
   no_floor: z.string().optional(),
   limit: coerceOptionalNumber,
   offset: coerceOptionalNumber,
@@ -218,6 +219,10 @@ function formatUsage(result: AiTextResult) {
 }
 
 export async function articleRoutes(api: FastifyInstance): Promise<void> {
+  api.get('/api/inbox/summary', async (request, reply) => {
+    reply.send(getInboxSummary(getRequestUserId(request)))
+  })
+
   api.get('/api/articles', async (request, reply) => {
     const query = ArticlesQuery.parse(request.query)
     const limit = Math.min(Math.max(query.limit || DEFAULT_ARTICLE_LIMIT, 1), MAX_ARTICLE_LIMIT)
@@ -229,7 +234,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const bookmarked = query.bookmarked === '1'
     const liked = query.liked === '1'
     const read = query.read === '1'
-    const sort = query.sort === 'score' ? 'score' as const : undefined
+    const sort = query.sort
     const noFloor = query.no_floor === '1'
 
     const userId = getRequestUserId(request)

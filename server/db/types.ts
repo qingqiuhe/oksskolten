@@ -6,6 +6,7 @@ export type {
   Article,
   ArticleListItem,
   ArticleDetail,
+  InboxSummary,
   ChatScope,
   ListChatScope,
   ListChatScopeFilters,

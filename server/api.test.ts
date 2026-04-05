@@ -314,6 +314,88 @@ describe('GET /api/articles', () => {
     expect(res.json().total).toBe(5)
     expect(res.json().has_more).toBe(true)
   })
+
+  it('supports sort=oldest_unread', async () => {
+    const feed = seedFeed()
+    const oldestUnread = seedArticle(feed.id, {
+      url: 'https://example.com/oldest-unread',
+      published_at: '2024-01-01T00:00:00Z',
+    })
+    const newerUnread = seedArticle(feed.id, {
+      url: 'https://example.com/newer-unread',
+      published_at: '2025-01-01T00:00:00Z',
+    })
+    const newestSeen = seedArticle(feed.id, {
+      url: 'https://example.com/newest-seen',
+      published_at: '2026-01-01T00:00:00Z',
+    })
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/articles/${newestSeen}/seen`,
+      headers: json,
+      payload: { seen: true },
+    })
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/articles/${newerUnread}/seen`,
+      headers: json,
+      payload: { seen: true },
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/articles?sort=oldest_unread',
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().articles.map((article: { url: string }) => article.url)).toEqual([
+      'https://example.com/oldest-unread',
+      'https://example.com/newer-unread',
+      'https://example.com/newest-seen',
+    ])
+    expect(oldestUnread).toBeGreaterThan(0)
+  })
+})
+
+describe('GET /api/inbox/summary', () => {
+  it('returns unread inbox summary and excludes clip feeds', async () => {
+    const regularFeed = seedFeed()
+    const clipFeed = seedFeed({ type: 'clip', url: 'https://clips.example.com', name: 'Clips' })
+    seedArticle(regularFeed.id, {
+      url: 'https://example.com/unread-today',
+      published_at: new Date().toISOString(),
+    })
+    const oldUnreadId = seedArticle(regularFeed.id, {
+      url: 'https://example.com/unread-old',
+      published_at: '2024-02-01T10:00:00Z',
+    })
+    const seenId = seedArticle(regularFeed.id, {
+      url: 'https://example.com/seen',
+      published_at: '2024-03-01T10:00:00Z',
+    })
+    seedArticle(clipFeed.id, {
+      url: 'https://clips.example.com/ignored',
+      published_at: '2024-01-01T10:00:00Z',
+    })
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/articles/${seenId}/seen`,
+      headers: json,
+      payload: { seen: true },
+    })
+
+    const res = await app.inject({ method: 'GET', url: '/api/inbox/summary' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({
+      unread_total: 2,
+      new_today: 1,
+      source_feed_count: 1,
+      oldest_unread_at: '2024-02-01T10:00:00Z',
+    })
+    expect(oldUnreadId).toBeGreaterThan(0)
+  })
 })
 
 describe('GET /api/articles/by-url', () => {

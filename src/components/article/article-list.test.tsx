@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
+import type { ReactNode } from 'react'
 import { LocaleContext } from '../../lib/i18n'
 import type { ArticleListItem } from '../../../shared/types'
 
@@ -19,6 +20,7 @@ let swrInfiniteReturn: any = {
 
 // Control useSWR return value for /api/feeds
 let swrFeedsData: any = undefined
+let swrInboxSummaryData: any = undefined
 
 vi.mock('swr/infinite', () => ({
   default: () => swrInfiniteReturn,
@@ -30,6 +32,7 @@ vi.mock('swr', async () => {
     ...actual,
     default: (key: string) => {
       if (key === '/api/feeds') return { data: swrFeedsData }
+      if (key === '/api/inbox/summary') return { data: swrInboxSummaryData, mutate: vi.fn() }
       return { data: undefined }
     },
     useSWRConfig: () => ({ mutate: vi.fn() }),
@@ -118,8 +121,19 @@ vi.mock('../ui/skeleton', () => ({
 }))
 
 vi.mock('../chat/list-chat-fab', () => ({
-  ListChatFab: ({ listLabel, articleIds }: { listLabel: string; articleIds: number[] }) => (
-    <div data-testid="list-chat-fab" data-list-label={listLabel} data-article-count={articleIds.length} />
+  ListChatFab: ({
+    listLabel,
+    articleIds,
+    renderTrigger,
+  }: {
+    listLabel: string
+    articleIds: number[]
+    renderTrigger?: (args: { open: boolean; toggle: () => void }) => ReactNode
+  }) => (
+    <>
+      <div data-testid="list-chat-fab" data-list-label={listLabel} data-article-count={articleIds.length} />
+      {renderTrigger?.({ open: false, toggle: vi.fn() })}
+    </>
   ),
 }))
 
@@ -201,6 +215,7 @@ describe('ArticleList', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     swrFeedsData = undefined
+    swrInboxSummaryData = undefined
     mockSettings.autoMarkRead = 'off' as any
     // Stub IntersectionObserver for tests that enable autoMarkRead
     vi.stubGlobal('IntersectionObserver', class {
@@ -239,7 +254,7 @@ describe('ArticleList', () => {
       mutate: vi.fn(),
     }
     renderArticleList()
-    expect(screen.getByText('No articles')).toBeTruthy()
+    expect(screen.getByText('No articles yet. Add a feed to get started.')).toBeTruthy()
   })
 
   it('shows error state with retry button', () => {
@@ -279,7 +294,41 @@ describe('ArticleList', () => {
     expect(screen.getByText('Second Article')).toBeTruthy()
   })
 
-  it('renders list chat fab when articles are present', () => {
+  it('renders inbox header and chat trigger on inbox', () => {
+    swrInboxSummaryData = {
+      unread_total: 2,
+      new_today: 1,
+      oldest_unread_at: '2026-01-01T00:00:00Z',
+      source_feed_count: 1,
+    }
+    swrInfiniteReturn = {
+      data: [{
+        articles: [
+          makeArticle({ id: 1, title: 'First Article' }),
+          makeArticle({ id: 2, title: 'Second Article' }),
+        ],
+        total: 2,
+        has_more: false,
+      }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList()
+
+    expect(screen.getByText('Unread')).toBeTruthy()
+    expect(screen.getByText('New today')).toBeTruthy()
+    expect(screen.getByText('Latest')).toBeTruthy()
+    expect(screen.getByText('Backlog')).toBeTruthy()
+    expect(screen.getByText('High value')).toBeTruthy()
+    expect(screen.getByText('Chat')).toBeTruthy()
+  })
+
+  it('does not render floating list chat fab trigger on inbox when articles are present', () => {
     swrInfiniteReturn = {
       data: [{
         articles: [
@@ -300,7 +349,46 @@ describe('ArticleList', () => {
     renderArticleList()
 
     expect(screen.getByTestId('list-chat-fab').getAttribute('data-article-count')).toBe('2')
-    expect(screen.queryByText('Chat This List')).toBeNull()
+    expect(screen.getAllByText('Chat')).toHaveLength(1)
+  })
+
+  it('renders floating list chat fab on non-inbox pages', () => {
+    swrInfiniteReturn = {
+      data: [{
+        articles: [makeArticle({ id: 1, title: 'First Article' })],
+        total: 1,
+        has_more: false,
+      }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList('/feeds/1')
+
+    expect(screen.getByTestId('list-chat-fab').getAttribute('data-article-count')).toBe('1')
+  })
+
+  it('shows inbox all-read actions when unread list becomes empty but total_all exists', () => {
+    swrInfiniteReturn = {
+      data: [{ articles: [], total: 0, total_all: 3, has_more: false }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList()
+    expect(screen.getByText('Inbox is clear. Choose your next step.')).toBeTruthy()
+    expect(screen.getByText('Fetch updates')).toBeTruthy()
+    expect(screen.getByText('View bookmarks')).toBeTruthy()
+    expect(screen.getByText('Browse history')).toBeTruthy()
+    expect(screen.getAllByText('Chat').length).toBeGreaterThan(0)
   })
 
   it('passes social feed view type to cards', () => {
