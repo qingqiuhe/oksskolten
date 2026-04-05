@@ -47,6 +47,7 @@ interface ArticlesResponse {
 const PAGE_SIZE = 20
 const INBOX_SORT_STORAGE_KEY = 'oksskolten.inbox.sort'
 const INBOX_GROUP_STORAGE_KEY = 'oksskolten.inbox.group'
+const TITLE_TRANSLATE_BATCH_SIZE = 50
 
 /** How often (ms) to flush the batch of read article IDs to the server */
 const BATCH_FLUSH_INTERVAL = 1500
@@ -458,6 +459,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         !translatingTitleIdsRef.current.has(article.id),
       )
       .map(article => article.id)
+      .slice(0, TITLE_TRANSLATE_BATCH_SIZE)
     if (pending.length === 0) return
 
     for (const id of pending) translatingTitleIdsRef.current.add(id)
