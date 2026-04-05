@@ -185,11 +185,11 @@ export function NotificationTasksSection() {
             const allowChannelEdit = canEditChannels(task)
             return (
               <div key={task.id} className="rounded-lg border border-border bg-bg-card p-4 space-y-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${task.enabled === 1 ? 'bg-success' : 'bg-muted'}`} />
-                      <span className="text-sm font-medium text-text truncate">{task.feed.name}</span>
+                      <span className="min-w-0 text-sm font-medium text-text break-words sm:truncate">{task.feed.name}</span>
                       {task.translate_enabled === 1 && (
                         <span className="text-[11px] text-muted rounded-full border border-border px-1.5 py-0.5">
                           {t('notifications.translateBadge')}
@@ -217,7 +217,7 @@ export function NotificationTasksSection() {
                     )}
                   </div>
                   {canManage && (
-                    <div className="flex items-center gap-1">
+                    <div className="flex flex-wrap items-center gap-1 sm:justify-end">
                       <button
                         type="button"
                         onClick={() => void handleToggle(task)}

@@ -80,7 +80,7 @@ export function ThemeSection({ isDark, themeName, setTheme, customThemes, setCus
         {customThemes.map(theme => {
           const c = theme.colors[isDark ? 'dark' : 'light']
           return (
-            <div key={theme.name} className="relative group w-full">
+            <div key={theme.name} className="theme-card-shell relative group w-full">
               <PreviewCard
                 selected={themeName === theme.name}
                 onClick={() => setTheme(theme.name)}
@@ -100,7 +100,7 @@ export function ThemeSection({ isDark, themeName, setTheme, customThemes, setCus
                   </div>
                 </div>
               </PreviewCard>
-              <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="theme-card-actions absolute top-1 right-1 flex gap-1 transition-opacity">
                 <button
                   type="button"
                   className="w-6 h-6 rounded-md bg-bg border border-border text-muted flex items-center justify-center hover:text-text transition-colors"
