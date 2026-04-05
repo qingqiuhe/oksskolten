@@ -3,10 +3,12 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import useSWR from 'swr'
 import useSWRInfinite from 'swr/infinite'
 import { useSWRConfig } from 'swr'
+import { Languages } from 'lucide-react'
 import { fetcher } from '../../lib/fetcher'
 import { markSeenOnServer } from '../../lib/markSeenWithQueue'
 import { useI18n } from '../../lib/i18n'
 import { trackRead } from '../../lib/readTracker'
+import { articleUrlToPath } from '../../lib/url'
 import { useIsTouchDevice } from '../../hooks/use-is-touch-device'
 import { useClipFeedId } from '../../hooks/use-clip-feed-id'
 import { useAppLayout } from '../../app'
@@ -86,7 +88,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   }), [dateMode, indicatorStyle, settings.showUnreadIndicator, settings.showThumbnails])
   const isGridLayout = layout === 'card' || layout === 'magazine'
   const showArticleKindFilter = !!feedId && !!currentFeed && isXFeedSource(currentFeed)
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const { progress, startFeedFetch } = useFetchProgressContext()
   const { mutate: globalMutate } = useSWRConfig()
   const getKey = (pageIndex: number, previousPageData: ArticlesResponse | null) => {
@@ -518,7 +520,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
               data-article-id={article.id}
               data-article-unread={article.seen_at == null && !isAutoRead ? '1' : '0'}
               aria-selected={isKbFocused || undefined}
-              className={layout === 'magazine' && index === 0 ? 'col-span-full' : ''}
+              className={`${layout === 'magazine' && index === 0 ? 'col-span-full' : ''} relative group`}
               style={isKbFocused ? {
                 borderLeft: '2px solid var(--color-accent)',
                 backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)',
@@ -533,6 +535,22 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
                 <SwipeableArticleCard {...cardProps} />
               ) : (
                 <ArticleCard {...cardProps} />
+              )}
+              {article.lang && article.lang !== locale && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    void navigate(`${articleUrlToPath(article.url)}?translate=1`)
+                  }}
+                  className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-md border border-border bg-bg/90 px-2 py-1 text-xs text-muted opacity-0 backdrop-blur transition hover:text-text group-hover:opacity-100 focus-visible:opacity-100"
+                  aria-label={t('article.translate')}
+                  title={t('article.translate')}
+                >
+                  <Languages className="h-3.5 w-3.5" />
+                  <span className="hidden md:inline">{t('article.translate')}</span>
+                </button>
               )}
             </div>
           )
