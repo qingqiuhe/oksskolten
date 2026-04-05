@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import useSWR from 'swr'
 import { renderMarkdown } from '../../lib/markdown'
 import { sanitizeHtml } from '../../lib/sanitize'
@@ -38,6 +38,7 @@ interface ArticleDetailProps {
 export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
   const { settings: { internalLinks, chatPosition, translateTargetLang } } = useAppLayout()
   const navigate = useNavigate()
+  const location = useLocation()
   const { t, tError, isKeyNotSetError, locale } = useI18n()
   const articleKey = `/api/articles/by-url?url=${encodeURIComponent(articleUrl)}`
   const { data: article, error, mutate } = useSWR<ArticleDetailData>(articleKey, fetcher)
@@ -63,6 +64,8 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
     toggleBookmark, toggleLike, handleArchiveImages, handleDelete,
   } = useArticleActions(article, articleKey)
   const chat = useChatInline(article?.id ?? 0)
+  const autoTranslateRequested = useMemo(() => new URLSearchParams(location.search).get('translate') === '1', [location.search])
+  const autoTranslateRef = useRef<string | null>(null)
 
   // Sync translation/summary back into SWR cache so it persists across navigations
   useEffect(() => {
@@ -76,6 +79,35 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
       void mutate({ ...article, summary }, false)
     }
   }, [summary]) // eslint-disable-line react-hooks/exhaustive-deps -- only sync when summary changes; article/mutate are refs to current data
+
+  useEffect(() => {
+    if (!autoTranslateRequested || !article || translating) return
+    if (isUserLang || fullTextTranslated) return
+    const key = `${article.id}:${effectiveTargetLang}`
+    if (autoTranslateRef.current === key) return
+    autoTranslateRef.current = key
+    void handleTranslate()
+    const params = new URLSearchParams(location.search)
+    params.delete('translate')
+    void navigate(
+      {
+        pathname: location.pathname,
+        search: params.toString() ? `?${params.toString()}` : '',
+      },
+      { replace: true },
+    )
+  }, [
+    autoTranslateRequested,
+    article,
+    translating,
+    isUserLang,
+    fullTextTranslated,
+    effectiveTargetLang,
+    handleTranslate,
+    location.pathname,
+    location.search,
+    navigate,
+  ])
 
   // Record article read on mount
   const viewedRef = useRef<number | null>(null)
