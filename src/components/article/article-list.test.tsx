@@ -5,6 +5,9 @@ import { LocaleContext } from '../../lib/i18n'
 import type { ArticleListItem } from '../../../shared/types'
 
 // --- Mocks ---
+const { mockApiPost } = vi.hoisted(() => ({
+  mockApiPost: vi.fn(() => Promise.resolve({ translated_titles: {} })),
+}))
 
 // Control useSWRInfinite return value per test
 let swrInfiniteReturn: any = {
@@ -43,6 +46,7 @@ vi.mock('../feed/feed-metrics-bar', () => ({
 vi.mock('../../lib/fetcher', () => ({
   fetcher: vi.fn(),
   apiPatch: vi.fn(() => Promise.resolve()),
+  apiPost: (...args: unknown[]) => mockApiPost(...args),
 }))
 
 vi.mock('../../lib/markSeenWithQueue', () => ({
@@ -199,6 +203,8 @@ function renderArticleList(initialPath = '/inbox') {
 describe('ArticleList', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockApiPost.mockReset()
+    mockApiPost.mockResolvedValue({ translated_titles: {} })
     swrFeedsData = undefined
     mockSettings.autoMarkRead = 'off' as any
     // Stub IntersectionObserver for tests that enable autoMarkRead
@@ -276,6 +282,25 @@ describe('ArticleList', () => {
     renderArticleList()
     expect(screen.getByText('First Article')).toBeTruthy()
     expect(screen.getByText('Second Article')).toBeTruthy()
+  })
+
+  it('translates loaded titles after clicking top translate button', async () => {
+    swrInfiniteReturn = {
+      data: [{ articles: [makeArticle({ id: 1, title: 'Bonjour', lang: 'fr' })], total: 1, has_more: false }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+    mockApiPost.mockResolvedValue({ translated_titles: { 1: 'Hello' } })
+    renderArticleList()
+
+    fireEvent.click(screen.getByText('Translate'))
+
+    expect(mockApiPost).toHaveBeenCalledWith('/api/articles/translate-titles', { ids: [1] })
+    expect(await screen.findByText('Hello')).toBeTruthy()
   })
 
   it('renders list chat fab when articles are present', () => {
