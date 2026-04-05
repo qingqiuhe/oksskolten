@@ -129,17 +129,17 @@ export function NotificationChannelsSection({ t }: { t: TFunc }) {
         <div className="space-y-3">
           {sortedChannels.map(channel => (
             <div key={channel.id} className="rounded-lg border border-border bg-bg-card p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${channel.enabled === 1 ? 'bg-success' : 'bg-muted'}`} />
-                    <span className="text-sm font-medium text-text truncate">{channel.name}</span>
+                    <span className="min-w-0 text-sm font-medium text-text break-words sm:truncate">{channel.name}</span>
                     <span className="text-[11px] text-muted">{t('notifications.channelTypeFeishu')}</span>
                     <span className="text-[11px] text-muted">{channel.timezone}</span>
                   </div>
-                  <p className="mt-1 text-xs text-muted truncate">{channel.webhook_url}</p>
+                  <p className="mt-1 text-xs text-muted break-all sm:truncate">{channel.webhook_url}</p>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex flex-wrap items-center gap-1 sm:justify-end">
                   <button
                     type="button"
                     onClick={() => void handleTest(channel.id)}

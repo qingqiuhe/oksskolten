@@ -102,6 +102,21 @@ body {
   border-color: var(--color-border);
 }
 
+.theme-card-actions {
+  opacity: 1;
+}
+
+@media (hover: hover) {
+  .theme-card-actions {
+    opacity: 0;
+  }
+
+  .theme-card-shell:hover .theme-card-actions,
+  .theme-card-shell:focus-within .theme-card-actions {
+    opacity: 1;
+  }
+}
+
 @keyframes fade-in {
   from { opacity: 0; }
   to { opacity: 1; }

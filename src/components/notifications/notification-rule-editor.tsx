@@ -213,23 +213,26 @@ export function NotificationRuleEditor({
     </div>
   )
 
+  const sectionHeadingClass = 'text-sm font-medium text-text'
+  const sectionHintClass = 'mt-1 text-xs text-muted'
+
   return (
     <div className="space-y-4">
       <section
         className={cn(
-          'rounded-[22px] border p-4 shadow-[0_20px_48px_-32px_rgba(15,23,42,0.45)] transition-colors',
+          'rounded-lg border bg-bg-card p-4 transition-colors',
           form.enabled
-            ? 'border-accent/25 bg-gradient-to-br from-accent/10 via-bg-card to-bg-card'
-            : 'border-border bg-gradient-to-br from-bg-subtle to-bg-card',
+            ? 'border-accent/25'
+            : 'border-border',
         )}
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-text">{t('notifications.ruleEnabled')}</h3>
+              <h3 className={sectionHeadingClass}>{t('notifications.ruleEnabled')}</h3>
               <span
                 className={cn(
-                  'rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                  'rounded-md border px-2 py-0.5 text-xs font-medium',
                   form.enabled
                     ? 'border-accent/30 bg-accent/10 text-text'
                     : 'border-border bg-bg-subtle text-muted',
@@ -238,7 +241,7 @@ export function NotificationRuleEditor({
                 {form.enabled ? t('notifications.ruleStatusEnabled') : t('notifications.ruleStatusPaused')}
               </span>
             </div>
-            <p className="mt-2 text-xs leading-5 text-muted">{t('notifications.ruleEnabledHint')}</p>
+            <p className={sectionHintClass}>{t('notifications.ruleEnabledHint')}</p>
           </div>
 
           <button
@@ -262,23 +265,21 @@ export function NotificationRuleEditor({
         </div>
       </section>
 
-      <section className="rounded-[20px] border border-border bg-bg-card p-4 shadow-[0_18px_40px_-36px_rgba(15,23,42,0.5)]">
+      <section className="rounded-lg border border-border bg-bg-card p-4">
         <div className="mb-4">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-            {t('notifications.basicSettingsTitle')}
-          </p>
-          <p className="mt-1 text-xs text-muted">{t('notifications.basicSettingsHint')}</p>
+          <h3 className={sectionHeadingClass}>{t('notifications.basicSettingsTitle')}</h3>
+          <p className={sectionHintClass}>{t('notifications.basicSettingsHint')}</p>
         </div>
 
         <div className="space-y-4">
           <div>
             <p className="mb-2 text-xs text-muted">{t('notifications.feedDialogMode')}</p>
-            <div className="inline-flex rounded-xl border border-border bg-bg-subtle p-1">
+            <div className="inline-flex rounded-lg border border-border bg-bg-subtle p-1">
               <button
                 type="button"
                 onClick={() => setField('delivery_mode', 'immediate')}
                 className={cn(
-                  'rounded-lg px-3 py-2 text-xs transition-colors',
+                  'rounded-md px-3 py-2 text-xs transition-colors',
                   form.delivery_mode === 'immediate'
                     ? 'bg-bg-card font-medium text-text shadow-sm'
                     : 'text-muted hover:text-text',
@@ -290,7 +291,7 @@ export function NotificationRuleEditor({
                 type="button"
                 onClick={() => setField('delivery_mode', 'digest')}
                 className={cn(
-                  'rounded-lg px-3 py-2 text-xs transition-colors',
+                  'rounded-md px-3 py-2 text-xs transition-colors',
                   form.delivery_mode === 'digest'
                     ? 'bg-bg-card font-medium text-text shadow-sm'
                     : 'text-muted hover:text-text',
@@ -328,12 +329,12 @@ export function NotificationRuleEditor({
               </TooltipProvider>
             </div>
 
-            <div className="inline-flex rounded-xl border border-border bg-bg-subtle p-1">
+            <div className="inline-flex rounded-lg border border-border bg-bg-subtle p-1">
               <button
                 type="button"
                 onClick={() => setField('content_mode', 'title_only')}
                 className={cn(
-                  'rounded-lg px-3 py-2 text-xs transition-colors',
+                  'rounded-md px-3 py-2 text-xs transition-colors',
                   form.content_mode === 'title_only'
                     ? 'bg-bg-card font-medium text-text shadow-sm'
                     : 'text-muted hover:text-text',
@@ -345,7 +346,7 @@ export function NotificationRuleEditor({
                 type="button"
                 onClick={() => setField('content_mode', 'title_and_body')}
                 className={cn(
-                  'rounded-lg px-3 py-2 text-xs transition-colors',
+                  'rounded-md px-3 py-2 text-xs transition-colors',
                   form.content_mode === 'title_and_body'
                     ? 'bg-bg-card font-medium text-text shadow-sm'
                     : 'text-muted hover:text-text',
@@ -357,7 +358,7 @@ export function NotificationRuleEditor({
             <p className="mt-2 text-xs text-muted">{t('notifications.feedDialogContentModeHint')}</p>
 
             {previewOpen && (
-              <div className="mt-3 rounded-xl border border-border bg-bg-subtle p-3 md:hidden">
+              <div className="mt-3 rounded-lg border border-border bg-bg-subtle p-3 md:hidden">
                 {previewBody}
               </div>
             )}
@@ -367,7 +368,7 @@ export function NotificationRuleEditor({
             <p className="mb-2 text-xs text-muted">{t('notifications.feedDialogChannels')}</p>
             {allowChannelEdit ? (
               availableChannels.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border px-3 py-4 text-sm text-muted">
+                <div className="rounded-lg border border-dashed border-border px-3 py-4 text-sm text-muted">
                   {t('notifications.feedDialogNoChannels')}
                 </div>
               ) : (
@@ -375,7 +376,7 @@ export function NotificationRuleEditor({
                   {availableChannels.map(channel => (
                     <label
                       key={channel.id}
-                      className="flex w-full min-w-0 items-start gap-3 rounded-xl border border-border bg-bg-subtle px-3 py-3 cursor-pointer transition-colors hover:border-accent/20 hover:bg-bg-card"
+                      className="flex w-full min-w-0 items-start gap-3 rounded-lg border border-border bg-bg-subtle px-3 py-3 cursor-pointer transition-colors hover:border-accent/20 hover:bg-bg-card"
                     >
                       <input
                         type="checkbox"
@@ -393,7 +394,7 @@ export function NotificationRuleEditor({
               )
             ) : (
               <div className="space-y-2">
-                <div className="rounded-xl border border-border bg-bg-subtle px-3 py-3 text-xs text-muted">
+                <div className="rounded-lg border border-border bg-bg-subtle px-3 py-3 text-xs text-muted">
                   {readOnlyChannelsText || t('notifications.noChannelsBound')}
                 </div>
                 {readOnlyChannelsHint && (
@@ -405,7 +406,7 @@ export function NotificationRuleEditor({
         </div>
       </section>
 
-      <section className="rounded-[20px] border border-border bg-bg-card shadow-[0_18px_40px_-36px_rgba(15,23,42,0.5)]">
+      <section className="rounded-lg border border-border bg-bg-card">
         <button
           type="button"
           onClick={() => setAdvancedOpen(open => !open)}
@@ -414,14 +415,12 @@ export function NotificationRuleEditor({
           className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left"
         >
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-              {t('notifications.advancedSettingsTitle')}
-            </p>
+            <h3 className={sectionHeadingClass}>{t('notifications.advancedSettingsTitle')}</h3>
             <div className="mt-2 flex flex-wrap gap-2">
               {summaryChips.map(chip => (
                 <span
                   key={chip}
-                  className="rounded-full border border-border bg-bg-subtle px-2.5 py-1 text-[11px] text-muted"
+                  className="rounded-md border border-border bg-bg-subtle px-2 py-1 text-xs text-muted"
                 >
                   {chip}
                 </span>
@@ -438,7 +437,7 @@ export function NotificationRuleEditor({
           <div className="border-t border-border px-4 pb-4 pt-4">
             <div className="space-y-4">
               {form.content_mode === 'title_and_body' && (
-                <div className="rounded-xl border border-border bg-bg-subtle px-3 py-3">
+                <div className="rounded-lg border border-border bg-bg-subtle px-3 py-3">
                   <label className="flex items-center justify-between gap-3 cursor-pointer">
                     <div className="min-w-0">
                       <div className="text-sm text-text">{t('notifications.translateEnabled')}</div>
