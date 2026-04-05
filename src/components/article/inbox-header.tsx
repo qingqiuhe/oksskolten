@@ -3,11 +3,14 @@ import { Sparkles, CalendarDays, Layers3, Clock3 } from 'lucide-react'
 import type { InboxSummary } from '../../../shared/types'
 
 export type InboxSort = 'newest' | 'oldest_unread' | 'score'
+export type InboxGroupMode = 'none' | 'day' | 'feed'
 
 interface InboxHeaderProps {
   summary?: InboxSummary
   sort: InboxSort
+  groupMode: InboxGroupMode
   onSortChange: (sort: InboxSort) => void
+  onGroupModeChange: (mode: InboxGroupMode) => void
   chatTrigger: ReactNode
   labels: {
     unreadTotal: string
@@ -17,6 +20,9 @@ interface InboxHeaderProps {
     latest: string
     backlog: string
     highValue: string
+    groupNone: string
+    groupDay: string
+    groupFeed: string
     noUnread: string
   }
 }
@@ -70,7 +76,9 @@ function formatDate(value: string | null | undefined): string {
 export function InboxHeader({
   summary,
   sort,
+  groupMode,
   onSortChange,
+  onGroupModeChange,
   chatTrigger,
   labels,
 }: InboxHeaderProps) {
@@ -100,10 +108,17 @@ export function InboxHeader({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <SortButton active={sort === 'newest'} label={labels.latest} onClick={() => onSortChange('newest')} />
-          <SortButton active={sort === 'oldest_unread'} label={labels.backlog} onClick={() => onSortChange('oldest_unread')} />
-          <SortButton active={sort === 'score'} label={labels.highValue} onClick={() => onSortChange('score')} />
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <SortButton active={sort === 'newest'} label={labels.latest} onClick={() => onSortChange('newest')} />
+            <SortButton active={sort === 'oldest_unread'} label={labels.backlog} onClick={() => onSortChange('oldest_unread')} />
+            <SortButton active={sort === 'score'} label={labels.highValue} onClick={() => onSortChange('score')} />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <SortButton active={groupMode === 'none'} label={labels.groupNone} onClick={() => onGroupModeChange('none')} />
+            <SortButton active={groupMode === 'day'} label={labels.groupDay} onClick={() => onGroupModeChange('day')} />
+            <SortButton active={groupMode === 'feed'} label={labels.groupFeed} onClick={() => onGroupModeChange('feed')} />
+          </div>
         </div>
 
         <div className="flex items-center gap-2">

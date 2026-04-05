@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useImperativeHandle, forwardRef, useMemo } from 'react'
+import { Fragment } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import useSWR from 'swr'
 import useSWRInfinite from 'swr/infinite'
@@ -26,12 +27,14 @@ import { ActionChip } from '../ui/action-chip'
 import { ListChatFab } from '../chat/list-chat-fab'
 import { useKeyboardNavigationContext } from '../../contexts/keyboard-navigation-context'
 import { useKeyboardNavigation } from '../../hooks/use-keyboard-navigation'
-import { apiPatch, apiPost } from '../../lib/fetcher'
+import { apiDelete, apiPatch, apiPost } from '../../lib/fetcher'
 import type { ArticleListItem, FeedWithCounts, InboxSummary } from '../../../shared/types'
 import type { LayoutName } from '../../data/layouts'
 import { isXFeedSource, type ArticleKind } from '../../../shared/article-kind'
 import { InboxHeader, type InboxSort } from './inbox-header'
 import { ArticleInlineActions } from './article-inline-actions'
+import { InboxGroupHeader } from './inbox-group-header'
+import { useUndoSeen } from '../../hooks/use-undo-seen'
 
 interface ArticlesResponse {
   articles: ArticleListItem[]
@@ -43,6 +46,7 @@ interface ArticlesResponse {
 
 const PAGE_SIZE = 20
 const INBOX_SORT_STORAGE_KEY = 'oksskolten.inbox.sort'
+const INBOX_GROUP_STORAGE_KEY = 'oksskolten.inbox.group'
 
 /** How often (ms) to flush the batch of read article IDs to the server */
 const BATCH_FLUSH_INTERVAL = 1500
@@ -59,6 +63,45 @@ function readStoredInboxSort(): InboxSort {
   if (typeof window === 'undefined') return 'newest'
   const stored = window.localStorage.getItem(INBOX_SORT_STORAGE_KEY)
   return stored === 'score' || stored === 'oldest_unread' ? stored : 'newest'
+}
+
+type InboxGroupMode = 'none' | 'day' | 'feed'
+
+function readStoredInboxGroupMode(): InboxGroupMode {
+  if (typeof window === 'undefined') return 'none'
+  const stored = window.localStorage.getItem(INBOX_GROUP_STORAGE_KEY)
+  return stored === 'day' || stored === 'feed' ? stored : 'none'
+}
+
+function startOfToday() {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  return date
+}
+
+function startOfYesterday() {
+  const date = startOfToday()
+  date.setDate(date.getDate() - 1)
+  return date
+}
+
+function dayGroupMeta(article: ArticleListItem, t: ReturnType<typeof useI18n>['t']) {
+  const raw = article.published_at
+  if (!raw) {
+    return { key: 'day:unknown', title: t('inbox.group.unknownDay') }
+  }
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) {
+    return { key: 'day:unknown', title: t('inbox.group.unknownDay') }
+  }
+  const today = startOfToday()
+  const yesterday = startOfYesterday()
+  if (date >= today) return { key: 'day:today', title: t('feeds.today') }
+  if (date >= yesterday) return { key: 'day:yesterday', title: t('inbox.group.yesterday') }
+  return {
+    key: `day:${date.toISOString().slice(0, 10)}`,
+    title: new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date),
+  }
 }
 
 export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(function ArticleList({ listLabel }, ref) {
@@ -82,6 +125,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const [showReadArticles, setShowReadArticles] = useState(false)
   const [articleKindFilter, setArticleKindFilter] = useState<ArticleKind | 'all'>('all')
   const [inboxSort, setInboxSort] = useState<InboxSort>(() => readStoredInboxSort())
+  const [inboxGroupMode, setInboxGroupMode] = useState<InboxGroupMode>(() => readStoredInboxGroupMode())
   const [inboxChatOpenSignal, setInboxChatOpenSignal] = useState(0)
   const categoryUnreadOnly = !!categoryId && settings.categoryUnreadOnly === 'on'
   const unreadOnly = isInbox || (categoryUnreadOnly && !showReadArticles)
@@ -144,11 +188,17 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const hiddenByFloor = data?.[0]?.total_without_floor != null
     ? data[0].total_without_floor - (data[0].total ?? 0)
     : 0
+  const { enqueueUndoSeen, undoSeen, dismissUndoSeen } = useUndoSeen()
 
   useEffect(() => {
     if (!isInbox || typeof window === 'undefined') return
     window.localStorage.setItem(INBOX_SORT_STORAGE_KEY, inboxSort)
   }, [inboxSort, isInbox])
+
+  useEffect(() => {
+    if (!isInbox || typeof window === 'undefined') return
+    window.localStorage.setItem(INBOX_GROUP_STORAGE_KEY, inboxGroupMode)
+  }, [inboxGroupMode, isInbox])
 
   // ---------------------------------------------------------------------------
   // Keyboard navigation
@@ -299,23 +349,6 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     }, BATCH_FLUSH_INTERVAL)
   }, [flushBatch])
 
-  // Mark an article as read: instant UI update + queue for server batch
-  const markRead = useCallback((articleId: number) => {
-    setAutoReadIds(prev => {
-      if (prev.has(articleId)) return prev
-      const next = new Set(prev)
-      next.add(articleId)
-      return next
-    })
-    trackRead(articleId)
-    batchQueue.current.add(articleId)
-    scheduleFlush()
-  }, [scheduleFlush])
-
-  // Stable ref so the observer callback always sees the latest markRead
-  const markReadRef = useRef(markRead)
-  markReadRef.current = markRead
-
   const isAutoMarkEnabled = autoMarkRead === 'on'
   const isTouchDevice = useIsTouchDevice()
   const listRef = useRef<HTMLElement>(null)
@@ -459,6 +492,33 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     ...(noFloor ? { no_floor: true } : {}),
   }), [feedId, categoryId, unreadOnly, bookmarkedOnly, likedOnly, readOnly, articleKindFilter, noFloor])
 
+  const inboxGroupInfo = useMemo(() => {
+    if (!isInbox || inboxGroupMode === 'none') return null
+
+    const groupKeys = articles.map((article) => {
+      if (inboxGroupMode === 'feed') return `feed:${article.feed_id}`
+      return dayGroupMeta(article, t).key
+    })
+
+    const unreadCounts = new Map<string, number>()
+    for (let i = 0; i < articles.length; i++) {
+      const key = groupKeys[i]
+      const article = articles[i]
+      unreadCounts.set(key, (unreadCounts.get(key) ?? 0) + (article.seen_at == null ? 1 : 0))
+    }
+
+    return {
+      keyForIndex: (index: number) => groupKeys[index],
+      shouldRenderAtIndex: (index: number) => index === 0 || groupKeys[index] !== groupKeys[index - 1],
+      titleForArticle: (article: ArticleListItem) => (
+        inboxGroupMode === 'feed'
+          ? article.feed_name
+          : dayGroupMeta(article, t).title
+      ),
+      unreadCountForIndex: (index: number) => unreadCounts.get(groupKeys[index]) ?? 0,
+    }
+  }, [articles, inboxGroupMode, isInbox, t])
+
   const mutateArticleInPages = useCallback((
     articleId: number,
     updater: (article: ArticleListItem) => ArticleListItem,
@@ -492,6 +552,21 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     void globalMutate((key: string) => typeof key === 'string' && key.startsWith('/api/feeds'))
   }, [globalMutate, mutate, mutateInboxSummary])
 
+  const showUndoToast = useCallback((undoId: number) => {
+    toast(t('inbox.undoSeenToast'), {
+      id: 'inbox-undo-seen',
+      duration: 10_000,
+      action: {
+        label: t('inbox.undoAction'),
+        onClick: () => {
+          void undoSeen(undoId)
+        },
+      },
+      onDismiss: () => dismissUndoSeen(undoId),
+      onAutoClose: () => dismissUndoSeen(undoId),
+    })
+  }, [dismissUndoSeen, t, undoSeen])
+
   const handleToggleSeen = useCallback((article: ArticleListItem) => {
     const nextSeenAt = article.seen_at ? null : new Date().toISOString()
     mutateArticleInPages(article.id, current => ({ ...current, seen_at: nextSeenAt }))
@@ -503,6 +578,73 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         void mutate()
       })
   }, [mutate, mutateArticleInPages, refreshListMeta])
+
+  const handleMarkSeenWithUndo = useCallback((article: ArticleListItem) => {
+    if (article.seen_at != null) return
+    mutateArticleInPages(article.id, current => ({ ...current, seen_at: new Date().toISOString() }))
+
+    const undoId = enqueueUndoSeen({
+      articleId: article.id,
+      undo: async () => {
+        setAutoReadIds(prev => {
+          if (!prev.has(article.id)) return prev
+          const next = new Set(prev)
+          next.delete(article.id)
+          return next
+        })
+        batchQueue.current.delete(article.id)
+        mutateArticleInPages(article.id, current => ({ ...current, seen_at: null }))
+        await apiDelete(`/api/articles/${article.id}/seen`)
+        refreshListMeta()
+      },
+    })
+    showUndoToast(undoId)
+
+    apiPatch(`/api/articles/${article.id}/seen`, { seen: true })
+      .then(() => {
+        refreshListMeta()
+      })
+      .catch(() => {
+        dismissUndoSeen(undoId)
+        void mutate()
+      })
+  }, [dismissUndoSeen, enqueueUndoSeen, mutate, mutateArticleInPages, refreshListMeta, showUndoToast])
+
+  // Mark an article as read: instant UI update + queue for server batch
+  const markRead = useCallback((articleId: number) => {
+    setAutoReadIds(prev => {
+      if (prev.has(articleId)) return prev
+      const next = new Set(prev)
+      next.add(articleId)
+      return next
+    })
+    trackRead(articleId)
+    batchQueue.current.add(articleId)
+    scheduleFlush()
+    const article = articleMap.get(String(articleId))
+    if (article && article.seen_at == null) {
+      const undoId = enqueueUndoSeen({
+        articleId,
+        undo: async () => {
+          setAutoReadIds(prev => {
+            if (!prev.has(articleId)) return prev
+            const next = new Set(prev)
+            next.delete(articleId)
+            return next
+          })
+          batchQueue.current.delete(articleId)
+          mutateArticleInPages(articleId, current => ({ ...current, seen_at: null }))
+          await apiDelete(`/api/articles/${articleId}/seen`)
+          refreshListMeta()
+        },
+      })
+      showUndoToast(undoId)
+    }
+  }, [articleMap, enqueueUndoSeen, mutateArticleInPages, refreshListMeta, scheduleFlush, showUndoToast])
+
+  // Stable ref so the observer callback always sees the latest markRead
+  const markReadRef = useRef(markRead)
+  markReadRef.current = markRead
 
   const handleToggleBookmark = useCallback((article: ArticleListItem) => {
     const nextBookmarkedAt = article.bookmarked_at ? null : new Date().toISOString()
@@ -590,6 +732,8 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
             setNoFloor(false)
             void setSize(1)
           }}
+          groupMode={inboxGroupMode}
+          onGroupModeChange={setInboxGroupMode}
           chatTrigger={inboxChatTrigger}
           labels={{
             unreadTotal: t('inbox.unreadTotal'),
@@ -599,6 +743,9 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
             latest: t('inbox.sort.latest'),
             backlog: t('inbox.sort.backlog'),
             highValue: t('inbox.sort.highValue'),
+            groupNone: t('inbox.group.none'),
+            groupDay: t('inbox.group.day'),
+            groupFeed: t('inbox.group.feed'),
             noUnread: t('inbox.noUnread'),
           }}
         />
@@ -762,63 +909,78 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
           }
           const isKbFocused = focusedItemId === String(article.id)
           return (
-            <div
-              key={article.id}
-              data-article-id={article.id}
-              data-article-unread={article.seen_at == null && !isAutoRead ? '1' : '0'}
-              aria-selected={isKbFocused || undefined}
-              className={`${layout === 'magazine' && index === 0 ? 'col-span-full' : ''} relative group`}
-              style={isKbFocused ? {
-                borderLeft: '2px solid var(--color-accent)',
-                backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)',
-              } : undefined}
-              onClick={() => {
-                if (!isGridLayout) {
-                  setFocusedItemId(String(article.id))
-                }
-              }}
-            >
-              {isTouchDevice ? (
-                <SwipeableArticleCard {...cardProps} />
-              ) : (
-                <ArticleCard {...cardProps} />
+            <Fragment key={article.id}>
+              {inboxGroupInfo?.shouldRenderAtIndex(index) && (
+                <InboxGroupHeader
+                  title={inboxGroupInfo.titleForArticle(article)}
+                  unreadCount={inboxGroupInfo.unreadCountForIndex(index)}
+                />
               )}
-              <ArticleInlineActions
-                isSeen={articleWithTranslatedTitle.seen_at != null}
-                isBookmarked={articleWithTranslatedTitle.bookmarked_at != null}
-                isLiked={articleWithTranslatedTitle.liked_at != null}
-                isTouchDevice={isTouchDevice}
-                onToggleSeen={() => handleToggleSeen(article)}
-                onToggleBookmark={() => handleToggleBookmark(article)}
-                onToggleLike={() => handleToggleLike(article)}
-                onOpenOverlay={() => setOverlayUrl(article.url)}
-                labels={{
-                  markRead: t('inbox.markRead'),
-                  markUnread: t('inbox.markUnread'),
-                  bookmark: t('article.addBookmark'),
-                  unbookmark: t('article.removeBookmark'),
-                  like: t('article.addLike'),
-                  unlike: t('article.removeLike'),
-                  openOverlay: t('inbox.openOverlay'),
+              <div
+                data-article-id={article.id}
+                data-article-unread={article.seen_at == null && !isAutoRead ? '1' : '0'}
+                aria-selected={isKbFocused || undefined}
+                className={`${layout === 'magazine' && index === 0 ? 'col-span-full' : ''} relative group`}
+                style={isKbFocused ? {
+                  borderLeft: '2px solid var(--color-accent)',
+                  backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)',
+                } : undefined}
+                onClick={() => {
+                  if (!isGridLayout) {
+                    setFocusedItemId(String(article.id))
+                  }
                 }}
-              />
-              {article.lang && article.lang !== locale && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    void navigate(`${articleUrlToPath(article.url)}?translate=1`)
+              >
+                {isTouchDevice ? (
+                  <SwipeableArticleCard
+                    {...cardProps}
+                    onSwipeOpen={(swipedArticle) => {
+                      if (articleOpenMode === 'overlay') setOverlayUrl(swipedArticle.url)
+                      else void navigate(articleUrlToPath(swipedArticle.url))
+                    }}
+                    onSwipeMarkSeen={handleMarkSeenWithUndo}
+                    onSwipeBookmark={handleToggleBookmark}
+                  />
+                ) : (
+                  <ArticleCard {...cardProps} />
+                )}
+                <ArticleInlineActions
+                  isSeen={articleWithTranslatedTitle.seen_at != null}
+                  isBookmarked={articleWithTranslatedTitle.bookmarked_at != null}
+                  isLiked={articleWithTranslatedTitle.liked_at != null}
+                  isTouchDevice={isTouchDevice}
+                  onToggleSeen={() => handleToggleSeen(article)}
+                  onToggleBookmark={() => handleToggleBookmark(article)}
+                  onToggleLike={() => handleToggleLike(article)}
+                  onOpenOverlay={() => setOverlayUrl(article.url)}
+                  labels={{
+                    markRead: t('inbox.markRead'),
+                    markUnread: t('inbox.markUnread'),
+                    bookmark: t('article.addBookmark'),
+                    unbookmark: t('article.removeBookmark'),
+                    like: t('article.addLike'),
+                    unlike: t('article.removeLike'),
+                    openOverlay: t('inbox.openOverlay'),
                   }}
-                  className="absolute left-3 top-3 z-10 inline-flex items-center gap-1 rounded-md border border-border bg-bg/90 px-2 py-1 text-xs text-muted opacity-0 backdrop-blur transition hover:text-text group-hover:opacity-100 focus-visible:opacity-100"
-                  aria-label={t('article.translate')}
-                  title={t('article.translate')}
-                >
-                  <Languages className="h-3.5 w-3.5" />
-                  <span className="hidden md:inline">{t('article.translate')}</span>
-                </button>
-              )}
-            </div>
+                />
+                {article.lang && article.lang !== locale && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      void navigate(`${articleUrlToPath(article.url)}?translate=1`)
+                    }}
+                    className="absolute left-3 top-3 z-10 inline-flex items-center gap-1 rounded-md border border-border bg-bg/90 px-2 py-1 text-xs text-muted opacity-0 backdrop-blur transition hover:text-text group-hover:opacity-100 focus-visible:opacity-100"
+                    aria-label={t('article.translate')}
+                    title={t('article.translate')}
+                  >
+                    <Languages className="h-3.5 w-3.5" />
+                    <span className="hidden md:inline">{t('article.translate')}</span>
+                  </button>
+                )}
+              </div>
+            </Fragment>
           )
         })}
       </div>

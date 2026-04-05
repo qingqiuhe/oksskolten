@@ -419,6 +419,17 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     },
   )
 
+  api.delete('/api/articles/:id/seen', async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+    const result = markArticleSeen(params.id, false, getRequestUserId(request))
+    if (!result) {
+      reply.status(404).send({ error: 'Article not found' })
+      return
+    }
+    reply.send(result)
+  })
+
   api.patch(
     '/api/articles/:id/bookmark',
     { preHandler: [requireJson] },

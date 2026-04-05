@@ -47,6 +47,7 @@ vi.mock('../../lib/fetcher', () => ({
   fetcher: vi.fn(),
   apiPatch: vi.fn(() => Promise.resolve()),
   apiPost: vi.fn(() => Promise.resolve({ translated_titles: {} })),
+  apiDelete: vi.fn(() => Promise.resolve()),
 }))
 
 vi.mock('../../lib/markSeenWithQueue', () => ({
@@ -325,6 +326,9 @@ describe('ArticleList', () => {
     expect(screen.getByText('Latest')).toBeTruthy()
     expect(screen.getByText('Backlog')).toBeTruthy()
     expect(screen.getByText('High value')).toBeTruthy()
+    expect(screen.getByText('No grouping')).toBeTruthy()
+    expect(screen.getByText('By day')).toBeTruthy()
+    expect(screen.getByText('By feed')).toBeTruthy()
     expect(screen.getByText('Chat')).toBeTruthy()
   })
 
@@ -389,6 +393,77 @@ describe('ArticleList', () => {
     expect(screen.getByText('View bookmarks')).toBeTruthy()
     expect(screen.getByText('Browse history')).toBeTruthy()
     expect(screen.getAllByText('Chat').length).toBeGreaterThan(0)
+  })
+
+  it('groups inbox articles by feed when grouping mode changes', () => {
+    swrInboxSummaryData = {
+      unread_total: 3,
+      new_today: 2,
+      oldest_unread_at: '2026-01-01T00:00:00Z',
+      source_feed_count: 2,
+    }
+    swrInfiniteReturn = {
+      data: [{
+        articles: [
+          makeArticle({ id: 1, title: 'One', feed_id: 1, feed_name: 'Feed A' }),
+          makeArticle({ id: 2, title: 'Two', feed_id: 1, feed_name: 'Feed A' }),
+          makeArticle({ id: 3, title: 'Three', feed_id: 2, feed_name: 'Feed B' }),
+        ],
+        total: 3,
+        has_more: false,
+      }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList()
+    fireEvent.click(screen.getByText('By feed'))
+
+    expect(screen.getByText('Feed A')).toBeTruthy()
+    expect(screen.getByText('Feed B')).toBeTruthy()
+  })
+
+  it('dedupes day group headers across flattened paginated data', () => {
+    swrInboxSummaryData = {
+      unread_total: 3,
+      new_today: 0,
+      oldest_unread_at: '2026-01-01T00:00:00Z',
+      source_feed_count: 1,
+    }
+    swrInfiniteReturn = {
+      data: [
+        {
+          articles: [
+            makeArticle({ id: 1, title: 'Page 1', published_at: '2026-01-01T09:00:00Z' }),
+            makeArticle({ id: 2, title: 'Page 2', published_at: '2026-01-01T08:00:00Z' }),
+          ],
+          total: 3,
+          has_more: true,
+        },
+        {
+          articles: [
+            makeArticle({ id: 3, title: 'Page 3', published_at: '2026-01-01T07:00:00Z' }),
+          ],
+          total: 3,
+          has_more: false,
+        },
+      ],
+      error: undefined,
+      size: 2,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList()
+    fireEvent.click(screen.getByText('By day'))
+
+    expect(screen.getAllByText('Jan 1')).toHaveLength(1)
   })
 
   it('passes social feed view type to cards', () => {

@@ -520,6 +520,36 @@ describe('PATCH /api/articles/:id/seen', () => {
   })
 })
 
+describe('DELETE /api/articles/:id/seen', () => {
+  it('marks article as unseen', async () => {
+    const feed = seedFeed()
+    const artId = seedArticle(feed.id)
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/articles/${artId}/seen`,
+      headers: json,
+      payload: { seen: true },
+    })
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/articles/${artId}/seen`,
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().seen_at).toBeNull()
+    expect(res.json().read_at).toBeNull()
+  })
+
+  it('returns 404 for non-existent article', async () => {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/api/articles/9999/seen',
+    })
+    expect(res.statusCode).toBe(404)
+  })
+})
+
 describe('POST /api/articles/:id/read', () => {
   it('records article read (sets read_at and seen_at)', async () => {
     const feed = seedFeed()
