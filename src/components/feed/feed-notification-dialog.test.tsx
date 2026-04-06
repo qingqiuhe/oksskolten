@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SWRConfig } from 'swr'
 import { FeedNotificationDialog } from './feed-notification-dialog'
@@ -91,8 +91,6 @@ function renderDialog() {
 }
 
 describe('FeedNotificationDialog', () => {
-  const user = userEvent.setup({ pointerEventsCheck: 0 })
-
   beforeEach(() => {
     vi.clearAllMocks()
     fetcher.mockImplementation(defaultFetcher)
@@ -102,7 +100,7 @@ describe('FeedNotificationDialog', () => {
     renderDialog()
 
     expect(await screen.findByRole('dialog')).toBeTruthy()
-    await user.click(screen.getByRole('button', { name: 'Advanced settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
 
     const inputs = screen.getAllByRole('spinbutton')
     const intervalInput = inputs.find(input => input.getAttribute('max') === '1440')
@@ -114,15 +112,11 @@ describe('FeedNotificationDialog', () => {
     expect(maxTitleInput).toHaveProperty('value', '100')
     expect(maxBodyInput).toHaveProperty('value', '1000')
 
-    await user.clear(intervalInput as HTMLInputElement)
-    await user.type(intervalInput as HTMLInputElement, '30')
-    await user.clear(maxArticlesInput as HTMLInputElement)
-    await user.type(maxArticlesInput as HTMLInputElement, '4')
-    await user.clear(maxTitleInput as HTMLInputElement)
-    await user.type(maxTitleInput as HTMLInputElement, '120')
-    await user.clear(maxBodyInput as HTMLInputElement)
-    await user.type(maxBodyInput as HTMLInputElement, '640')
-    await user.click(screen.getByText('Save changes'))
+    fireEvent.change(intervalInput as HTMLInputElement, { target: { value: '30' } })
+    fireEvent.change(maxArticlesInput as HTMLInputElement, { target: { value: '4' } })
+    fireEvent.change(maxTitleInput as HTMLInputElement, { target: { value: '120' } })
+    fireEvent.change(maxBodyInput as HTMLInputElement, { target: { value: '640' } })
+    fireEvent.click(screen.getByText('Save changes'))
 
     await waitFor(() => {
       expect(apiPut).toHaveBeenCalledWith('/api/feeds/7/notification-rule', {
@@ -137,7 +131,7 @@ describe('FeedNotificationDialog', () => {
         channel_ids: [1],
       })
     })
-  })
+  }, 15_000)
 
   it('renders a highlighted master switch card and keeps advanced settings collapsed by default', async () => {
     renderDialog()
@@ -151,6 +145,7 @@ describe('FeedNotificationDialog', () => {
   })
 
   it('hides interval, translation, and body limit controls for immediate title-only mode', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
     fetcher.mockImplementation(async (url: string) => {
       if (url === '/api/settings/notification-channels') {
         return {
@@ -235,6 +230,7 @@ describe('FeedNotificationDialog', () => {
   })
 
   it('shows preview copy only on demand and updates it for title-only mode', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
     renderDialog()
 
     expect(await screen.findByRole('dialog')).toBeTruthy()

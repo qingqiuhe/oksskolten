@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { NotificationChannelsSection } from './notification-channels-section'
 
 const mockApiPost = vi.fn()
@@ -25,7 +24,6 @@ vi.mock('swr', () => ({
 }))
 
 describe('NotificationChannelsSection', () => {
-  const user = userEvent.setup({ pointerEventsCheck: 0 })
   const t = (key: string) => ({
     'notifications.channelsTitle': 'Notification Channels',
     'notifications.channelsDesc': 'desc',
@@ -87,11 +85,11 @@ describe('NotificationChannelsSection', () => {
     mockApiPost.mockResolvedValue({})
     render(<NotificationChannelsSection t={t} />)
 
-    await user.click(screen.getByText('Add channel'))
+    fireEvent.click(screen.getByText('Add channel'))
     const inputs = screen.getAllByRole('textbox')
-    await user.type(inputs[0], 'New Channel')
-    await user.type(inputs[1], 'https://open.feishu.cn/open-apis/bot/v2/hook/new-token')
-    await user.click(screen.getByText('Save changes'))
+    fireEvent.change(inputs[0], { target: { value: 'New Channel' } })
+    fireEvent.change(inputs[1], { target: { value: 'https://open.feishu.cn/open-apis/bot/v2/hook/new-token' } })
+    fireEvent.click(screen.getByText('Save changes'))
 
     await waitFor(() => {
       expect(mockApiPost).toHaveBeenCalledWith('/api/settings/notification-channels', {

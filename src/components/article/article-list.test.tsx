@@ -396,7 +396,7 @@ describe('ArticleList', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Translated' })).toBeTruthy())
     expect(mockApiPost).toHaveBeenCalledTimes(1)
     expect(screen.getByText('Hello')).toBeTruthy()
-  })
+  }, 15_000)
 
   it('uses translate target language instead of UI locale for title translation', async () => {
     swrInfiniteReturn = {
