@@ -323,6 +323,19 @@ describe('FeedList', () => {
     expect(icon?.getAttribute('src')).toContain('domain=example.com')
   })
 
+  it('shows the feed source url on the name-side icon', () => {
+    const sourceUrl = 'https://example.com/feed.xml'
+    const feeds = [makeFeed({ id: 44, name: 'Tooltip Feed', rss_url: sourceUrl, category_id: null })]
+    renderFeedList(
+      {},
+      { feeds, bookmark_count: 0, like_count: 0, clip_feed_id: null },
+      { categories: [] },
+    )
+
+    const urlIcon = screen.getByLabelText(sourceUrl)
+    expect(urlIcon.getAttribute('title')).toBe(sourceUrl)
+  })
+
   it('shows bookmark count badge', () => {
     renderFeedList(
       {},

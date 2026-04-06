@@ -4,7 +4,7 @@ import useSWR from 'swr'
 import { fetcher } from '../../lib/fetcher'
 import { useI18n } from '../../lib/i18n'
 import { MD_BREAKPOINT } from '../../lib/breakpoints'
-import { Inbox, Plus, ChevronRight, Bookmark, ThumbsUp, Clock, Paperclip, Search, Command, ArrowBigUp, AlertTriangle, MessagesSquare } from 'lucide-react'
+import { Inbox, Plus, ChevronRight, Bookmark, ThumbsUp, Clock, Paperclip, Search, Command, ArrowBigUp, AlertTriangle, MessagesSquare, Link2 } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { useFetchProgressContext } from '../../contexts/fetch-progress-context'
@@ -33,6 +33,11 @@ function isFeedInactive(feed: FeedWithCounts): boolean {
   if (!feed.latest_published_at) return true
   const daysSince = (Date.now() - new Date(feed.latest_published_at).getTime()) / (1000 * 60 * 60 * 24)
   return daysSince >= 90
+}
+
+function getFeedSourceUrl(feed: FeedWithCounts): string {
+  if (feed.type === 'clip') return feed.url
+  return feed.rss_url || feed.rss_bridge_url || feed.url
 }
 
 interface FeedListProps {
@@ -253,6 +258,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
 
   function renderFeedItem(feed: FeedWithCounts, indent = false) {
     const isRenaming = renaming?.type === 'feed' && renaming.feed.id === feed.id
+    const sourceUrl = getFeedSourceUrl(feed)
     if (isRenaming && renaming?.type === 'feed') {
       return (
         <form
@@ -319,10 +325,19 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
               />
             )
           })()}
-          <span className="truncate">
-            {feed.disabled ? '⚠ ' : null}
-            {feed.name}
-          </span>
+          <div className="flex items-center gap-1 min-w-0">
+            <span className="truncate">
+              {feed.disabled ? '⚠ ' : null}
+              {feed.name}
+            </span>
+            <span
+              title={sourceUrl}
+              aria-label={sourceUrl}
+              className="shrink-0 text-muted/70"
+            >
+              <Link2 size={12} />
+            </span>
+          </div>
           {!feed.disabled && feed.last_error && feed.article_count === 0 && (
             <AlertTriangle size={13} className="text-warning shrink-0" />
           )}
