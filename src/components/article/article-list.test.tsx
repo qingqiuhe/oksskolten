@@ -209,6 +209,7 @@ const mockSettings = {
   setShowThumbnails: vi.fn(),
   showFeedActivity: 'on' as const,
   setShowFeedActivity: vi.fn(),
+  translateTargetLang: null as string | null,
   highlightTheme: 'github-dark' as const,
   setHighlightTheme: vi.fn(),
   articleFont: 'sans' as const,
@@ -243,6 +244,7 @@ describe('ArticleList', () => {
     swrFeedsData = undefined
     swrInboxSummaryData = undefined
     mockSettings.autoMarkRead = 'off' as any
+    mockSettings.translateTargetLang = null
     // Stub IntersectionObserver for tests that enable autoMarkRead
     vi.stubGlobal('IntersectionObserver', class {
       constructor() {}
@@ -394,6 +396,27 @@ describe('ArticleList', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Translated' })).toBeTruthy())
     expect(mockApiPost).toHaveBeenCalledTimes(1)
     expect(screen.getByText('Hello')).toBeTruthy()
+  })
+
+  it('uses translate target language instead of UI locale for title translation', async () => {
+    swrInfiniteReturn = {
+      data: [{ articles: [makeArticle({ id: 1, title: 'Hello world', lang: 'en' })], total: 1, has_more: false }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+    mockSettings.translateTargetLang = 'zh'
+    mockApiPost.mockResolvedValue({ translated_titles: { 1: '你好，世界' } })
+
+    renderArticleList()
+
+    fireEvent.click(getTopTranslateButton('Translate'))
+
+    await waitFor(() => expect(mockApiPost).toHaveBeenCalledWith('/api/articles/translate-titles', { ids: [1] }))
+    expect(await screen.findByText('你好，世界')).toBeTruthy()
   })
 
   it('shows a dedicated error state when title translation fails', async () => {

@@ -146,6 +146,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const isGridLayout = layout === 'card' || layout === 'magazine'
   const showArticleKindFilter = !!feedId && !!currentFeed && isXFeedSource(currentFeed)
   const { t, locale } = useI18n()
+  const effectiveTranslateTargetLang = settings.translateTargetLang || locale
   const { progress, startFeedFetch } = useFetchProgressContext()
   const { mutate: globalMutate } = useSWRConfig()
   const { data: inboxSummary, mutate: mutateInboxSummary } = useSWR<InboxSummary>(isInbox ? '/api/inbox/summary' : null, fetcher)
@@ -464,7 +465,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     const pending = articles
       .filter(article =>
         article.lang &&
-        article.lang !== locale &&
+        article.lang !== effectiveTranslateTargetLang &&
         translatedTitles[article.id] == null &&
         !translatingTitleIdsRef.current.has(article.id),
       )
@@ -487,7 +488,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
           const remaining = articles
             .filter(article =>
               article.lang &&
-              article.lang !== locale &&
+              article.lang !== effectiveTranslateTargetLang &&
               ({ ...translatedTitles, ...payload } as Record<number, string>)[article.id] == null &&
               !translatingTitleIdsRef.current.has(article.id),
             )
@@ -510,7 +511,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         translateTitlesInFlightRef.current = false
         for (const id of pending) translatingTitleIdsRef.current.delete(id)
       })
-  }, [translateTitlesEnabled, articles, locale, translatedTitles, translateTitlesStatus, t])
+  }, [translateTitlesEnabled, articles, effectiveTranslateTargetLang, translatedTitles, translateTitlesStatus, t])
 
   const articleKindOptions: Array<{ value: ArticleKind | 'all'; label: string }> = [
     { value: 'all', label: t('articleKind.all') },
@@ -830,7 +831,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
             }
             const pending = articles.some(article =>
               article.lang &&
-              article.lang !== locale &&
+              article.lang !== effectiveTranslateTargetLang &&
               translatedTitles[article.id] == null &&
               !translatingTitleIdsRef.current.has(article.id),
             )
