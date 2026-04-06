@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { LocaleContext } from '../../lib/i18n'
 import type { ArticleListItem } from '../../../shared/types'
+import { toast } from 'sonner'
 
 // --- Mocks ---
 const { mockApiPost } = vi.hoisted(() => ({
@@ -168,6 +169,25 @@ function makeArticle(overrides: Partial<ArticleListItem> = {}): ArticleListItem 
     liked_at: null,
     ...overrides,
   }
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+function getTopTranslateButton(label: string) {
+  const buttons = screen.getAllByRole('button', { name: label })
+  const button = buttons.find(el => !el.getAttribute('aria-label'))
+  if (!button) {
+    throw new Error(`Top translate button with label "${label}" not found`)
+  }
+  return button as HTMLButtonElement
 }
 
 const mockSettings = {
@@ -337,7 +357,7 @@ describe('ArticleList', () => {
     expect(screen.getByText('Chat')).toBeTruthy()
   })
 
-  it('translates loaded titles after clicking top translate button', async () => {
+  it('translates loaded titles after clicking top translate button and keeps cached results', async () => {
     swrInfiniteReturn = {
       data: [{ articles: [makeArticle({ id: 1, title: 'Bonjour', lang: 'fr' })], total: 1, has_more: false }],
       error: undefined,
@@ -347,13 +367,54 @@ describe('ArticleList', () => {
       isValidating: false,
       mutate: vi.fn(),
     }
-    mockApiPost.mockResolvedValue({ translated_titles: { 1: 'Hello' } })
+    const deferred = createDeferred<{ translated_titles: Record<number, string> }>()
+    mockApiPost.mockReturnValueOnce(deferred.promise)
     renderArticleList()
 
-    fireEvent.click(screen.getAllByText('Translate')[0])
+    fireEvent.click(getTopTranslateButton('Translate'))
 
-    expect(mockApiPost).toHaveBeenCalledWith('/api/articles/translate-titles', { ids: [1] })
+    await waitFor(() => expect(mockApiPost).toHaveBeenCalledWith('/api/articles/translate-titles', { ids: [1] }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Translating…' })).toBeTruthy())
+    expect((screen.getByRole('button', { name: 'Translating…' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Translating…' }))
+    expect(mockApiPost).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      deferred.resolve({ translated_titles: { 1: 'Hello' } })
+    })
     expect(await screen.findByText('Hello')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Translated' })).toBeTruthy()
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Translated the current list titles'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Translated' }))
+    expect(getTopTranslateButton('Translate')).toBeTruthy()
+    expect(screen.getByText('Bonjour')).toBeTruthy()
+
+    fireEvent.click(getTopTranslateButton('Translate'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Translated' })).toBeTruthy())
+    expect(mockApiPost).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Hello')).toBeTruthy()
+  })
+
+  it('shows a dedicated error state when title translation fails', async () => {
+    swrInfiniteReturn = {
+      data: [{ articles: [makeArticle({ id: 1, title: 'Bonjour', lang: 'fr' })], total: 1, has_more: false }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+    mockApiPost.mockRejectedValueOnce(new Error('boom'))
+    renderArticleList()
+
+    fireEvent.click(getTopTranslateButton('Translate'))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Translation failed'))
+    expect(screen.getByRole('button', { name: 'Translation failed' })).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Translation failed' }) as HTMLButtonElement).title).toBe('Translation failed')
+    expect(screen.getByText('Bonjour')).toBeTruthy()
   })
 
   it('does not render floating list chat fab trigger on inbox when articles are present', () => {

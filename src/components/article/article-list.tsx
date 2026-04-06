@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import useSWR from 'swr'
 import useSWRInfinite from 'swr/infinite'
 import { useSWRConfig } from 'swr'
-import { Languages, MessageSquare, Plus, RefreshCw } from 'lucide-react'
+import { Languages, Loader2, MessageSquare, Plus, RefreshCw } from 'lucide-react'
 import { fetcher } from '../../lib/fetcher'
 import { markSeenOnServer } from '../../lib/markSeenWithQueue'
 import { useI18n } from '../../lib/i18n'
@@ -48,6 +48,7 @@ const PAGE_SIZE = 20
 const INBOX_SORT_STORAGE_KEY = 'oksskolten.inbox.sort'
 const INBOX_GROUP_STORAGE_KEY = 'oksskolten.inbox.group'
 const TITLE_TRANSLATE_BATCH_SIZE = 50
+type TranslateTitlesStatus = 'idle' | 'loading' | 'active' | 'error'
 
 /** How often (ms) to flush the batch of read article IDs to the server */
 const BATCH_FLUSH_INTERVAL = 1500
@@ -179,8 +180,11 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
 
   const articles = useMemo(() => data ? data.flatMap(page => page.articles) : [], [data])
   const [translateTitlesEnabled, setTranslateTitlesEnabled] = useState(false)
+  const [translateTitlesStatus, setTranslateTitlesStatus] = useState<TranslateTitlesStatus>('idle')
   const [translatedTitles, setTranslatedTitles] = useState<Record<number, string>>({})
+  const translateTitlesEnabledRef = useRef(false)
   const translatingTitleIdsRef = useRef<Set<number>>(new Set())
+  const translateTitlesInFlightRef = useRef(false)
   const hasMore = data ? data[data.length - 1]?.has_more ?? false : false
   const isEmpty = data?.[0]?.articles.length === 0
   const totalAll = data?.[0]?.total_all
@@ -200,6 +204,10 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     if (!isInbox || typeof window === 'undefined') return
     window.localStorage.setItem(INBOX_GROUP_STORAGE_KEY, inboxGroupMode)
   }, [inboxGroupMode, isInbox])
+
+  useEffect(() => {
+    translateTitlesEnabledRef.current = translateTitlesEnabled
+  }, [translateTitlesEnabled])
 
   // ---------------------------------------------------------------------------
   // Keyboard navigation
@@ -445,12 +453,14 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     setArticleKindFilter('all')
     setFocusedItemId(null)
     setTranslateTitlesEnabled(false)
+    setTranslateTitlesStatus('idle')
     setTranslatedTitles({})
     translatingTitleIdsRef.current.clear()
+    translateTitlesInFlightRef.current = false
   }, [feedId, categoryId, setFocusedItemId])
 
   useEffect(() => {
-    if (!translateTitlesEnabled || articles.length === 0) return
+    if (!translateTitlesEnabled || articles.length === 0 || translateTitlesInFlightRef.current) return
     const pending = articles
       .filter(article =>
         article.lang &&
@@ -460,22 +470,47 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       )
       .map(article => article.id)
       .slice(0, TITLE_TRANSLATE_BATCH_SIZE)
-    if (pending.length === 0) return
+    if (pending.length === 0) {
+      if (translateTitlesStatus !== 'active') setTranslateTitlesStatus('active')
+      return
+    }
 
     for (const id of pending) translatingTitleIdsRef.current.add(id)
+    translateTitlesInFlightRef.current = true
+    setTranslateTitlesStatus('loading')
 
     apiPost('/api/articles/translate-titles', { ids: pending })
       .then((res) => {
         const payload = (res as { translated_titles?: Record<number, string> } | undefined)?.translated_titles ?? {}
         setTranslatedTitles(prev => ({ ...prev, ...payload }))
+        if (translateTitlesEnabledRef.current) {
+          const remaining = articles
+            .filter(article =>
+              article.lang &&
+              article.lang !== locale &&
+              ({ ...translatedTitles, ...payload } as Record<number, string>)[article.id] == null &&
+              !translatingTitleIdsRef.current.has(article.id),
+            )
+            .map(article => article.id)
+          if (remaining.length === 0) {
+            setTranslateTitlesStatus('active')
+            toast.success(t('articles.translateTitlesSuccess'))
+          }
+        } else {
+          setTranslateTitlesStatus('idle')
+        }
       })
       .catch(() => {
-        toast.error(t('articles.loadError'))
+        setTranslateTitlesEnabled(false)
+        translateTitlesEnabledRef.current = false
+        setTranslateTitlesStatus('error')
+        toast.error(t('articles.translateTitlesError'))
       })
       .finally(() => {
+        translateTitlesInFlightRef.current = false
         for (const id of pending) translatingTitleIdsRef.current.delete(id)
       })
-  }, [translateTitlesEnabled, articles, locale, translatedTitles, t])
+  }, [translateTitlesEnabled, articles, locale, translatedTitles, translateTitlesStatus, t])
 
   const articleKindOptions: Array<{ value: ArticleKind | 'all'; label: string }> = [
     { value: 'all', label: t('articleKind.all') },
@@ -773,12 +808,58 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
 
       <div className="flex flex-wrap gap-2 px-4 md:px-6 py-2">
         <ActionChip
-          active={translateTitlesEnabled}
+          active={translateTitlesStatus === 'active'}
+          disabled={translateTitlesStatus === 'loading'}
+          className={translateTitlesStatus === 'loading'
+            ? 'cursor-wait opacity-80'
+            : translateTitlesStatus === 'error'
+              ? 'text-red-500 hover:text-red-400'
+              : undefined}
           onClick={() => {
-            setTranslateTitlesEnabled(prev => !prev)
+            if (translateTitlesEnabled) {
+              setTranslateTitlesEnabled(false)
+              translateTitlesEnabledRef.current = false
+              setTranslateTitlesStatus('idle')
+              return
+            }
+            setTranslateTitlesEnabled(true)
+            translateTitlesEnabledRef.current = true
+            if (articles.length === 0) {
+              setTranslateTitlesStatus('idle')
+              return
+            }
+            const pending = articles.some(article =>
+              article.lang &&
+              article.lang !== locale &&
+              translatedTitles[article.id] == null &&
+              !translatingTitleIdsRef.current.has(article.id),
+            )
+            setTranslateTitlesStatus(pending ? 'loading' : 'active')
           }}
+          aria-busy={translateTitlesStatus === 'loading'}
+          title={translateTitlesStatus === 'error' ? t('articles.translateTitlesError') : undefined}
         >
-          {t('article.translate')}
+          {translateTitlesStatus === 'loading' ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {t('articles.translateTitlesLoading')}
+            </>
+          ) : translateTitlesStatus === 'active' ? (
+            <>
+              <Languages className="h-3.5 w-3.5" />
+              {t('articles.translateTitlesActive')}
+            </>
+          ) : translateTitlesStatus === 'error' ? (
+            <>
+              <Languages className="h-3.5 w-3.5" />
+              {t('articles.translateTitlesError')}
+            </>
+          ) : (
+            <>
+              <Languages className="h-3.5 w-3.5" />
+              {t('articles.translateTitlesIdle')}
+            </>
+          )}
         </ActionChip>
       </div>
 
