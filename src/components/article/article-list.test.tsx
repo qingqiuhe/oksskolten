@@ -440,6 +440,22 @@ describe('ArticleList', () => {
     expect(screen.getByText('Bonjour')).toBeTruthy()
   })
 
+  it('does not render a per-item translate button in the article list', () => {
+    swrInfiniteReturn = {
+      data: [{ articles: [makeArticle({ id: 1, title: 'Bonjour', lang: 'fr' })], total: 1, has_more: false }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList()
+
+    expect(screen.getAllByRole('button', { name: 'Translate' })).toHaveLength(1)
+  })
+
   it('does not render floating list chat fab trigger on inbox when articles are present', () => {
     swrInfiniteReturn = {
       data: [{

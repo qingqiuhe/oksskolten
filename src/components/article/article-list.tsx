@@ -1044,22 +1044,6 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
                     openOverlay: t('inbox.openOverlay'),
                   }}
                 />
-                {article.lang && article.lang !== locale && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      void navigate(`${articleUrlToPath(article.url)}?translate=1`)
-                    }}
-                    className="absolute left-3 top-3 z-10 inline-flex items-center gap-1 rounded-md border border-border bg-bg/90 px-2 py-1 text-xs text-muted opacity-0 backdrop-blur transition hover:text-text group-hover:opacity-100 focus-visible:opacity-100"
-                    aria-label={t('article.translate')}
-                    title={t('article.translate')}
-                  >
-                    <Languages className="h-3.5 w-3.5" />
-                    <span className="hidden md:inline">{t('article.translate')}</span>
-                  </button>
-                )}
               </div>
             </Fragment>
           )
