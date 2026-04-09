@@ -202,6 +202,39 @@ describe('POST /api/feeds — RSS discovery pipeline', () => {
     expect(done.feed.name).toBe('Discovered Title')
   })
 
+  it('prefers manual icon_url over discovered icon_url', async () => {
+    mockDiscoverRssUrl.mockResolvedValue({ rssUrl: 'https://example.com/feed', title: 'Discovered Title', iconUrl: 'https://example.com/discovered-icon.png' })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds',
+      headers: json,
+      payload: {
+        url: 'https://example.com',
+        icon_url: 'https://cdn.example.com/manual-icon.png',
+      },
+    })
+
+    const events = parseSSE(res.body)
+    const done = events.find(e => e.type === 'done') as any
+    expect(done.feed.icon_url).toBe('https://cdn.example.com/manual-icon.png')
+  })
+
+  it('returns 400 for invalid manual icon_url', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds',
+      headers: json,
+      payload: {
+        url: 'https://example.com',
+        icon_url: 'http://cdn.example.com/manual-icon.png',
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/https:\/\//i)
+  })
+
   it('prefers explicit name over discovered title', async () => {
     mockDiscoverRssUrl.mockResolvedValue({ rssUrl: 'https://example.com/feed', title: 'Discovered', iconUrl: null })
 

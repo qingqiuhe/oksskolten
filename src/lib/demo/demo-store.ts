@@ -335,10 +335,11 @@ export const demoStore = {
   },
 
   // --- Write ---
-  addFeed(body: { name: string; url: string; category_id?: number; category_name?: string }) {
+  addFeed(body: { name: string; url: string; icon_url?: string | null; category_id?: number; category_name?: string }) {
     const feed = createFeed({
       name: body.name || body.url,
       url: body.url,
+      icon_url: body.icon_url ?? null,
       category_id: body.category_id ?? null,
       category_name: body.category_name ?? null,
     })

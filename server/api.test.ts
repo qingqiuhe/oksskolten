@@ -140,6 +140,41 @@ describe('PATCH /api/feeds/:id', () => {
     expect(res.json().name).toBe('Updated Name')
   })
 
+  it('updates feed icon_url', async () => {
+    const feed = seedFeed()
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/feeds/${feed.id}`,
+      headers: json,
+      payload: { icon_url: 'https://cdn.example.com/icon.png' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().icon_url).toBe('https://cdn.example.com/icon.png')
+  })
+
+  it('clears feed icon_url', async () => {
+    const feed = seedFeed({ icon_url: 'https://cdn.example.com/icon.png' })
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/feeds/${feed.id}`,
+      headers: json,
+      payload: { icon_url: null },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().icon_url).toBeNull()
+  })
+
+  it('returns 400 for invalid feed icon_url', async () => {
+    const feed = seedFeed()
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/feeds/${feed.id}`,
+      headers: json,
+      payload: { icon_url: 'http://cdn.example.com/icon.png' },
+    })
+    expect(res.statusCode).toBe(400)
+  })
+
   it('returns 404 for non-existent feed', async () => {
     const res = await app.inject({
       method: 'PATCH',

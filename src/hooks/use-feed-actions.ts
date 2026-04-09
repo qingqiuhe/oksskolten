@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useSWRConfig } from 'swr'
 import { apiPost, apiPatch, apiDelete } from '../lib/fetcher'
+import { normalizeFeedIconUrl } from '../lib/feed-icon-url'
 import type { FeedWithCounts, Category } from '../../shared/types'
 import type { KeyedMutator } from 'swr'
 import type { FetchResult } from './use-fetch-progress'
 
 type RenamingState =
-  | { type: 'feed'; feed: FeedWithCounts; name: string }
+  | { type: 'feed'; feed: FeedWithCounts; name: string; iconUrl: string }
   | { type: 'category'; category: Category; name: string }
   | null
 
@@ -54,7 +55,7 @@ export function useFeedActions({
   }, [renamingId])
 
   function handleStartRenameFeed(feed: FeedWithCounts) {
-    setRenaming({ type: 'feed', feed, name: feed.name })
+    setRenaming({ type: 'feed', feed, name: feed.name, iconUrl: feed.icon_url ?? '' })
   }
 
   function handleStartRenameCategory(category: Category) {
@@ -185,7 +186,10 @@ export function useFeedActions({
   async function handleRenameSubmit() {
     if (!renaming || !renaming.name.trim()) return
     if (renaming.type === 'feed') {
-      await apiPatch(`/api/feeds/${renaming.feed.id}`, { name: renaming.name.trim() })
+      await apiPatch(`/api/feeds/${renaming.feed.id}`, {
+        name: renaming.name.trim(),
+        icon_url: normalizeFeedIconUrl(renaming.iconUrl),
+      })
       void mutateFeeds()
     } else {
       await apiPatch(`/api/categories/${renaming.category.id}`, { name: renaming.name.trim() })

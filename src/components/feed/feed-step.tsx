@@ -2,12 +2,14 @@ import { useState, useEffect, useRef } from 'react'
 import { authHeaders } from '../../lib/fetcher'
 import { logoutClient } from '../../lib/auth'
 import { getAuthToken } from '../../lib/auth'
+import { normalizeFeedIconUrl, isValidFeedIconUrl } from '../../lib/feed-icon-url'
 import { useI18n } from '../../lib/i18n'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../ui/select'
 import { Loader2, Check, X, Minus } from 'lucide-react'
 import type { Category } from '../../../shared/types'
+import { FeedIconPreview } from './feed-icon-preview'
 
 type TranslateFn = ReturnType<typeof useI18n>['t']
 
@@ -117,6 +119,7 @@ export function FeedStep({ onClose, onCreated, onFetchStarted, categories }: Fee
   const [name, setName] = useState('')
   const [nameManuallySet, setNameManuallySet] = useState(false)
   const [url, setUrl] = useState('')
+  const [iconUrl, setIconUrl] = useState('')
   const [categoryId, setCategoryId] = useState<number | ''>('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -164,6 +167,11 @@ export function FeedStep({ onClose, onCreated, onFetchStarted, categories }: Fee
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!url.trim()) return
+    const normalizedIconUrl = normalizeFeedIconUrl(iconUrl)
+    if (normalizedIconUrl && !isValidFeedIconUrl(normalizedIconUrl)) {
+      setError(t('feeds.avatarUrlInvalid'))
+      return
+    }
     setError('')
     setLoading(true)
 
@@ -183,6 +191,7 @@ export function FeedStep({ onClose, onCreated, onFetchStarted, categories }: Fee
         body: JSON.stringify({
           name: name.trim() || undefined,
           url: url.trim(),
+          icon_url: normalizedIconUrl ?? undefined,
           category_id: categoryId || null,
         }),
       })
@@ -287,6 +296,22 @@ export function FeedStep({ onClose, onCreated, onFetchStarted, categories }: Fee
             setNameManuallySet(true)
           }}
         />
+      </div>
+      <div className="space-y-2">
+        <label className="block text-xs font-medium text-muted" htmlFor="feed-icon-url">
+          {t('feeds.avatarUrl')}
+        </label>
+        <Input
+          id="feed-icon-url"
+          type="url"
+          placeholder={t('feeds.avatarUrlPlaceholder')}
+          value={iconUrl}
+          onChange={e => {
+            setIconUrl(e.target.value)
+            if (error) setError('')
+          }}
+        />
+        <FeedIconPreview iconUrl={normalizeFeedIconUrl(iconUrl)} feedUrl={url.trim()} name={name} />
       </div>
       {categories.length > 0 && (
         <Select value={categoryId === '' ? '__none__' : String(categoryId)} onValueChange={v => setCategoryId(v === '__none__' ? '' : Number(v))}>

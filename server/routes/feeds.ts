@@ -51,6 +51,8 @@ const httpsUrl = z
   .url('must be a valid URL')
   .refine((u) => u.startsWith('https://'), { message: 'Only https:// URLs are allowed' })
 
+const optionalHttpsUrl = httpsUrl.nullable().optional()
+
 const DiscoverTitleQuery = z.object({
   url: httpsUrl,
 })
@@ -58,11 +60,13 @@ const DiscoverTitleQuery = z.object({
 const CreateFeedBody = z.object({
   url: httpsUrl,
   name: z.string().optional(),
+  icon_url: optionalHttpsUrl,
   category_id: z.number().nullable().optional(),
 })
 
 const UpdateFeedBody = z.object({
   name: z.string().optional(),
+  icon_url: optionalHttpsUrl,
   rss_bridge_url: z.string().nullable().optional(),
   view_type: z.enum(['article', 'social']).nullable().optional(),
   disabled: z.number().optional(),
@@ -173,7 +177,7 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
         const feed = createFeed({
           name: feedName,
           url: body.url,
-          icon_url: discoveredIconUrl,
+          icon_url: body.icon_url ?? discoveredIconUrl,
           rss_url: rssUrl,
           rss_bridge_url: rssBridgeUrl,
           category_id: body.category_id ?? null,

@@ -85,7 +85,7 @@ function FeedMenuContent({
     <>
       <Item onSelect={onRename}>
         <Pencil size={16} strokeWidth={1.5} />
-        {t('feeds.rename')}
+        {t('feeds.editFeed')}
       </Item>
       <Item onSelect={onMarkAllRead}>
         <CheckCheck size={16} strokeWidth={1.5} />

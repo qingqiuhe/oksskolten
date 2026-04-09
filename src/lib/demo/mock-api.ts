@@ -36,13 +36,13 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   if (method === 'POST' && path === '/api/feeds') {
     const body = JSON.parse((init?.body as string) || '{}')
     const result = demoStore.addFeed(body)
-    const feed = result.feed as { id: number; rss_url: string | null; rss_bridge_url: string | null }
+    const feed = result.feed as { id: number; rss_url: string | null; rss_bridge_url: string | null; icon_url: string | null }
     return sseResponse([
       { type: 'step', step: 'rss-discovery', status: 'running' },
       { type: 'step', step: 'rss-discovery', status: 'done', found: true },
       { type: 'step', step: 'rss-bridge', status: 'skipped' },
       { type: 'step', step: 'css-selector', status: 'skipped' },
-      { type: 'done', feed: { id: feed.id, rss_url: feed.rss_url, rss_bridge_url: feed.rss_bridge_url } },
+      { type: 'done', feed: { id: feed.id, rss_url: feed.rss_url, rss_bridge_url: feed.rss_bridge_url, icon_url: feed.icon_url } },
     ], 300)
   }
 

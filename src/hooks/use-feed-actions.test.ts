@@ -87,11 +87,11 @@ describe('useFeedActions', () => {
   describe('rename', () => {
     it('starts rename for feed', () => {
       const { result } = renderHook(() => useFeedActions(defaultOpts()))
-      const feed = makeFeed({ name: 'My Feed' })
+      const feed = makeFeed({ name: 'My Feed', icon_url: 'https://cdn.example.com/feed.png' })
 
       act(() => result.current.handleStartRenameFeed(feed))
 
-      expect(result.current.renaming).toEqual({ type: 'feed', feed, name: 'My Feed' })
+      expect(result.current.renaming).toEqual({ type: 'feed', feed, name: 'My Feed', iconUrl: 'https://cdn.example.com/feed.png' })
     })
 
     it('starts rename for category', () => {
@@ -109,13 +109,26 @@ describe('useFeedActions', () => {
       const feed = makeFeed({ id: 5 })
 
       act(() => result.current.handleStartRenameFeed(feed))
-      act(() => result.current.setRenaming({ type: 'feed', feed, name: 'New Name' }))
+      act(() => result.current.setRenaming({ type: 'feed', feed, name: 'New Name', iconUrl: 'https://cdn.example.com/new-icon.png' }))
 
       await act(async () => result.current.handleRenameSubmit())
 
-      expect(apiPatch).toHaveBeenCalledWith('/api/feeds/5', { name: 'New Name' })
+      expect(apiPatch).toHaveBeenCalledWith('/api/feeds/5', { name: 'New Name', icon_url: 'https://cdn.example.com/new-icon.png' })
       expect(opts.mutateFeeds).toHaveBeenCalled()
       expect(result.current.renaming).toBeNull()
+    })
+
+    it('normalizes empty feed icon_url to null on submit', async () => {
+      const opts = defaultOpts()
+      const { result } = renderHook(() => useFeedActions(opts))
+      const feed = makeFeed({ id: 6, icon_url: 'https://cdn.example.com/old-icon.png' })
+
+      act(() => result.current.handleStartRenameFeed(feed))
+      act(() => result.current.setRenaming({ type: 'feed', feed, name: 'New Name', iconUrl: '   ' }))
+
+      await act(async () => result.current.handleRenameSubmit())
+
+      expect(apiPatch).toHaveBeenCalledWith('/api/feeds/6', { name: 'New Name', icon_url: null })
     })
 
     it('submits category rename', async () => {
@@ -137,7 +150,7 @@ describe('useFeedActions', () => {
       const feed = makeFeed()
 
       act(() => result.current.handleStartRenameFeed(feed))
-      act(() => result.current.setRenaming({ type: 'feed', feed, name: '  ' }))
+      act(() => result.current.setRenaming({ type: 'feed', feed, name: '  ', iconUrl: '' }))
 
       await act(async () => result.current.handleRenameSubmit())
       expect(apiPatch).not.toHaveBeenCalled()

@@ -19,7 +19,7 @@ import { IconButton } from './components/ui/icon-button'
 import { ConfirmDialog } from './components/ui/confirm-dialog'
 import { FeedNotificationDialog } from './components/feed/feed-notification-dialog'
 import { FeedDropdownMenu } from './components/feed/feed-context-menu'
-import { FeedRenameDialog } from './components/feed/feed-rename-dialog'
+import { FeedEditDialog } from './components/feed/feed-edit-dialog'
 import { SettingsPage } from './pages/settings-page'
 import { ChatPage } from './pages/chat-page'
 import { HomePage } from './pages/home-page'
@@ -277,9 +277,12 @@ export function ArticleListPage() {
       )}
 
       {renaming?.type === 'feed' && (
-        <FeedRenameDialog
-          value={renaming.name}
-          onChange={(name) => setRenaming({ ...renaming, name })}
+        <FeedEditDialog
+          name={renaming.name}
+          iconUrl={renaming.iconUrl}
+          feedUrl={renaming.feed.url}
+          onNameChange={(name) => setRenaming({ ...renaming, name })}
+          onIconUrlChange={(iconUrl) => setRenaming({ ...renaming, iconUrl })}
           onSubmit={handleRenameSubmit}
           onClose={() => setRenaming(null)}
         />

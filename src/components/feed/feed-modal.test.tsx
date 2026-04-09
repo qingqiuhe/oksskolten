@@ -30,6 +30,13 @@ vi.mock('../../lib/auth', () => ({
 
 vi.mock('../../lib/url', () => ({
   articleUrlToPath: (url: string) => `/articles/${encodeURIComponent(url)}`,
+  extractDomain: (url: string) => {
+    try {
+      return new URL(url).hostname
+    } catch {
+      return null
+    }
+  },
 }))
 
 import { apiPost, ApiError } from '../../lib/fetcher'
@@ -207,6 +214,42 @@ describe('FeedModal', () => {
     expect(screen.getByText('Feed created')).toBeTruthy()
     // "RSS discovery" step label should appear
     expect(screen.getByText('RSS discovery')).toBeTruthy()
+
+    fetchSpy.mockRestore()
+  })
+
+  it('submits manual icon_url when provided', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ title: 'Example Feed' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(
+        createSSEResponse([
+          'data: {"type":"step","step":"rss-discovery","status":"running"}',
+          'data: {"type":"step","step":"rss-discovery","status":"done","found":true}',
+          'data: {"type":"done","feed":{"id":1,"rss_url":"https://example.com/rss","rss_bridge_url":null,"icon_url":"https://cdn.example.com/avatar.png"}}',
+        ]),
+      )
+
+    render(<FeedModal {...defaultProps} />)
+    await user.click(screen.getByText('Add an RSS feed from a URL'))
+
+    await user.type(screen.getByPlaceholderText('URL'), 'https://example.com')
+    await user.type(screen.getByPlaceholderText('https://example.com/avatar.png'), 'https://cdn.example.com/avatar.png')
+    await user.click(screen.getByText('Add'))
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenLastCalledWith('/api/feeds', expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          name: undefined,
+          url: 'https://example.com',
+          icon_url: 'https://cdn.example.com/avatar.png',
+          category_id: null,
+        }),
+      }))
+    })
 
     fetchSpy.mockRestore()
   })
