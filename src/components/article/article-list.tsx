@@ -464,7 +464,6 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     if (!translateTitlesEnabled || articles.length === 0 || translateTitlesInFlightRef.current) return
     const pending = articles
       .filter(article =>
-        article.lang &&
         article.lang !== effectiveTranslateTargetLang &&
         translatedTitles[article.id] == null &&
         !translatingTitleIdsRef.current.has(article.id),
@@ -487,7 +486,6 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         if (translateTitlesEnabledRef.current) {
           const remaining = articles
             .filter(article =>
-              article.lang &&
               article.lang !== effectiveTranslateTargetLang &&
               ({ ...translatedTitles, ...payload } as Record<number, string>)[article.id] == null &&
               !translatingTitleIdsRef.current.has(article.id),
@@ -830,7 +828,6 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
               return
             }
             const pending = articles.some(article =>
-              article.lang &&
               article.lang !== effectiveTranslateTargetLang &&
               translatedTitles[article.id] == null &&
               !translatingTitleIdsRef.current.has(article.id),
