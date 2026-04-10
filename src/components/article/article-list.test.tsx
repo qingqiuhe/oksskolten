@@ -246,6 +246,7 @@ function renderArticleList(initialPath = '/inbox') {
 describe('ArticleList', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
     mockApiPost.mockReset()
     mockApiPost.mockResolvedValue({ translated_titles: {} })
     swrFeedsData = undefined
@@ -364,6 +365,34 @@ describe('ArticleList', () => {
     expect(screen.getByText('By day')).toBeTruthy()
     expect(screen.getByText('By feed')).toBeTruthy()
     expect(screen.getByText('Chat')).toBeTruthy()
+  })
+
+  it('migrates stored inbox sort=score to inbox_score and persists it', () => {
+    window.localStorage.setItem('oksskolten.inbox.sort', 'score')
+    swrInboxSummaryData = {
+      unread_total: 1,
+      new_today: 1,
+      oldest_unread_at: '2026-01-01T00:00:00Z',
+      source_feed_count: 1,
+    }
+    swrInfiniteReturn = {
+      data: [{
+        articles: [makeArticle({ id: 1, title: 'Migrated Sort Article' })],
+        total: 1,
+        has_more: false,
+      }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList()
+
+    expect(window.localStorage.getItem('oksskolten.inbox.sort')).toBe('inbox_score')
+    expect(screen.getByRole('button', { name: 'High value' }).className).toContain('bg-accent')
   })
 
   it('translates loaded titles after clicking top translate button and keeps cached results', async () => {

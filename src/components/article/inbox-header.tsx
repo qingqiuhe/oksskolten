@@ -3,7 +3,7 @@ import { Sparkles, CalendarDays, Layers3, Clock3 } from 'lucide-react'
 import type { InboxSummary } from '../../../shared/types'
 import type { FeedViewType } from '../../../shared/article-kind'
 
-export type InboxSort = 'newest' | 'oldest_unread' | 'score'
+export type InboxSort = 'newest' | 'oldest_unread' | 'inbox_score'
 export type InboxGroupMode = 'none' | 'day' | 'feed'
 export type InboxViewFilter = 'all' | FeedViewType
 
@@ -126,7 +126,7 @@ export function InboxHeader({
           <div className="flex flex-wrap items-center gap-2">
             <SortButton active={sort === 'newest'} label={labels.latest} onClick={() => onSortChange('newest')} />
             <SortButton active={sort === 'oldest_unread'} label={labels.backlog} onClick={() => onSortChange('oldest_unread')} />
-            <SortButton active={sort === 'score'} label={labels.highValue} onClick={() => onSortChange('score')} />
+            <SortButton active={sort === 'inbox_score'} label={labels.highValue} onClick={() => onSortChange('inbox_score')} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <SortButton active={groupMode === 'none'} label={labels.groupNone} onClick={() => onGroupModeChange('none')} />

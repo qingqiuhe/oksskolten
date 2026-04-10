@@ -134,6 +134,88 @@ function scoreExpr(prefix: string, opts?: { searchBoost?: boolean }): string {
   return `(${engagement} * ${decay}${boost})`
 }
 
+// Inbox triage priorities:
+// explicit engagement > feed affinity > category affinity > content readiness > kind bias > recency
+const INBOX_SCORE_LIKE_BOOST = 12
+const INBOX_SCORE_BOOKMARK_BOOST = 10
+// Rare but intentional: unread items can already be machine-translated before the user opens them.
+const INBOX_SCORE_TRANSLATION_BOOST = 6
+const INBOX_SCORE_HISTORY_READ_WEIGHT = 1
+const INBOX_SCORE_HISTORY_BOOKMARK_WEIGHT = 3
+const INBOX_SCORE_HISTORY_LIKE_WEIGHT = 5
+const INBOX_SCORE_FEED_DAMPING = 8
+const INBOX_SCORE_FEED_AFFINITY_MULTIPLIER = 8
+const INBOX_SCORE_CATEGORY_DAMPING = 12
+const INBOX_SCORE_CATEGORY_AFFINITY_MULTIPLIER = 5
+const INBOX_SCORE_SIMILAR_COUNT_CAP = 3
+const INBOX_SCORE_SIMILAR_ARTICLE_BOOST = 1.5
+const INBOX_SCORE_SUMMARY_OR_EXCERPT_BOOST = 1
+const INBOX_SCORE_FULL_TEXT_BOOST = 0.75
+const INBOX_SCORE_NOTIFICATION_BODY_BOOST = 0.5
+const INBOX_SCORE_ORIGINAL_KIND_BOOST = 0.75
+const INBOX_SCORE_QUOTE_KIND_BOOST = 0.25
+const INBOX_SCORE_REPOST_KIND_BOOST = -0.75
+const INBOX_SCORE_RECENT_12H_BOOST = 2.5
+const INBOX_SCORE_RECENT_48H_BOOST = 1.5
+const INBOX_SCORE_RECENT_7D_BOOST = 0.5
+const INBOX_SCORE_HISTORY_WINDOW_DAYS = 90
+
+function inboxScoreExpr(
+  prefix: string,
+  opts: {
+    feedHistoryAlias: string
+    categoryHistoryAlias: string
+    similarAlias: string
+  },
+): string {
+  const p = prefix
+  const { feedHistoryAlias: fh, categoryHistoryAlias: ch, similarAlias: sim } = opts
+
+  return `(
+    (CASE WHEN ${p}liked_at IS NOT NULL THEN ${INBOX_SCORE_LIKE_BOOST} ELSE 0 END)
+    + (CASE WHEN ${p}bookmarked_at IS NOT NULL THEN ${INBOX_SCORE_BOOKMARK_BOOST} ELSE 0 END)
+    + (CASE WHEN ${p}full_text_translated IS NOT NULL THEN ${INBOX_SCORE_TRANSLATION_BOOST} ELSE 0 END)
+    + (
+      COALESCE(
+        (
+          ((${fh}.read_count * ${INBOX_SCORE_HISTORY_READ_WEIGHT}.0)
+          + (${fh}.bookmark_count * ${INBOX_SCORE_HISTORY_BOOKMARK_WEIGHT}.0)
+          + (${fh}.like_count * ${INBOX_SCORE_HISTORY_LIKE_WEIGHT}.0))
+          / (${fh}.article_count + ${INBOX_SCORE_FEED_DAMPING}.0)
+        ) * ${INBOX_SCORE_FEED_AFFINITY_MULTIPLIER}.0,
+        0
+      )
+    )
+    + (
+      COALESCE(
+        (
+          ((${ch}.read_count * ${INBOX_SCORE_HISTORY_READ_WEIGHT}.0)
+          + (${ch}.bookmark_count * ${INBOX_SCORE_HISTORY_BOOKMARK_WEIGHT}.0)
+          + (${ch}.like_count * ${INBOX_SCORE_HISTORY_LIKE_WEIGHT}.0))
+          / (${ch}.article_count + ${INBOX_SCORE_CATEGORY_DAMPING}.0)
+        ) * ${INBOX_SCORE_CATEGORY_AFFINITY_MULTIPLIER}.0,
+        0
+      )
+    )
+    + (MIN(COALESCE(${sim}.similar_count, 0), ${INBOX_SCORE_SIMILAR_COUNT_CAP}) * ${INBOX_SCORE_SIMILAR_ARTICLE_BOOST})
+    + (CASE WHEN ${p}summary IS NOT NULL OR ${p}excerpt IS NOT NULL THEN ${INBOX_SCORE_SUMMARY_OR_EXCERPT_BOOST} ELSE 0 END)
+    + (CASE WHEN ${p}full_text IS NOT NULL THEN ${INBOX_SCORE_FULL_TEXT_BOOST} ELSE 0 END)
+    + (CASE WHEN ${p}notification_body_text IS NOT NULL THEN ${INBOX_SCORE_NOTIFICATION_BODY_BOOST} ELSE 0 END)
+    + (CASE
+        WHEN ${p}article_kind = 'original' THEN ${INBOX_SCORE_ORIGINAL_KIND_BOOST}
+        WHEN ${p}article_kind = 'quote' THEN ${INBOX_SCORE_QUOTE_KIND_BOOST}
+        WHEN ${p}article_kind = 'repost' THEN ${INBOX_SCORE_REPOST_KIND_BOOST}
+        ELSE 0
+      END)
+    + (CASE
+        WHEN julianday(COALESCE(${p}published_at, ${p}fetched_at)) >= julianday('now', '-12 hours') THEN ${INBOX_SCORE_RECENT_12H_BOOST}
+        WHEN julianday(COALESCE(${p}published_at, ${p}fetched_at)) >= julianday('now', '-48 hours') THEN ${INBOX_SCORE_RECENT_48H_BOOST}
+        WHEN julianday(COALESCE(${p}published_at, ${p}fetched_at)) >= julianday('now', '-7 days') THEN ${INBOX_SCORE_RECENT_7D_BOOST}
+        ELSE 0
+      END)
+  )`
+}
+
 /** WHERE clause for articles that have engagement or a non-zero score. Shared with search sync. */
 export const SCORED_ARTICLES_WHERE = `(
   liked_at IS NOT NULL
@@ -179,7 +261,7 @@ export function getArticles(opts: {
   read?: boolean
   since?: string
   until?: string
-  sort?: 'score' | 'oldest_unread'
+  sort?: 'score' | 'oldest_unread' | 'inbox_score'
   limit: number
   offset: number
   smartFloor?: boolean
@@ -287,11 +369,70 @@ export function getArticles(opts: {
     : undefined
 
   const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''
+  const inboxHistoryCtes = opts.sort === 'inbox_score'
+    ? `
+      WITH feed_history AS (
+        -- Include all articles in the ${INBOX_SCORE_HISTORY_WINDOW_DAYS}-day window so affinity reflects
+        -- consumption rate, not just absolute engaged volume.
+        SELECT
+          h.feed_id,
+          COUNT(*) AS article_count,
+          COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
+          COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
+          COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
+        FROM active_articles h
+        JOIN feeds hf ON h.feed_id = hf.id
+        WHERE hf.type != 'clip'
+          AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${INBOX_SCORE_HISTORY_WINDOW_DAYS} days')
+          ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
+        GROUP BY h.feed_id
+      ),
+      category_history AS (
+        -- Same denominator as feed_history: all articles in the window, not only engaged items.
+        SELECT
+          h.category_id,
+          COUNT(*) AS article_count,
+          COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
+          COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
+          COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
+        FROM active_articles h
+        JOIN feeds hf ON h.feed_id = hf.id
+        WHERE hf.type != 'clip'
+          AND h.category_id IS NOT NULL
+          AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${INBOX_SCORE_HISTORY_WINDOW_DAYS} days')
+          ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
+        GROUP BY h.category_id
+      )
+    `
+    : ''
+  const inboxHistoryJoins = opts.sort === 'inbox_score'
+    ? `
+      LEFT JOIN feed_history fh ON fh.feed_id = a.feed_id
+      LEFT JOIN category_history ch ON ch.category_id = a.category_id
+    `
+    : ''
+  const inboxScoreSelect = opts.sort === 'inbox_score'
+    ? `${inboxScoreExpr('a.', { feedHistoryAlias: 'fh', categoryHistoryAlias: 'ch', similarAlias: 'sim' })} AS inbox_score,`
+    : 'NULL AS inbox_score,'
+  const similarCountSelect = opts.sort === 'inbox_score'
+    ? 'COALESCE(sim.similar_count, 0) AS similar_count'
+    : '(SELECT COUNT(*) FROM article_similarities WHERE article_id = a.id) AS similar_count'
+  const similarCountJoin = opts.sort === 'inbox_score'
+    ? `
+      LEFT JOIN (
+        SELECT article_id, COUNT(*) AS similar_count
+        FROM article_similarities
+        GROUP BY article_id
+      ) sim ON sim.article_id = a.id
+    `
+    : ''
   const orderBy = opts.sort === 'score'
     ? 'a.score DESC, a.published_at DESC'
-    : opts.sort === 'oldest_unread'
-      ? "CASE WHEN a.seen_at IS NULL THEN 0 ELSE 1 END, COALESCE(a.published_at, a.fetched_at) ASC"
-      : opts.liked ? 'a.liked_at DESC' : opts.read ? 'a.read_at DESC' : 'a.published_at DESC'
+    : opts.sort === 'inbox_score'
+        ? 'inbox_score DESC, COALESCE(a.published_at, a.fetched_at) DESC, a.id DESC'
+        : opts.sort === 'oldest_unread'
+          ? "CASE WHEN a.seen_at IS NULL THEN 0 ELSE 1 END, COALESCE(a.published_at, a.fetched_at) ASC"
+          : opts.liked ? 'a.liked_at DESC' : opts.read ? 'a.read_at DESC' : 'a.published_at DESC'
 
   const totalRow = getNamed<{ cnt: number }>(`
     SELECT COUNT(*) AS cnt
@@ -311,14 +452,18 @@ export function getArticles(opts: {
     : undefined
 
   const articles = allNamed<ArticleListItem>(`
+    ${inboxHistoryCtes}
     SELECT a.id, a.feed_id, f.name AS feed_name, f.icon_url AS feed_icon_url,
            f.view_type AS _feed_view_type_raw, f.url AS _feed_url, f.rss_url AS _feed_rss_url, f.rss_bridge_url AS _feed_rss_bridge_url,
            a.title, a.url, a.article_kind, a.published_at, a.lang, a.summary, a.excerpt, a.og_image, a.seen_at, a.read_at, a.bookmarked_at, a.liked_at,
            ${hasVideoExpr('a.')} AS has_video,
+           ${inboxScoreSelect}
            a.score,
-           (SELECT COUNT(*) FROM article_similarities WHERE article_id = a.id) AS similar_count
+           ${similarCountSelect}
     FROM active_articles a
     JOIN feeds f ON a.feed_id = f.id
+    ${similarCountJoin}
+    ${inboxHistoryJoins}
     ${where}
     ORDER BY ${orderBy}
     LIMIT @_limit OFFSET @_offset

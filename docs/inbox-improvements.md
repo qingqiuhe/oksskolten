@@ -104,7 +104,7 @@
 - 排序切换：
   - `最新`：默认，`published_at DESC`
   - `积压优先`：P0 先仅提供 UI 占位或沿用最旧时间升序；真正的 `oldest_unread` 排序在 P1 落地
-  - `高价值`：复用现有 `sort=score`
+  - `高价值`：使用 Inbox 专用 `sort=inbox_score`
 
 交互要求：
 
@@ -463,7 +463,7 @@ P2：
 - `/bookmarks`、`/likes`、`/history` 行为保持不变
 - feed / category 视图保持当前 smart floor 行为
 - 键盘导航（`j` / `k` / `b` / `Enter`）保持正常
-- 现有 `sort=score` 行为保持不变
+- 现有 `sort=score` 行为保持不变；Inbox 的“高价值”改走 `sort=inbox_score`
 - 非 Inbox 页面不引入额外复杂交互
 
 ## 建议的实施顺序

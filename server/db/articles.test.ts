@@ -37,6 +37,14 @@ function seedArticle(feedId: number, overrides: Partial<Parameters<typeof insert
   })
 }
 
+function hoursAgo(hours: number): string {
+  return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()
+}
+
+function daysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+}
+
 // --- getArticles: read filter and ordering ---
 
 describe('getArticles read filter', () => {
@@ -657,6 +665,135 @@ describe('score persistence', () => {
     // With explicit sort=score, the higher-scored article comes first
     const { articles: scoreSorted } = getArticles({ liked: true, sort: 'score', limit: 100, offset: 0 })
     expect(scoreSorted[0].url).toBe('https://example.com/s8')
+  })
+})
+
+describe('inbox_score sorting', () => {
+  it('preserves similar_count on non-inbox list queries', () => {
+    const feed = seedFeed()
+    const baseId = seedArticle(feed.id, {
+      title: 'Base article',
+      url: 'https://example.com/base-article',
+    })
+    seedArticle(feed.id, {
+      title: 'Candidate A',
+      url: 'https://example.com/candidate-a',
+    })
+    seedArticle(feed.id, {
+      title: 'Candidate B',
+      url: 'https://example.com/candidate-b',
+    })
+
+    getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(baseId, baseId + 1, 0.9)
+    getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(baseId, baseId + 2, 0.8)
+
+    const { articles } = getArticles({ limit: 10, offset: 0 })
+    const baseArticle = articles.find(article => article.id === baseId)
+
+    expect(baseArticle?.similar_count).toBe(2)
+  })
+
+  it('favors unread articles from historically preferred feeds', () => {
+    const preferredFeed = seedFeed({ name: 'Preferred', url: 'https://preferred.example.com' })
+    const otherFeed = seedFeed({ name: 'Other', url: 'https://other.example.com' })
+
+    for (let i = 0; i < 6; i++) {
+      const id = seedArticle(preferredFeed.id, {
+        url: `https://preferred.example.com/read-${i}`,
+        published_at: daysAgo(10 + i),
+      })
+      recordArticleRead(id)
+    }
+
+    seedArticle(preferredFeed.id, {
+      title: 'Preferred unread',
+      url: 'https://preferred.example.com/unread',
+      published_at: hoursAgo(36),
+    })
+    seedArticle(otherFeed.id, {
+      title: 'Other unread',
+      url: 'https://other.example.com/unread',
+      published_at: hoursAgo(6),
+    })
+
+    const { articles } = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0 })
+
+    expect(articles[0].title).toBe('Preferred unread')
+    expect(articles[0].inbox_score).toBeGreaterThan(articles[1].inbox_score!)
+  })
+
+  it('uses category history when feed history is absent', () => {
+    const tech = createCategory('Tech')
+    const historyFeed = seedFeed({ name: 'History Feed', url: 'https://history.example.com', category_id: tech.id })
+    const sameCategoryFeed = seedFeed({ name: 'Sibling Feed', url: 'https://sibling.example.com', category_id: tech.id })
+    const otherFeed = seedFeed({ name: 'Other Feed', url: 'https://outside.example.com' })
+
+    for (let i = 0; i < 20; i++) {
+      const id = seedArticle(historyFeed.id, {
+        url: `https://history.example.com/read-${i}`,
+        published_at: daysAgo(20 + i),
+      })
+      recordArticleRead(id)
+    }
+
+    seedArticle(sameCategoryFeed.id, {
+      title: 'Same category unread',
+      url: 'https://sibling.example.com/unread',
+      published_at: hoursAgo(30),
+    })
+    seedArticle(otherFeed.id, {
+      title: 'Other category unread',
+      url: 'https://outside.example.com/unread',
+      published_at: hoursAgo(6),
+    })
+
+    const { articles } = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0 })
+
+    expect(articles[0].title).toBe('Same category unread')
+    expect(articles[0].inbox_score).toBeGreaterThan(articles[1].inbox_score!)
+  })
+
+  it('keeps explicit engagement signals strongest for unread triage', () => {
+    const feed = seedFeed()
+
+    const likedId = seedArticle(feed.id, {
+      title: 'Liked unread',
+      url: 'https://example.com/liked-unread',
+      published_at: hoursAgo(30),
+    })
+    seedArticle(feed.id, {
+      title: 'Plain unread',
+      url: 'https://example.com/plain-unread',
+      published_at: hoursAgo(30),
+    })
+
+    markArticleLiked(likedId, true)
+
+    const { articles } = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0 })
+
+    expect(articles[0].title).toBe('Liked unread')
+    expect(articles[0].inbox_score).toBeGreaterThan(articles[1].inbox_score!)
+  })
+
+  it('falls back to published_at DESC when inbox scores tie', () => {
+    const olderFeed = seedFeed({ name: 'Older Feed', url: 'https://older.example.com' })
+    const newerFeed = seedFeed({ name: 'Newer Feed', url: 'https://newer.example.com' })
+
+    seedArticle(olderFeed.id, {
+      title: 'Older same-score',
+      url: 'https://older.example.com/tie',
+      published_at: daysAgo(4),
+    })
+    seedArticle(newerFeed.id, {
+      title: 'Newer same-score',
+      url: 'https://newer.example.com/tie',
+      published_at: daysAgo(3),
+    })
+
+    const { articles } = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0 })
+
+    expect(articles[0].title).toBe('Newer same-score')
+    expect(articles[0].inbox_score).toBe(articles[1].inbox_score)
   })
 })
 

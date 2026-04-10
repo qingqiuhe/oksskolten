@@ -66,7 +66,7 @@ const ArticlesQuery = z.object({
   bookmarked: z.string().optional(),
   liked: z.string().optional(),
   read: z.string().optional(),
-  sort: z.enum(['score', 'oldest_unread']).optional(),
+  sort: z.enum(['score', 'oldest_unread', 'inbox_score']).optional(),
   no_floor: z.string().optional(),
   limit: coerceOptionalNumber,
   offset: coerceOptionalNumber,

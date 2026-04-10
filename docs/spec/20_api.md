@@ -391,7 +391,7 @@ Query parameters:
 | `bookmarked` | `"1"` | — | When specified, returns only bookmarked articles |
 | `liked` | `"1"` | — | When specified, returns only liked articles |
 | `read` | `"1"` | — | When specified, returns only read articles (`read_at IS NOT NULL`). For the `/history` route |
-| `sort` | `"score"` | — | When specified, sorts by score descending. When omitted, uses existing logic (liked→`liked_at DESC`, read→`read_at DESC`, otherwise→`published_at DESC`) |
+| `sort` | `"score" \| "oldest_unread" \| "inbox_score"` | — | Optional explicit sort. `score` uses the stored engagement score, `oldest_unread` prioritizes the oldest unread items, and `inbox_score` applies the Inbox-only triage ranking. When omitted, uses existing logic (liked→`liked_at DESC`, read→`read_at DESC`, otherwise→`published_at DESC`) |
 | `limit` | number | 20 | Number of items to fetch (max 100) |
 | `offset` | number | 0 | Offset |
 

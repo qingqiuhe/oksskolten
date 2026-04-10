@@ -89,6 +89,7 @@ export interface ArticleListItem {
   bookmarked_at: string | null
   liked_at: string | null
   score?: number
+  inbox_score?: number
   similar_count?: number
 }
 

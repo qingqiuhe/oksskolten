@@ -64,7 +64,11 @@ interface ArticleListProps {
 function readStoredInboxSort(): InboxSort {
   if (typeof window === 'undefined') return 'newest'
   const stored = window.localStorage.getItem(INBOX_SORT_STORAGE_KEY)
-  return stored === 'score' || stored === 'oldest_unread' ? stored : 'newest'
+  if (stored === 'score') {
+    window.localStorage.setItem(INBOX_SORT_STORAGE_KEY, 'inbox_score')
+    return 'inbox_score'
+  }
+  return stored === 'inbox_score' || stored === 'oldest_unread' ? stored : 'newest'
 }
 
 type InboxGroupMode = 'none' | 'day' | 'feed'

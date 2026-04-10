@@ -497,6 +497,22 @@ describe('GET /api/articles?read=1', () => {
   })
 })
 
+describe('GET /api/articles?sort=inbox_score', () => {
+  it('accepts inbox_score and returns the computed field', async () => {
+    const feed = seedFeed()
+    seedArticle(feed.id, {
+      title: 'Unread candidate',
+      url: 'https://example.com/inbox-score',
+      published_at: new Date().toISOString(),
+    })
+
+    const res = await app.inject({ method: 'GET', url: '/api/articles?unread=1&sort=inbox_score' })
+
+    expect(res.statusCode).toBe(200)
+    expect(typeof res.json().articles[0].inbox_score).toBe('number')
+  })
+})
+
 // ---------------------------------------------------------------------------
 // total_all: distinguish "no articles" from "all read"
 // ---------------------------------------------------------------------------
