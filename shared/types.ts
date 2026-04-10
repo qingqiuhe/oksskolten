@@ -111,6 +111,7 @@ export interface InboxSummary {
 export interface ListChatScopeFilters {
   feed_id?: number
   category_id?: number
+  feed_view_type?: FeedViewType
   unread?: boolean
   bookmarked?: boolean
   liked?: boolean

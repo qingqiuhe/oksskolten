@@ -413,6 +413,19 @@ describe('GET /api/articles feed icon metadata', () => {
     expect(res.json().articles[0].article_kind).toBe('repost')
   })
 
+  it('filters article list items by feed_view_type', async () => {
+    const socialFeed = seedFeed({ url: 'https://x.com/example', rss_url: 'https://rsshub.app/twitter/user/example' })
+    const articleFeed = seedFeed({ url: 'https://example.com/blog' })
+    seedArticle(socialFeed.id, { url: 'https://x.com/example/status/1' })
+    seedArticle(articleFeed.id, { url: 'https://example.com/post/1' })
+
+    const res = await app.inject({ method: 'GET', url: '/api/articles?feed_view_type=social' })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().articles).toHaveLength(1)
+    expect(res.json().articles[0].feed_view_type).toBe('social')
+  })
+
   it('returns article_kind from by-url responses', async () => {
     const feed = seedFeed({ url: 'https://x.com/example', rss_url: 'https://rsshub.app/twitter/user/example' })
     seedArticle(feed.id, {

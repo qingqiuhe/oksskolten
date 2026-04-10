@@ -11,6 +11,7 @@ import type { ChatScope } from '../shared/types.js'
 const ScopeFiltersSchema = z.object({
   feed_id: z.number().optional(),
   category_id: z.number().optional(),
+  feed_view_type: z.enum(['article', 'social']).optional(),
   unread: z.boolean().optional(),
   bookmarked: z.boolean().optional(),
   liked: z.boolean().optional(),

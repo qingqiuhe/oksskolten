@@ -34,7 +34,7 @@ import type { AiTextResult } from '../fetcher.js'
 import { archiveArticleImages, isImageArchivingEnabled, deleteArticleImages } from '../fetcher/article-images.js'
 import { getSetting } from '../db/settings.js'
 import { DEFAULT_LANGUAGE } from '../../shared/lang.js'
-import type { ArticleKind } from '../../shared/article-kind.js'
+import type { ArticleKind, FeedViewType } from '../../shared/article-kind.js'
 import { buildNotificationPreview } from '../notifications/article-preview.js'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -60,6 +60,7 @@ const coerceOptionalNumber = z.preprocess(
 const ArticlesQuery = z.object({
   feed_id: coerceOptionalNumber,
   category_id: coerceOptionalNumber,
+  feed_view_type: z.enum(['article', 'social']).optional(),
   article_kind: z.enum(['original', 'repost', 'quote']).optional(),
   unread: z.string().optional(),
   bookmarked: z.string().optional(),
@@ -229,6 +230,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const offset = Math.max(query.offset || 0, 0)
     const feedId = query.feed_id ?? undefined
     const categoryId = query.category_id ?? undefined
+    const feedViewType = query.feed_view_type as FeedViewType | undefined
     const articleKind = query.article_kind as ArticleKind | undefined
     const unread = query.unread === '1'
     const bookmarked = query.bookmarked === '1'
@@ -240,14 +242,14 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const userId = getRequestUserId(request)
     const isClipFeed = feedId != null && getClipFeed(userId)?.id === feedId
     const smartFloor = !noFloor && !isClipFeed && !unread && !bookmarked && !liked && !read
-    const { articles, total, totalWithoutFloor } = getArticles({ feedId, categoryId, articleKind, unread, bookmarked, liked, read, sort, limit, offset, smartFloor, userId })
+    const { articles, total, totalWithoutFloor } = getArticles({ feedId, categoryId, feedViewType, articleKind, unread, bookmarked, liked, read, sort, limit, offset, smartFloor, userId })
     const hasMore = offset + articles.length < total
 
     // When unread filter yields 0 results, return total article count (without unread filter)
     // so the UI can distinguish "no articles" from "all read"
     let totalAll: number | undefined
     if (unread && total === 0 && offset === 0) {
-      const allResult = getArticles({ feedId, categoryId, articleKind, limit: 0, offset: 0, userId })
+      const allResult = getArticles({ feedId, categoryId, feedViewType, articleKind, limit: 0, offset: 0, userId })
       totalAll = allResult.total
     }
 

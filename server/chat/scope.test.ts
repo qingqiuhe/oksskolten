@@ -85,6 +85,45 @@ describe('normalizeChatScope', () => {
     expect(scope.article_ids).toEqual([fallbackId])
     expect(scope.source_filters).toEqual({ feed_id: feed.id, since: '2025-01-10T00:00:00Z' })
   })
+
+  it('preserves feed_view_type filters in list scope snapshots', () => {
+    const socialFeed = createFeed({
+      name: 'Social Feed',
+      url: 'https://x.com/example',
+      rss_url: 'https://rsshub.app/twitter/user/example',
+    })
+    const articleFeed = createFeed({
+      name: 'Article Feed',
+      url: 'https://example.com',
+    })
+    const socialId = insertArticle({
+      feed_id: socialFeed.id,
+      title: 'Social post',
+      url: 'https://x.com/example/status/1',
+      published_at: '2025-01-01T00:00:00Z',
+    })
+    insertArticle({
+      feed_id: articleFeed.id,
+      title: 'Blog post',
+      url: 'https://example.com/post/1',
+      published_at: '2025-01-01T00:00:00Z',
+    })
+
+    const scope = normalizeChatScope({
+      scope: {
+        type: 'list',
+        mode: 'filtered_list',
+        label: 'Social only',
+        source_filters: { feed_view_type: 'social', unread: true },
+      },
+    })
+
+    expect(scope.type).toBe('list')
+    if (scope.type !== 'list') throw new Error('expected list scope')
+    expect(scope.count_total).toBe(1)
+    expect(scope.article_ids).toEqual([socialId])
+    expect(scope.source_filters).toEqual({ feed_view_type: 'social', unread: true })
+  })
 })
 
 describe('scope guards', () => {

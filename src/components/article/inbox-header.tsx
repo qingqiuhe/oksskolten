@@ -1,16 +1,20 @@
 import type { ReactNode } from 'react'
 import { Sparkles, CalendarDays, Layers3, Clock3 } from 'lucide-react'
 import type { InboxSummary } from '../../../shared/types'
+import type { FeedViewType } from '../../../shared/article-kind'
 
 export type InboxSort = 'newest' | 'oldest_unread' | 'score'
 export type InboxGroupMode = 'none' | 'day' | 'feed'
+export type InboxViewFilter = 'all' | FeedViewType
 
 interface InboxHeaderProps {
   summary?: InboxSummary
   sort: InboxSort
   groupMode: InboxGroupMode
+  viewFilter: InboxViewFilter
   onSortChange: (sort: InboxSort) => void
   onGroupModeChange: (mode: InboxGroupMode) => void
+  onViewFilterChange: (filter: InboxViewFilter) => void
   chatTrigger: ReactNode
   labels: {
     unreadTotal: string
@@ -24,6 +28,9 @@ interface InboxHeaderProps {
     groupDay: string
     groupFeed: string
     noUnread: string
+    viewAll: string
+    viewArticle: string
+    viewSocial: string
   }
 }
 
@@ -77,8 +84,10 @@ export function InboxHeader({
   summary,
   sort,
   groupMode,
+  viewFilter,
   onSortChange,
   onGroupModeChange,
+  onViewFilterChange,
   chatTrigger,
   labels,
 }: InboxHeaderProps) {
@@ -109,6 +118,11 @@ export function InboxHeader({
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <SortButton active={viewFilter === 'all'} label={labels.viewAll} onClick={() => onViewFilterChange('all')} />
+            <SortButton active={viewFilter === 'article'} label={labels.viewArticle} onClick={() => onViewFilterChange('article')} />
+            <SortButton active={viewFilter === 'social'} label={labels.viewSocial} onClick={() => onViewFilterChange('social')} />
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <SortButton active={sort === 'newest'} label={labels.latest} onClick={() => onSortChange('newest')} />
             <SortButton active={sort === 'oldest_unread'} label={labels.backlog} onClick={() => onSortChange('oldest_unread')} />

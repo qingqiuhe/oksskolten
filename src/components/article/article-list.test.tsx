@@ -129,14 +129,21 @@ vi.mock('../chat/list-chat-fab', () => ({
   ListChatFab: ({
     listLabel,
     articleIds,
+    sourceFilters,
     renderTrigger,
   }: {
     listLabel: string
     articleIds: number[]
+    sourceFilters: Record<string, unknown>
     renderTrigger?: (args: { open: boolean; toggle: () => void }) => ReactNode
   }) => (
     <>
-      <div data-testid="list-chat-fab" data-list-label={listLabel} data-article-count={articleIds.length} />
+      <div
+        data-testid="list-chat-fab"
+        data-list-label={listLabel}
+        data-article-count={articleIds.length}
+        data-source-filters={JSON.stringify(sourceFilters)}
+      />
       {renderTrigger?.({ open: false, toggle: vi.fn() })}
     </>
   ),
@@ -607,6 +614,33 @@ describe('ArticleList', () => {
 
     renderArticleList()
     expect(screen.getByTestId('article-7').getAttribute('data-feed-view-type')).toBe('social')
+  })
+
+  it('shows inbox feed view filters and keeps chat scope in sync', () => {
+    const mockSetSize = vi.fn()
+    swrInfiniteReturn = {
+      data: [{
+        articles: [makeArticle({ id: 7, title: 'Social Article', feed_view_type: 'social' })],
+        total: 1,
+        has_more: false,
+      }],
+      error: undefined,
+      size: 1,
+      setSize: mockSetSize,
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList()
+    expect(screen.getByText('All')).toBeTruthy()
+    expect(screen.getByText('Article')).toBeTruthy()
+    expect(screen.getByText('Social')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Social'))
+
+    expect(mockSetSize).toHaveBeenCalledWith(1)
+    expect(screen.getByTestId('list-chat-fab').getAttribute('data-source-filters')).toContain('"feed_view_type":"social"')
   })
 
   it('shows mascot at end of feed', () => {

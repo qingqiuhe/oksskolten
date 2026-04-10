@@ -12,7 +12,7 @@ import type {
   ListChatScopeFilters,
   ScopeSummary,
 } from '../../shared/types.js'
-import type { ArticleKind } from '../../shared/article-kind.js'
+import type { ArticleKind, FeedViewType } from '../../shared/article-kind.js'
 
 export const MAX_SCOPE_ARTICLES = 500
 export const CHAT_SCOPE_OUT_OF_SCOPE_ERROR = 'This action is limited to the current list scope.'
@@ -64,6 +64,7 @@ function buildFilteredListScope(scope: Extract<IncomingListChatScope, { mode: 'f
   const filters = scope.source_filters ?? {}
   const feedId = filters.feed_id
   const categoryId = filters.category_id
+  const feedViewType = filters.feed_view_type as FeedViewType | undefined
   const articleKind = filters.article_kind as ArticleKind | undefined
   const unread = filters.unread === true
   const bookmarked = filters.bookmarked === true
@@ -77,6 +78,7 @@ function buildFilteredListScope(scope: Extract<IncomingListChatScope, { mode: 'f
   const { articles, total } = getArticles({
     feedId,
     categoryId,
+    feedViewType,
     articleKind,
     unread,
     bookmarked,

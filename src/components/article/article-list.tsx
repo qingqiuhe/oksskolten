@@ -30,8 +30,8 @@ import { useKeyboardNavigation } from '../../hooks/use-keyboard-navigation'
 import { apiDelete, apiPatch, apiPost } from '../../lib/fetcher'
 import type { ArticleListItem, FeedWithCounts, InboxSummary } from '../../../shared/types'
 import type { LayoutName } from '../../data/layouts'
-import { isXFeedSource, type ArticleKind } from '../../../shared/article-kind'
-import { InboxHeader, type InboxSort } from './inbox-header'
+import { isXFeedSource, type ArticleKind, type FeedViewType } from '../../../shared/article-kind'
+import { InboxHeader, type InboxSort, type InboxViewFilter } from './inbox-header'
 import { ArticleInlineActions } from './article-inline-actions'
 import { InboxGroupHeader } from './inbox-group-header'
 import { useUndoSeen } from '../../hooks/use-undo-seen'
@@ -128,6 +128,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const [articleKindFilter, setArticleKindFilter] = useState<ArticleKind | 'all'>('all')
   const [inboxSort, setInboxSort] = useState<InboxSort>(() => readStoredInboxSort())
   const [inboxGroupMode, setInboxGroupMode] = useState<InboxGroupMode>(() => readStoredInboxGroupMode())
+  const [inboxViewFilter, setInboxViewFilter] = useState<InboxViewFilter>('all')
   const [inboxChatOpenSignal, setInboxChatOpenSignal] = useState(0)
   const categoryUnreadOnly = !!categoryId && settings.categoryUnreadOnly === 'on'
   const unreadOnly = isInbox || (categoryUnreadOnly && !showReadArticles)
@@ -155,6 +156,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     const params = new URLSearchParams()
     if (feedId) params.set('feed_id', String(feedId))
     if (categoryId) params.set('category_id', String(categoryId))
+    if (isInbox && inboxViewFilter !== 'all') params.set('feed_view_type', inboxViewFilter)
     if (articleKindFilter !== 'all') params.set('article_kind', articleKindFilter)
     if (unreadOnly) params.set('unread', '1')
     if (bookmarkedOnly) params.set('bookmarked', '1')
@@ -517,16 +519,18 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     { value: 'repost', label: t('articleKind.repost') },
     { value: 'quote', label: t('articleKind.quote') },
   ]
+  const effectiveInboxViewFilter: FeedViewType | undefined = isInbox && inboxViewFilter !== 'all' ? inboxViewFilter : undefined
   const sourceFilters = useMemo(() => ({
     ...(feedId ? { feed_id: feedId } : {}),
     ...(categoryId ? { category_id: categoryId } : {}),
+    ...(effectiveInboxViewFilter ? { feed_view_type: effectiveInboxViewFilter } : {}),
     ...(unreadOnly ? { unread: true } : {}),
     ...(bookmarkedOnly ? { bookmarked: true } : {}),
     ...(likedOnly ? { liked: true } : {}),
     ...(readOnly ? { read: true } : {}),
     ...(articleKindFilter !== 'all' ? { article_kind: articleKindFilter } : {}),
     ...(noFloor ? { no_floor: true } : {}),
-  }), [feedId, categoryId, unreadOnly, bookmarkedOnly, likedOnly, readOnly, articleKindFilter, noFloor])
+  }), [feedId, categoryId, effectiveInboxViewFilter, unreadOnly, bookmarkedOnly, likedOnly, readOnly, articleKindFilter, noFloor])
 
   const inboxGroupInfo = useMemo(() => {
     if (!isInbox || inboxGroupMode === 'none') return null
@@ -763,6 +767,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         <InboxHeader
           summary={inboxSummary}
           sort={inboxSort}
+          viewFilter={inboxViewFilter}
           onSortChange={(nextSort) => {
             setInboxSort(nextSort)
             setNoFloor(false)
@@ -770,6 +775,11 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
           }}
           groupMode={inboxGroupMode}
           onGroupModeChange={setInboxGroupMode}
+          onViewFilterChange={(nextFilter) => {
+            setInboxViewFilter(nextFilter)
+            setNoFloor(false)
+            void setSize(1)
+          }}
           chatTrigger={inboxChatTrigger}
           labels={{
             unreadTotal: t('inbox.unreadTotal'),
@@ -783,6 +793,9 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
             groupDay: t('inbox.group.day'),
             groupFeed: t('inbox.group.feed'),
             noUnread: t('inbox.noUnread'),
+            viewAll: t('articleKind.all'),
+            viewArticle: t('feeds.viewType.article'),
+            viewSocial: t('feeds.viewType.social'),
           }}
         />
       )}

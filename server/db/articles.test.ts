@@ -121,6 +121,28 @@ describe('getArticles read filter', () => {
     expect(forcedArticles.articles[0].feed_view_type).toBe('social')
   })
 
+  it('filters by resolved feed view type', () => {
+    const socialFeed = seedFeed({
+      url: 'https://x.com/example',
+      rss_url: 'https://rsshub.app/twitter/user/example',
+      view_type: null,
+    })
+    const articleFeed = seedFeed({
+      url: 'https://example.com/blog',
+      view_type: null,
+    })
+    seedArticle(socialFeed.id, { url: 'https://x.com/example/status/1' })
+    seedArticle(articleFeed.id, { url: 'https://example.com/post/1' })
+
+    const socialResults = getArticles({ feedViewType: 'social', limit: 100, offset: 0 })
+    const articleResults = getArticles({ feedViewType: 'article', limit: 100, offset: 0 })
+
+    expect(socialResults.articles).toHaveLength(1)
+    expect(socialResults.articles[0].feed_view_type).toBe('social')
+    expect(articleResults.articles).toHaveLength(1)
+    expect(articleResults.articles[0].feed_view_type).toBe('article')
+  })
+
   it('filters by since using published_at with fetched_at fallback', () => {
     const feed = seedFeed()
     seedArticle(feed.id, {

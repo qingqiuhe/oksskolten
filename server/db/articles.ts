@@ -5,7 +5,7 @@ import { syncArticleToSearch, deleteArticleFromSearch, deleteArticlesFromSearch,
 import { RETRY_MAX_ATTEMPTS, RETRY_BATCH_LIMIT } from '../fetcher/util.js'
 import { deleteArticleImages } from '../fetcher/article-images.js'
 import { logger } from '../logger.js'
-import { detectArticleKindForFeed, isArticleKind, resolveFeedViewType, type ArticleKind } from '../../shared/article-kind.js'
+import { detectArticleKindForFeed, isArticleKind, resolveFeedViewType, type ArticleKind, type FeedViewType } from '../../shared/article-kind.js'
 import { getCurrentUserId } from '../identity.js'
 
 const log = logger.child('retention')
@@ -37,6 +37,35 @@ function buildMeiliDoc(id: number): MeiliArticleDoc | null {
 
 function hasVideoExpr(prefix: string): string {
   return `CASE WHEN COALESCE(${prefix}full_text, '') LIKE '%<video%' THEN 1 ELSE 0 END`
+}
+
+function isResolvedSocialFeedExpr(alias: string): string {
+  return `(
+    LOWER(COALESCE(${alias}.url, '')) LIKE '%://x.com/%'
+    OR LOWER(COALESCE(${alias}.url, '')) LIKE '%://twitter.com/%'
+    OR LOWER(COALESCE(${alias}.url, '')) LIKE '%://%.x.com/%'
+    OR LOWER(COALESCE(${alias}.url, '')) LIKE '%://%.twitter.com/%'
+    OR LOWER(COALESCE(${alias}.rss_url, '')) LIKE '%://x.com/%'
+    OR LOWER(COALESCE(${alias}.rss_url, '')) LIKE '%://twitter.com/%'
+    OR LOWER(COALESCE(${alias}.rss_url, '')) LIKE '%://%.x.com/%'
+    OR LOWER(COALESCE(${alias}.rss_url, '')) LIKE '%://%.twitter.com/%'
+    OR LOWER(COALESCE(${alias}.rss_bridge_url, '')) LIKE '%://x.com/%'
+    OR LOWER(COALESCE(${alias}.rss_bridge_url, '')) LIKE '%://twitter.com/%'
+    OR LOWER(COALESCE(${alias}.rss_bridge_url, '')) LIKE '%://%.x.com/%'
+    OR LOWER(COALESCE(${alias}.rss_bridge_url, '')) LIKE '%://%.twitter.com/%'
+    OR LOWER(COALESCE(${alias}.rss_url, '')) LIKE '%/twitter/%'
+    OR LOWER(COALESCE(${alias}.rss_url, '')) LIKE '%/x/%'
+    OR LOWER(COALESCE(${alias}.rss_bridge_url, '')) LIKE '%/twitter/%'
+    OR LOWER(COALESCE(${alias}.rss_bridge_url, '')) LIKE '%/x/%'
+  )`
+}
+
+function resolvedFeedViewTypeExpr(alias: string): string {
+  return `CASE
+    WHEN ${alias}.view_type IN ('article', 'social') THEN ${alias}.view_type
+    WHEN ${isResolvedSocialFeedExpr(alias)} THEN 'social'
+    ELSE 'article'
+  END`
 }
 
 type ArticleListItemRow = ArticleListItem & {
@@ -142,6 +171,7 @@ export function recalculateScores(): { updated: number } {
 export function getArticles(opts: {
   feedId?: number
   categoryId?: number
+  feedViewType?: FeedViewType
   articleKind?: ArticleKind
   unread?: boolean
   bookmarked?: boolean
@@ -171,6 +201,10 @@ export function getArticles(opts: {
   if (opts.categoryId) {
     conditions.push('a.category_id = @categoryId')
     params.categoryId = opts.categoryId
+  }
+  if (opts.feedViewType) {
+    conditions.push(`${resolvedFeedViewTypeExpr('f')} = @feedViewType`)
+    params.feedViewType = opts.feedViewType
   }
   if (opts.articleKind) {
     conditions.push('a.article_kind = @articleKind')
@@ -216,6 +250,7 @@ export function getArticles(opts: {
     // Candidate 2: SMART_FLOOR_MIN_ARTICLES-th newest article's date
     const top20Row = getNamed<{ floor: string | null }>(`
       SELECT a.published_at AS floor FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
       ${scopeWhere}
       ORDER BY a.published_at DESC
       LIMIT 1 OFFSET ${SMART_FLOOR_MIN_ARTICLES - 1}
@@ -224,6 +259,7 @@ export function getArticles(opts: {
     // Candidate 3: oldest unread article's date
     const unreadRow = getNamed<{ floor: string | null }>(`
       SELECT MIN(a.published_at) AS floor FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
       ${scopeWhere ? scopeWhere + ' AND' : 'WHERE'} a.seen_at IS NULL AND a.published_at IS NOT NULL
     `, params)
 
@@ -258,12 +294,20 @@ export function getArticles(opts: {
       : opts.liked ? 'a.liked_at DESC' : opts.read ? 'a.read_at DESC' : 'a.published_at DESC'
 
   const totalRow = getNamed<{ cnt: number }>(`
-    SELECT COUNT(*) AS cnt FROM active_articles a ${where}
+    SELECT COUNT(*) AS cnt
+    FROM active_articles a
+    JOIN feeds f ON a.feed_id = f.id
+    ${where}
   `, params)
   const total = totalRow.cnt
 
   const totalWithoutFloor = baseWhere != null
-    ? getNamed<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM active_articles a ${baseWhere}`, params).cnt
+    ? getNamed<{ cnt: number }>(`
+      SELECT COUNT(*) AS cnt
+      FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
+      ${baseWhere}
+    `, params).cnt
     : undefined
 
   const articles = allNamed<ArticleListItem>(`
