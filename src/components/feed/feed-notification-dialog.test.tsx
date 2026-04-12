@@ -81,6 +81,7 @@ function renderDialog() {
           category_name: null,
           article_count: 0,
           unread_count: 0,
+          priority_level: 3,
           articles_per_week: 0,
           latest_published_at: null,
         }}

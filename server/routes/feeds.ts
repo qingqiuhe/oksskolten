@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import type { Feed } from '../../shared/types.js'
+import type { Feed, FeedPriorityLevel } from '../../shared/types.js'
 import { z } from 'zod'
 import { startSSE } from '../lib/sse.js'
 import { logger } from '../logger.js'
@@ -57,11 +57,21 @@ const DiscoverTitleQuery = z.object({
   url: httpsUrl,
 })
 
+const optionalPriorityLevel = z
+  .number()
+  .int()
+  .refine((value): value is FeedPriorityLevel => value >= 1 && value <= 5, {
+    message: 'priority_level must be between 1 and 5',
+  })
+  .optional()
+
 const CreateFeedBody = z.object({
   url: httpsUrl,
   name: z.string().optional(),
   icon_url: optionalHttpsUrl,
   category_id: z.number().nullable().optional(),
+  feed_priority: optionalPriorityLevel,
+  priority_level: optionalPriorityLevel,
 })
 
 const UpdateFeedBody = z.object({
@@ -71,6 +81,8 @@ const UpdateFeedBody = z.object({
   view_type: z.enum(['article', 'social']).nullable().optional(),
   disabled: z.number().optional(),
   category_id: z.number().nullable().optional(),
+  feed_priority: optionalPriorityLevel,
+  priority_level: optionalPriorityLevel,
 })
 const FeedNotificationRuleBody = z.object({
   enabled: z.boolean(),
@@ -181,6 +193,7 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
           rss_url: rssUrl,
           rss_bridge_url: rssBridgeUrl,
           category_id: body.category_id ?? null,
+          priority_level: body.priority_level ?? body.feed_priority,
           requires_js_challenge: requiresJsChallenge ? 1 : 0,
         }, userId)
 
@@ -210,7 +223,10 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       if (!body) return
       const userId = getRequestUserId(request)
 
-      const feed = updateFeed(params.id, body, userId)
+      const feed = updateFeed(params.id, {
+        ...body,
+        priority_level: body.priority_level ?? body.feed_priority,
+      }, userId)
       if (!feed) {
         reply.status(404).send({ error: 'Feed not found' })
         return

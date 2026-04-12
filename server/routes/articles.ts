@@ -68,6 +68,7 @@ const ArticlesQuery = z.object({
   read: z.string().optional(),
   sort: z.enum(['score', 'oldest_unread', 'inbox_score']).optional(),
   no_floor: z.string().optional(),
+  exclude_ids: z.string().optional(),
   limit: coerceOptionalNumber,
   offset: coerceOptionalNumber,
 })
@@ -219,6 +220,15 @@ function formatUsage(result: AiTextResult) {
   }
 }
 
+function parseExcludeIds(raw: string | undefined): number[] | null {
+  if (raw == null || raw.trim() === '') return []
+  const values = raw.split(',').map((part) => Number(part.trim()))
+  if (values.some((value) => !Number.isInteger(value) || value <= 0)) {
+    return null
+  }
+  return [...new Set(values)]
+}
+
 export async function articleRoutes(api: FastifyInstance): Promise<void> {
   api.get('/api/inbox/summary', async (request, reply) => {
     reply.send(getInboxSummary(getRequestUserId(request)))
@@ -238,11 +248,16 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const read = query.read === '1'
     const sort = query.sort
     const noFloor = query.no_floor === '1'
+    const excludeIds = parseExcludeIds(query.exclude_ids)
+    if (excludeIds == null) {
+      reply.status(400).send({ error: 'exclude_ids must be a comma-separated list of positive integers' })
+      return
+    }
 
     const userId = getRequestUserId(request)
     const isClipFeed = feedId != null && getClipFeed(userId)?.id === feedId
     const smartFloor = !noFloor && !isClipFeed && !unread && !bookmarked && !liked && !read
-    const { articles, total, totalWithoutFloor } = getArticles({ feedId, categoryId, feedViewType, articleKind, unread, bookmarked, liked, read, sort, limit, offset, smartFloor, userId })
+    const { articles, total, totalWithoutFloor } = getArticles({ feedId, categoryId, feedViewType, articleKind, unread, bookmarked, liked, read, sort, excludeIds, limit, offset, smartFloor, userId })
     const hasMore = offset + articles.length < total
 
     // When unread filter yields 0 results, return total article count (without unread filter)

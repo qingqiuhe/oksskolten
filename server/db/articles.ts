@@ -1,5 +1,5 @@
 import { getDb, runNamed, getNamed, allNamed } from './connection.js'
-import type { Article, ArticleListItem, ArticleDetail, InboxSummary } from './types.js'
+import type { Article, ArticleListItem, ArticleDetail, InboxSummary, HighValueArticle, HighValueResponse, InboxReasonCode } from './types.js'
 import type { MeiliArticleDoc } from '../search/client.js'
 import { syncArticleToSearch, deleteArticleFromSearch, deleteArticlesFromSearch, syncArticleScoreToSearch, syncArticleFiltersToSearch } from '../search/sync.js'
 import { RETRY_MAX_ATTEMPTS, RETRY_BATCH_LIMIT } from '../fetcher/util.js'
@@ -7,6 +7,7 @@ import { deleteArticleImages } from '../fetcher/article-images.js'
 import { logger } from '../logger.js'
 import { detectArticleKindForFeed, isArticleKind, resolveFeedViewType, type ArticleKind, type FeedViewType } from '../../shared/article-kind.js'
 import { getCurrentUserId } from '../identity.js'
+import { listActiveInboxTopicCooldowns } from './inbox-topic-cooldowns.js'
 
 const log = logger.child('retention')
 
@@ -75,6 +76,34 @@ type ArticleListItemRow = ArticleListItem & {
   _feed_rss_bridge_url?: string | null
 }
 
+type HighValueCandidate = ArticleListItemRow & {
+  _sort_published_at: string | null
+  full_text: string | null
+  notification_body_text: string | null
+  frequency_quantile: number
+  priority_level: number
+  articles_per_week: number
+  feed_history_count: number
+  feed_read_count: number
+  feed_bookmark_count: number
+  feed_like_count: number
+  category_history_count: number
+  category_read_count: number
+  category_bookmark_count: number
+  category_like_count: number
+  feed_affinity_score: number
+  category_affinity_score: number
+  article_quality_score: number
+  freshness_score: number
+  high_frequency_penalty: number
+  already_covered_penalty: number
+  topic_cooldown_penalty: number
+  has_read_similar: boolean
+  has_cooldown: boolean
+  direct_similar_count: number
+  inbox_score: number
+}
+
 type ArticleDetailRow = ArticleDetail & ArticleListItemRow
 
 function mapArticleListItem(article: ArticleListItemRow): ArticleListItem {
@@ -95,6 +124,140 @@ function mapArticleListItem(article: ArticleListItemRow): ArticleListItem {
       rss_url: _feed_rss_url,
       rss_bridge_url: _feed_rss_bridge_url,
     }),
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+function dedupeStrings(values: string[], limit?: number): string[] {
+  const deduped = [...new Set(values)]
+  return limit == null ? deduped : deduped.slice(0, limit)
+}
+
+function mapPriorityScore(priorityLevel: number): number {
+  switch (priorityLevel) {
+    case 1:
+      return -3
+    case 2:
+      return -1.5
+    case 4:
+      return 2.5
+    case 5:
+      return 5
+    default:
+      return 0
+  }
+}
+
+function mapPriorityDiscount(priorityLevel: number): number {
+  switch (priorityLevel) {
+    case 2:
+      return 0.1
+    case 3:
+      return 0.2
+    case 4:
+      return 0.4
+    case 5:
+      return 0.65
+    default:
+      return 0
+  }
+}
+
+function computeFrequencyPenalty(articlesPerWeek: number, priorityLevel: number, quantile: number): number {
+  const volumePenalty = articlesPerWeek > 20
+    ? 1.4 * Math.log2(1 + (articlesPerWeek - 20) / 10)
+    : 0
+  const quantilePenalty = quantile > 0.8
+    ? 1.2 * ((quantile - 0.8) / 0.2)
+    : 0
+  const rawPenalty = clamp(volumePenalty + quantilePenalty, 0, 6)
+  if (rawPenalty === 0) return 0
+  const discountedPenalty = rawPenalty * (1 - mapPriorityDiscount(priorityLevel))
+  return Math.max(discountedPenalty, rawPenalty * 0.35)
+}
+
+function computeFreshnessScore(publishedAt: string | null): number {
+  if (!publishedAt) return 0
+  const ageMs = Date.now() - new Date(publishedAt).getTime()
+  if (ageMs <= 12 * 60 * 60 * 1000) return 2.4
+  if (ageMs <= 48 * 60 * 60 * 1000) return 1.4
+  if (ageMs <= 7 * 24 * 60 * 60 * 1000) return 0.6
+  return 0
+}
+
+function buildHighValueReasons(article: HighValueCandidate): InboxReasonCode[] {
+  const reasons: InboxReasonCode[] = []
+
+  if (article.priority_level >= 5) {
+    reasons.push('manual_priority_must_read')
+  } else if (article.priority_level >= 4) {
+    reasons.push('feed_priority_high')
+  } else if (article.priority_level <= 1) {
+    reasons.push('manual_priority_low')
+  }
+
+  if (article.feed_affinity_score >= 1.25 || article.category_affinity_score >= 0.9) {
+    reasons.push('feed_affinity_high')
+  }
+  if (article.articles_per_week > 0 && article.articles_per_week <= 20) {
+    reasons.push('low_frequency_source')
+  }
+  if (article.has_read_similar) {
+    reasons.push('topic_already_covered')
+  }
+  if (article.has_cooldown) {
+    reasons.push('cooldown_active')
+  }
+  if (article.article_kind === 'original') {
+    reasons.push('original_reporting')
+  }
+  if (article.direct_similar_count > 0) {
+    reasons.push('topic_collapsed')
+  }
+  if (article.freshness_score >= 1.4) {
+    reasons.push('recent_story')
+  }
+
+  return dedupeStrings(reasons, HIGH_VALUE_REASON_LIMIT) as InboxReasonCode[]
+}
+
+function mapToHighValueArticle(article: HighValueCandidate): HighValueArticle {
+  const {
+    priority_level: _priority_level,
+    articles_per_week: _articles_per_week,
+    feed_history_count: _feed_history_count,
+    feed_read_count: _feed_read_count,
+    feed_bookmark_count: _feed_bookmark_count,
+    feed_like_count: _feed_like_count,
+    category_history_count: _category_history_count,
+    category_read_count: _category_read_count,
+    category_bookmark_count: _category_bookmark_count,
+    category_like_count: _category_like_count,
+    feed_affinity_score: _feed_affinity_score,
+    category_affinity_score: _category_affinity_score,
+    article_quality_score: _article_quality_score,
+    freshness_score: _freshness_score,
+    high_frequency_penalty: _high_frequency_penalty,
+    already_covered_penalty: _already_covered_penalty,
+    topic_cooldown_penalty: _topic_cooldown_penalty,
+    has_read_similar: _has_read_similar,
+    has_cooldown: _has_cooldown,
+    direct_similar_count: _direct_similar_count,
+    _sort_published_at: _sort_published_at,
+    ...rest
+  } = article
+
+  return {
+    ...rest,
+    inbox_score: roundScore(article.inbox_score ?? 0),
+    inbox_reason_codes: buildHighValueReasons(article),
   }
 }
 
@@ -159,6 +322,21 @@ const INBOX_SCORE_RECENT_12H_BOOST = 2.5
 const INBOX_SCORE_RECENT_48H_BOOST = 1.5
 const INBOX_SCORE_RECENT_7D_BOOST = 0.5
 const INBOX_SCORE_HISTORY_WINDOW_DAYS = 90
+const HIGH_VALUE_HISTORY_WINDOW_DAYS = 90
+const HIGH_VALUE_CANDIDATE_LOOKBACK_DAYS = 7
+const HIGH_VALUE_CANDIDATE_MULTIPLIER = 6
+const HIGH_VALUE_CANDIDATE_MIN_LIMIT = 30
+const HIGH_VALUE_DEFAULT_LIMIT = 10
+const HIGH_VALUE_MAX_LIMIT = 20
+const HIGH_VALUE_FEED_AFFINITY_DENOMINATOR = 12
+const HIGH_VALUE_FEED_AFFINITY_MAX = 3
+const HIGH_VALUE_FEED_AFFINITY_MULTIPLIER = 6
+const HIGH_VALUE_CATEGORY_AFFINITY_DENOMINATOR = 20
+const HIGH_VALUE_CATEGORY_AFFINITY_MAX = 1.5
+const HIGH_VALUE_CATEGORY_AFFINITY_MULTIPLIER = 3
+const HIGH_VALUE_TOPIC_ALREADY_COVERED_PENALTY = 2
+const HIGH_VALUE_TOPIC_COOLDOWN_PENALTY = 4
+const HIGH_VALUE_REASON_LIMIT = 2
 
 function inboxScoreExpr(
   prefix: string,
@@ -262,6 +440,7 @@ export function getArticles(opts: {
   since?: string
   until?: string
   sort?: 'score' | 'oldest_unread' | 'inbox_score'
+  excludeIds?: number[]
   limit: number
   offset: number
   smartFloor?: boolean
@@ -311,6 +490,13 @@ export function getArticles(opts: {
   if (opts.until) {
     conditions.push('COALESCE(a.published_at, a.fetched_at) <= @until')
     params.until = opts.until
+  }
+  if (opts.excludeIds?.length) {
+    const placeholders = opts.excludeIds.map((_, index) => `@excludeId_${index}`).join(', ')
+    conditions.push(`a.id NOT IN (${placeholders})`)
+    opts.excludeIds.forEach((id, index) => {
+      params[`excludeId_${index}`] = id
+    })
   }
 
   // Smart floor: limit the displayed range to keep lists manageable.
@@ -492,6 +678,308 @@ export function getInboxSummary(userId?: number | null): InboxSummary {
     new_today: row?.new_today ?? 0,
     oldest_unread_at: row?.oldest_unread_at ?? null,
     source_feed_count: row?.source_feed_count ?? 0,
+  }
+}
+
+export function getHighValueInbox(opts?: {
+  limit?: number
+  feedViewType?: FeedViewType
+  userId?: number | null
+}): HighValueResponse {
+  const scopedUserId = resolveUserId(opts?.userId)
+  const requestedLimit = opts?.limit ?? HIGH_VALUE_DEFAULT_LIMIT
+  const limit = clamp(requestedLimit, 1, HIGH_VALUE_MAX_LIMIT)
+  const candidateLimit = Math.max(limit * HIGH_VALUE_CANDIDATE_MULTIPLIER, HIGH_VALUE_CANDIDATE_MIN_LIMIT)
+  const cooldowns = listActiveInboxTopicCooldowns(scopedUserId)
+  const cooldownAnchorIds = cooldowns.map((cooldown) => cooldown.anchor_article_id)
+  const cooldownPlaceholders = cooldownAnchorIds.map((_, index) => `@cooldown_anchor_${index}`).join(', ')
+  const params: Record<string, unknown> = {
+    candidateLimit,
+  }
+
+  if (scopedUserId != null) {
+    params.userId = scopedUserId
+  }
+  cooldownAnchorIds.forEach((id, index) => {
+    params[`cooldown_anchor_${index}`] = id
+  })
+  if (opts?.feedViewType) {
+    params.feedViewType = opts.feedViewType
+  }
+
+  const feedViewFilter = opts?.feedViewType
+    ? `AND ${resolvedFeedViewTypeExpr('f')} = @feedViewType`
+    : ''
+  const cooldownExistsExpr = cooldownAnchorIds.length > 0
+    ? `(
+        a.id IN (${cooldownPlaceholders})
+        OR EXISTS (
+        SELECT 1
+        FROM article_similarities cooldown_sim
+        WHERE cooldown_sim.article_id = a.id
+          AND cooldown_sim.similar_to_id IN (${cooldownPlaceholders})
+      ))`
+    : '0'
+
+  const frequencyValues = allNamed<{ articles_per_week: number }>(`
+    SELECT
+      COUNT(
+        CASE
+          WHEN COALESCE(a.published_at, a.fetched_at) >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-28 days')
+          THEN 1
+        END
+      ) / 4.0 AS articles_per_week
+    FROM feeds f
+    LEFT JOIN active_articles a ON a.feed_id = f.id
+    WHERE f.type != 'clip'
+      ${scopedUserId == null ? '' : 'AND f.user_id = @userId'}
+    GROUP BY f.id
+  `, scopedUserId == null ? {} : { userId: scopedUserId })
+  const sortedFrequencyValues = frequencyValues
+    .map((item) => item.articles_per_week)
+    .sort((left, right) => left - right)
+
+  const candidates = allNamed<HighValueCandidate>(`
+    WITH feed_history AS (
+      SELECT
+        h.feed_id,
+        COUNT(*) AS article_count,
+        COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
+        COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
+        COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
+      FROM active_articles h
+      JOIN feeds hf ON h.feed_id = hf.id
+      WHERE hf.type != 'clip'
+        AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${HIGH_VALUE_HISTORY_WINDOW_DAYS} days')
+        ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
+      GROUP BY h.feed_id
+    ),
+    category_history AS (
+      SELECT
+        h.category_id,
+        COUNT(*) AS article_count,
+        COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
+        COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
+        COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
+      FROM active_articles h
+      JOIN feeds hf ON h.feed_id = hf.id
+      WHERE hf.type != 'clip'
+        AND h.category_id IS NOT NULL
+        AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${HIGH_VALUE_HISTORY_WINDOW_DAYS} days')
+        ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
+      GROUP BY h.category_id
+    ),
+    feed_frequency AS (
+      SELECT
+        f.id AS feed_id,
+        COUNT(
+          CASE
+            WHEN COALESCE(fa.published_at, fa.fetched_at) >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-28 days')
+            THEN 1
+          END
+        ) / 4.0 AS articles_per_week
+      FROM feeds f
+      LEFT JOIN active_articles fa ON fa.feed_id = f.id
+      WHERE f.type != 'clip'
+        ${scopedUserId == null ? '' : 'AND f.user_id = @userId'}
+      GROUP BY f.id
+    ),
+    direct_similar AS (
+      SELECT article_id, COUNT(*) AS direct_similar_count
+      FROM article_similarities
+      GROUP BY article_id
+    ),
+    read_similar AS (
+      SELECT s.article_id, 1 AS has_read_similar
+      FROM article_similarities s
+      JOIN active_articles similar ON similar.id = s.similar_to_id
+      WHERE similar.read_at IS NOT NULL
+        ${scopedUserId == null ? '' : 'AND similar.user_id = @userId'}
+      GROUP BY s.article_id
+    )
+    SELECT
+      a.id,
+      a.feed_id,
+      f.name AS feed_name,
+      f.icon_url AS feed_icon_url,
+      f.view_type AS _feed_view_type_raw,
+      f.url AS _feed_url,
+      f.rss_url AS _feed_rss_url,
+      f.rss_bridge_url AS _feed_rss_bridge_url,
+      a.title,
+      a.url,
+      a.article_kind,
+      a.published_at,
+      a.lang,
+      a.summary,
+      a.excerpt,
+      a.full_text,
+      a.notification_body_text,
+      a.og_image,
+      a.seen_at,
+      a.read_at,
+      a.bookmarked_at,
+      a.liked_at,
+      ${hasVideoExpr('a.')} AS has_video,
+      COALESCE(a.published_at, a.fetched_at) AS _sort_published_at,
+      f.priority_level,
+      COALESCE(ff.articles_per_week, 0) AS articles_per_week,
+      COALESCE(fh.article_count, 0) AS feed_history_count,
+      COALESCE(fh.read_count, 0) AS feed_read_count,
+      COALESCE(fh.bookmark_count, 0) AS feed_bookmark_count,
+      COALESCE(fh.like_count, 0) AS feed_like_count,
+      COALESCE(ch.article_count, 0) AS category_history_count,
+      COALESCE(ch.read_count, 0) AS category_read_count,
+      COALESCE(ch.bookmark_count, 0) AS category_bookmark_count,
+      COALESCE(ch.like_count, 0) AS category_like_count,
+      0 AS frequency_quantile,
+      0 AS feed_affinity_score,
+      0 AS category_affinity_score,
+      0 AS article_quality_score,
+      0 AS freshness_score,
+      0 AS high_frequency_penalty,
+      CASE WHEN rs.has_read_similar = 1 THEN ${HIGH_VALUE_TOPIC_ALREADY_COVERED_PENALTY} ELSE 0 END AS already_covered_penalty,
+      CASE WHEN ${cooldownExistsExpr} THEN ${HIGH_VALUE_TOPIC_COOLDOWN_PENALTY} ELSE 0 END AS topic_cooldown_penalty,
+      COALESCE(rs.has_read_similar, 0) AS has_read_similar,
+      CASE WHEN ${cooldownExistsExpr} THEN 1 ELSE 0 END AS has_cooldown,
+      COALESCE(ds.direct_similar_count, 0) AS direct_similar_count,
+      0 AS inbox_score,
+      a.score
+    FROM active_articles a
+    JOIN feeds f ON a.feed_id = f.id
+    LEFT JOIN feed_history fh ON fh.feed_id = a.feed_id
+    LEFT JOIN category_history ch ON ch.category_id = a.category_id
+    LEFT JOIN feed_frequency ff ON ff.feed_id = a.feed_id
+    LEFT JOIN direct_similar ds ON ds.article_id = a.id
+    LEFT JOIN read_similar rs ON rs.article_id = a.id
+    WHERE a.seen_at IS NULL
+      AND f.type != 'clip'
+      AND julianday(COALESCE(a.published_at, a.fetched_at)) >= julianday('now', '-${HIGH_VALUE_CANDIDATE_LOOKBACK_DAYS} days')
+      ${scopedUserId == null ? '' : 'AND a.user_id = @userId'}
+      ${feedViewFilter}
+    ORDER BY COALESCE(a.published_at, a.fetched_at) DESC, a.id DESC
+    LIMIT @candidateLimit
+  `, params).map((row) => {
+    const feedAffinityRatio = ((row.feed_read_count * 1) + (row.feed_bookmark_count * 3) + (row.feed_like_count * 5))
+      / (row.feed_history_count + HIGH_VALUE_FEED_AFFINITY_DENOMINATOR)
+    const categoryAffinityRatio = ((row.category_read_count * 1) + (row.category_bookmark_count * 2) + (row.category_like_count * 3))
+      / (row.category_history_count + HIGH_VALUE_CATEGORY_AFFINITY_DENOMINATOR)
+    const feedAffinityScore = Math.min(HIGH_VALUE_FEED_AFFINITY_MAX, HIGH_VALUE_FEED_AFFINITY_MULTIPLIER * feedAffinityRatio)
+    const categoryAffinityScore = Math.min(HIGH_VALUE_CATEGORY_AFFINITY_MAX, HIGH_VALUE_CATEGORY_AFFINITY_MULTIPLIER * categoryAffinityRatio)
+    const articleQualityScore =
+      (row.full_text ? 1 : 0)
+      + ((row.summary || row.excerpt) ? 0.6 : 0)
+      + (row.notification_body_text ? 0.2 : 0)
+      + (row.article_kind === 'original' ? 0.8 : row.article_kind === 'quote' ? 0.2 : row.article_kind === 'repost' ? -0.5 : 0)
+    const freshnessScore = computeFreshnessScore(row._sort_published_at)
+    const lessOrEqualCount = sortedFrequencyValues.filter((value) => value <= row.articles_per_week).length
+    const frequencyQuantile = row.frequency_quantile || (sortedFrequencyValues.length > 0 ? lessOrEqualCount / sortedFrequencyValues.length : 0)
+    const highFrequencyPenalty = computeFrequencyPenalty(row.articles_per_week, row.priority_level, frequencyQuantile)
+    const inboxScore =
+      mapPriorityScore(row.priority_level)
+      + feedAffinityScore
+      + categoryAffinityScore
+      + articleQualityScore
+      + freshnessScore
+      - highFrequencyPenalty
+      - row.already_covered_penalty
+      - row.topic_cooldown_penalty
+
+    return {
+      ...row,
+      has_read_similar: Boolean(row.has_read_similar),
+      has_cooldown: Boolean(row.has_cooldown),
+      feed_affinity_score: feedAffinityScore,
+      category_affinity_score: categoryAffinityScore,
+      article_quality_score: articleQualityScore,
+      freshness_score: freshnessScore,
+      high_frequency_penalty: highFrequencyPenalty,
+      inbox_score: inboxScore,
+    }
+  })
+
+  const candidateMap = new Map(candidates.map((candidate) => [candidate.id, candidate]))
+  const candidateIds = candidates.map((candidate) => candidate.id)
+  if (candidateIds.length === 0) {
+    return { items: [], represented_article_ids: [] }
+  }
+
+  const placeholders = candidateIds.map((_, index) => `@candidate_id_${index}`).join(', ')
+  const similarityParams: Record<string, unknown> = {}
+  candidateIds.forEach((id, index) => {
+    similarityParams[`candidate_id_${index}`] = id
+  })
+
+  const similarityRows = allNamed<{ article_id: number; similar_to_id: number }>(`
+    SELECT article_id, similar_to_id
+    FROM article_similarities
+    WHERE article_id IN (${placeholders})
+      AND similar_to_id IN (${placeholders})
+  `, similarityParams)
+
+  const adjacency = new Map<number, number[]>()
+  for (const row of similarityRows) {
+    const current = adjacency.get(row.article_id) ?? []
+    current.push(row.similar_to_id)
+    adjacency.set(row.article_id, current)
+  }
+
+  const sortedCandidates = [...candidates].sort((left, right) => {
+    const scoreDiff = (right.inbox_score ?? 0) - (left.inbox_score ?? 0)
+    if (scoreDiff !== 0) return scoreDiff
+    const timeDiff = new Date(right._sort_published_at ?? 0).getTime() - new Date(left._sort_published_at ?? 0).getTime()
+    if (timeDiff !== 0) return timeDiff
+    return right.id - left.id
+  })
+
+  const represented = new Set<number>()
+  const items: HighValueResponse['items'] = []
+
+  for (const candidate of sortedCandidates) {
+    if (represented.has(candidate.id)) continue
+
+    const directMembers = (adjacency.get(candidate.id) ?? [])
+      .map((id) => candidateMap.get(id))
+      .filter((value): value is NonNullable<typeof value> => Boolean(value))
+      .filter((member) => !represented.has(member.id))
+      .sort((left, right) => {
+        const scoreDiff = (right.inbox_score ?? 0) - (left.inbox_score ?? 0)
+        if (scoreDiff !== 0) return scoreDiff
+        const timeDiff = new Date(right._sort_published_at ?? 0).getTime() - new Date(left._sort_published_at ?? 0).getTime()
+        if (timeDiff !== 0) return timeDiff
+        return right.id - left.id
+      })
+
+    const groupMembers = [candidate, ...directMembers]
+    groupMembers.forEach((member) => represented.add(member.id))
+
+    if (groupMembers.length === 1) {
+      items.push({
+        kind: 'article',
+        display_article: mapToHighValueArticle(candidate),
+      })
+    } else {
+      const sourceNames = dedupeStrings(groupMembers.map((member) => member.feed_name), 3)
+      items.push({
+        kind: 'group',
+        anchor_article_id: candidate.id,
+        display_article: mapToHighValueArticle(candidate),
+        similar_count: groupMembers.length - 1,
+        source_names: sourceNames,
+        members: groupMembers.map((member) => mapToHighValueArticle(member)),
+      })
+    }
+
+    if (items.length >= limit) break
+  }
+
+  const representedArticleIds = items.flatMap((item) => item.kind === 'group'
+    ? [item.anchor_article_id, ...item.members.map((member) => member.id)]
+    : [item.display_article.id])
+
+  return {
+    items,
+    represented_article_ids: [...new Set(representedArticleIds)],
   }
 }
 

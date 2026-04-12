@@ -131,6 +131,8 @@ describe('generateOpml', () => {
     last_content_hash: null,
     next_check_at: null,
     check_interval: null,
+    priority_level: 3,
+    articles_per_week: 0,
     created_at: '2026-01-01T00:00:00Z',
     ...overrides,
   })
