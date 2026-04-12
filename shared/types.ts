@@ -12,6 +12,8 @@ export interface Category {
   created_at: string
 }
 
+export type FeedPriorityLevel = 1 | 2 | 3 | 4 | 5
+
 export interface Feed {
   id: number
   name: string
@@ -21,6 +23,7 @@ export interface Feed {
   rss_bridge_url: string | null
   view_type: FeedViewType | null
   category_id: number | null
+  priority_level: FeedPriorityLevel
   last_error: string | null
   error_count: number
   disabled: number
@@ -107,6 +110,43 @@ export interface InboxSummary {
   new_today: number
   oldest_unread_at: string | null
   source_feed_count: number
+}
+
+export type InboxReasonCode =
+  | 'feed_priority_high'
+  | 'feed_affinity_high'
+  | 'low_frequency_source'
+  | 'topic_collapsed'
+  | 'topic_already_covered'
+  | 'original_reporting'
+  | 'recent_story'
+  | 'manual_priority_low'
+  | 'manual_priority_must_read'
+  | 'cooldown_active'
+
+export interface HighValueArticle extends ArticleListItem {
+  inbox_reason_codes?: InboxReasonCode[]
+}
+
+export interface HighValueArticleItem {
+  kind: 'article'
+  display_article: HighValueArticle
+}
+
+export interface HighValueGroupItem {
+  kind: 'group'
+  anchor_article_id: number
+  display_article: HighValueArticle
+  similar_count: number
+  source_names: string[]
+  members: HighValueArticle[]
+}
+
+export type HighValueItem = HighValueArticleItem | HighValueGroupItem
+
+export interface HighValueResponse {
+  items: HighValueItem[]
+  represented_article_ids: number[]
 }
 
 export interface ListChatScopeFilters {

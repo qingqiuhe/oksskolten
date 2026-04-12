@@ -7,6 +7,7 @@ import { settingsRoutes } from './settings.js'
 import { adminRoutes } from './admin.js'
 import { apiKeyRoutes } from './apiKeys.js'
 import { statsRoutes } from './stats.js'
+import { inboxRoutes } from './inbox.js'
 import { userRoutes } from './users.js'
 
 export function registerApi(app: FastifyInstance): void {
@@ -18,6 +19,7 @@ export function registerApi(app: FastifyInstance): void {
     await api.register(articleRoutes)
     await api.register(categoryRoutes)
     await api.register(settingsRoutes)
+    await api.register(inboxRoutes)
     await api.register(adminRoutes)
     await api.register(apiKeyRoutes)
     await api.register(statsRoutes)

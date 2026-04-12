@@ -1,6 +1,8 @@
 import { type ElementType, type ReactNode } from 'react'
-import { Pencil, CheckCheck, Trash2, FolderInput, RefreshCw, Search, BellRing, LayoutTemplate } from 'lucide-react'
+import { Pencil, CheckCheck, Trash2, FolderInput, RefreshCw, Search, BellRing, LayoutTemplate, SlidersHorizontal, ArrowDown } from 'lucide-react'
+import type { FeedPriorityLevel } from '../../../shared/types'
 import { useI18n } from '../../lib/i18n'
+import { getFeedPriorityIcon, useFeedPriorityOptions } from './feed-priority-picker'
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -34,6 +36,9 @@ interface FeedMenuProps {
   onMarkAllRead: () => void
   onDelete: () => void
   onMoveToCategory?: (categoryId: number | null) => void
+  currentPriorityLevel?: FeedPriorityLevel
+  onPriorityChange?: (priority: FeedPriorityLevel) => void
+  onLowerPriority?: () => void
   currentViewType?: 'article' | 'social' | null
   onViewTypeChange?: (viewType: 'article' | 'social' | null) => void
   onFetch?: () => void
@@ -62,6 +67,9 @@ function FeedMenuContent({
   onMarkAllRead,
   onDelete,
   onMoveToCategory,
+  currentPriorityLevel = 3,
+  onPriorityChange,
+  onLowerPriority,
   currentViewType,
   onViewTypeChange,
   onFetch,
@@ -70,6 +78,7 @@ function FeedMenuContent({
   components,
 }: FeedMenuContentProps) {
   const { t } = useI18n()
+  const priorityOptions = useFeedPriorityOptions()
   const isClip = feedType === 'clip'
   const {
     Item,
@@ -109,6 +118,32 @@ function FeedMenuContent({
             ))}
           </SubContent>
         </Sub>
+      )}
+
+      {!isClip && onPriorityChange && (
+        <Sub>
+          <SubTrigger>
+            <SlidersHorizontal size={16} strokeWidth={1.5} />
+            {t('feeds.priority.menu')}
+          </SubTrigger>
+          <SubContent>
+            <RadioGroup value={String(currentPriorityLevel)}>
+              {priorityOptions.map(option => (
+                <RadioItem key={option.value} value={String(option.value)} onSelect={() => onPriorityChange(option.value)}>
+                  {getFeedPriorityIcon(option.value)}
+                  {option.label}
+                </RadioItem>
+              ))}
+            </RadioGroup>
+          </SubContent>
+        </Sub>
+      )}
+
+      {!isClip && onLowerPriority && (
+        <Item onSelect={onLowerPriority} disabled={currentPriorityLevel <= 1}>
+          <ArrowDown size={16} strokeWidth={1.5} />
+          {t('feeds.priority.lower')}
+        </Item>
       )}
 
       {!isClip && onViewTypeChange && (

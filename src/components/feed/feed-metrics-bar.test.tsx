@@ -37,6 +37,7 @@ function makeFeed(overrides: Partial<FeedWithCounts> = {}): FeedWithCounts {
     category_name: null,
     article_count: 42,
     unread_count: 5,
+    priority_level: 3,
     articles_per_week: 3.5,
     latest_published_at: new Date().toISOString(),
     ...overrides,

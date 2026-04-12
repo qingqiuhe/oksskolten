@@ -2,12 +2,13 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useSWRConfig } from 'swr'
 import { apiPost, apiPatch, apiDelete } from '../lib/fetcher'
 import { normalizeFeedIconUrl } from '../lib/feed-icon-url'
-import type { FeedWithCounts, Category } from '../../shared/types'
+import { buildFeedPriorityPatch, getFeedPriorityLevel } from '../lib/feed-priority'
+import type { FeedWithCounts, Category, FeedPriorityLevel } from '../../shared/types'
 import type { KeyedMutator } from 'swr'
 import type { FetchResult } from './use-fetch-progress'
 
 type RenamingState =
-  | { type: 'feed'; feed: FeedWithCounts; name: string; iconUrl: string }
+  | { type: 'feed'; feed: FeedWithCounts; name: string; iconUrl: string; priorityLevel: FeedPriorityLevel }
   | { type: 'category'; category: Category; name: string }
   | null
 
@@ -55,7 +56,13 @@ export function useFeedActions({
   }, [renamingId])
 
   function handleStartRenameFeed(feed: FeedWithCounts) {
-    setRenaming({ type: 'feed', feed, name: feed.name, iconUrl: feed.icon_url ?? '' })
+    setRenaming({
+      type: 'feed',
+      feed,
+      name: feed.name,
+      iconUrl: feed.icon_url ?? '',
+      priorityLevel: getFeedPriorityLevel(feed),
+    })
   }
 
   function handleStartRenameCategory(category: Category) {
@@ -110,6 +117,32 @@ export function useFeedActions({
     } catch {
       void mutateFeeds()
     }
+  }
+
+  async function handleUpdatePriority(feed: FeedWithCounts, priorityLevel: FeedPriorityLevel) {
+    const feedId = feed.id
+    const patch = buildFeedPriorityPatch(priorityLevel)
+    void mutateFeeds(
+      prev => prev ? {
+        ...prev,
+        feeds: prev.feeds.map(f => f.id === feedId ? { ...f, ...patch } : f),
+      } : prev,
+      { revalidate: false },
+    )
+    try {
+      await apiPatch(`/api/feeds/${feedId}`, patch)
+      revalidateArticles()
+    } catch {
+      void mutateFeeds()
+    }
+  }
+
+  async function handleLowerPriority(feed: FeedWithCounts) {
+    const currentLevel = getFeedPriorityLevel(feed)
+    if (currentLevel <= 1) return currentLevel
+    const nextLevel = (currentLevel - 1) as FeedPriorityLevel
+    await handleUpdatePriority(feed, nextLevel)
+    return nextLevel
   }
 
   async function handleFetchFeed(feed: FeedWithCounts) {
@@ -189,6 +222,7 @@ export function useFeedActions({
       await apiPatch(`/api/feeds/${renaming.feed.id}`, {
         name: renaming.name.trim(),
         icon_url: normalizeFeedIconUrl(renaming.iconUrl),
+        ...buildFeedPriorityPatch(renaming.priorityLevel),
       })
       void mutateFeeds()
     } else {
@@ -227,6 +261,8 @@ export function useFeedActions({
     handleDeleteCategory,
     handleMoveToCategory,
     handleUpdateViewType,
+    handleUpdatePriority,
+    handleLowerPriority,
     handleFetchFeed,
     handleFetchCategory,
     handleReDetectFeed,

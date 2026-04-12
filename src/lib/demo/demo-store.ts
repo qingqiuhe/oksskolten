@@ -3,7 +3,7 @@ import seedArticles from './seed/articles.json'
 import seedConversationsEn from './seed/en/conversations.json'
 import seedConversationsJa from './seed/ja/conversations.json'
 import { getLocale, dt } from './i18n'
-import type { FeedWithCounts, ArticleListItem, ArticleDetail, Category, ChatScope, ScopeSummary } from '../../../shared/types'
+import type { FeedWithCounts, ArticleListItem, ArticleDetail, Category, ChatScope, ScopeSummary, FeedPriorityLevel } from '../../../shared/types'
 import { resolveFeedViewType, type ArticleKind, type FeedViewType } from '../../../shared/article-kind'
 
 type Locale = 'ja' | 'en'
@@ -72,6 +72,7 @@ interface SeedFeed {
   view_type: FeedViewType | null
   category_id: number | null
   category_name: string | null
+  priority_level?: FeedPriorityLevel
   lang: string
   type: 'rss' | 'clip'
   disabled: number
@@ -173,6 +174,7 @@ function createFeed(overrides: Partial<SeedFeed> & Pick<SeedFeed, 'name' | 'url'
     view_type: null,
     category_id: null,
     category_name: null,
+    priority_level: 3,
     lang: getLocale(),
     type: 'rss',
     disabled: 0,
@@ -253,6 +255,7 @@ function toFeedWithCounts(f: SeedFeed): FeedWithCounts {
     ...f,
     icon_url: f.icon_url ?? null,
     category_name: f.category_name,
+    priority_level: f.priority_level ?? 3,
     article_count: feedArticles.length,
     unread_count: feedArticles.filter(a => a.seen_at == null).length,
     articles_per_week: feedArticles.length > 0 ? Math.round(feedArticles.length / 4) : 0,

@@ -1,7 +1,8 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import useSWR from 'swr'
 import { fetcher } from '../../lib/fetcher'
+import { getFeedPriorityLevel } from '../../lib/feed-priority'
 import { useI18n } from '../../lib/i18n'
 import { MD_BREAKPOINT } from '../../lib/breakpoints'
 import { Inbox, Plus, ChevronRight, Bookmark, ThumbsUp, Clock, Paperclip, Search, Command, ArrowBigUp, AlertTriangle, MessagesSquare, Link2 } from 'lucide-react'
@@ -184,6 +185,8 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
     handleDeleteFeed, handleDeleteCategory,
     handleMoveToCategory,
     handleUpdateViewType,
+    handleUpdatePriority,
+    handleLowerPriority,
     handleFetchFeed, handleFetchCategory,
     handleReDetectFeed,
     handleConfirm, handleRenameSubmit, handleToggleCollapse,
@@ -221,6 +224,28 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
   const showFeedActivity = settings.showFeedActivity
 
   const totalUnread = feeds.reduce((sum, f) => sum + (f.disabled || f.type === 'clip' ? 0 : f.unread_count), 0)
+
+  function showPriorityChangedToast(feed: FeedWithCounts, priorityLevel: number) {
+    toast.success(t('feeds.priority.lowered', {
+      name: feed.name,
+      priority: t(
+        priorityLevel === 1
+          ? 'feeds.priority.ignore'
+          : priorityLevel === 2
+            ? 'feeds.priority.low'
+            : priorityLevel === 3
+              ? 'feeds.priority.medium'
+              : priorityLevel === 4
+                ? 'feeds.priority.high'
+                : 'feeds.priority.mustRead',
+      ),
+    }))
+  }
+
+  const lowerPriorityWithToast = useCallback(async (feed: FeedWithCounts) => {
+    const nextLevel = await handleLowerPriority(feed)
+    if (nextLevel != null) showPriorityChangedToast(feed, nextLevel)
+  }, [handleLowerPriority, t])
 
   function selectFeed(id: number | null) {
     if (id) {
@@ -379,6 +404,9 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
         onMarkAllRead={() => handleMarkAllReadFeed(feed)}
         onDelete={() => handleDeleteFeed(feed)}
         onMoveToCategory={(catId) => handleMoveToCategory(feed, catId)}
+        currentPriorityLevel={getFeedPriorityLevel(feed)}
+        onPriorityChange={(priorityLevel) => void handleUpdatePriority(feed, priorityLevel)}
+        onLowerPriority={() => { void lowerPriorityWithToast(feed) }}
         currentViewType={feed.view_type}
         onViewTypeChange={(viewType) => handleUpdateViewType(feed, viewType)}
         onFetch={() => handleFetchFeed(feed)}

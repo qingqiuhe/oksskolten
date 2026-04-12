@@ -573,3 +573,32 @@ describe('GET /api/articles?unread=1 — total_all field', () => {
     expect(res.json().total_all).toBeUndefined()
   })
 })
+
+describe('POST /api/inbox/topic-cooldowns', () => {
+  it('returns 404 when the anchor article does not exist', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/inbox/topic-cooldowns',
+      headers: json,
+      payload: { anchor_article_id: 999999 },
+    })
+
+    expect(res.statusCode).toBe(404)
+    expect(res.json().error).toBe('Article not found')
+  })
+
+  it('creates a cooldown for an existing article', async () => {
+    const feed = seedFeed()
+    const artId = seedArticle(feed.id)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/inbox/topic-cooldowns',
+      headers: json,
+      payload: { anchor_article_id: artId },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().anchor_article_id).toBe(artId)
+  })
+})

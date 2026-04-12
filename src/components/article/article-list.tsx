@@ -28,12 +28,13 @@ import { ListChatFab } from '../chat/list-chat-fab'
 import { useKeyboardNavigationContext } from '../../contexts/keyboard-navigation-context'
 import { useKeyboardNavigation } from '../../hooks/use-keyboard-navigation'
 import { apiDelete, apiPatch, apiPost } from '../../lib/fetcher'
-import type { ArticleListItem, FeedWithCounts, InboxSummary } from '../../../shared/types'
+import type { ArticleListItem, FeedWithCounts, HighValueArticle, HighValueResponse, InboxSummary } from '../../../shared/types'
 import type { LayoutName } from '../../data/layouts'
 import { isXFeedSource, type ArticleKind, type FeedViewType } from '../../../shared/article-kind'
 import { InboxHeader, type InboxSort, type InboxViewFilter } from './inbox-header'
 import { ArticleInlineActions } from './article-inline-actions'
 import { InboxGroupHeader } from './inbox-group-header'
+import { HighValueSection } from './high-value-section'
 import { useUndoSeen } from '../../hooks/use-undo-seen'
 
 interface ArticlesResponse {
@@ -91,7 +92,7 @@ function startOfYesterday() {
   return date
 }
 
-function dayGroupMeta(article: ArticleListItem, t: ReturnType<typeof useI18n>['t']) {
+function dayGroupMeta(article: ArticleListItem, t: ReturnType<typeof useI18n>['t'], locale: string) {
   const raw = article.published_at
   if (!raw) {
     return { key: 'day:unknown', title: t('inbox.group.unknownDay') }
@@ -106,7 +107,7 @@ function dayGroupMeta(article: ArticleListItem, t: ReturnType<typeof useI18n>['t
   if (date >= yesterday) return { key: 'day:yesterday', title: t('inbox.group.yesterday') }
   return {
     key: `day:${date.toISOString().slice(0, 10)}`,
-    title: new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date),
+    title: new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(date),
   }
 }
 
@@ -154,7 +155,14 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const effectiveTranslateTargetLang = settings.translateTargetLang || locale
   const { progress, startFeedFetch } = useFetchProgressContext()
   const { mutate: globalMutate } = useSWRConfig()
+  const effectiveInboxViewFilter: FeedViewType | undefined = isInbox && inboxViewFilter !== 'all' ? inboxViewFilter : undefined
   const { data: inboxSummary, mutate: mutateInboxSummary } = useSWR<InboxSummary>(isInbox ? '/api/inbox/summary' : null, fetcher)
+  const { data: highValueData, mutate: mutateHighValue } = useSWR<HighValueResponse>(
+    isInbox && inboxSort === 'inbox_score'
+      ? `/api/inbox/high-value${effectiveInboxViewFilter ? `?feed_view_type=${effectiveInboxViewFilter}` : ''}`
+      : null,
+    fetcher,
+  )
   const getKey = (pageIndex: number, previousPageData: ArticlesResponse | null) => {
     if (previousPageData && !previousPageData.has_more) return null
     const params = new URLSearchParams()
@@ -166,7 +174,11 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     if (bookmarkedOnly) params.set('bookmarked', '1')
     if (likedOnly) params.set('liked', '1')
     if (readOnly) params.set('read', '1')
-    if (isInbox && inboxSort !== 'newest') params.set('sort', inboxSort)
+    if (isInbox && inboxSort === 'oldest_unread') params.set('sort', inboxSort)
+    if (isInbox && inboxSort === 'inbox_score') {
+      const excludeIds = highValueData?.represented_article_ids ?? []
+      if (excludeIds.length > 0) params.set('exclude_ids', excludeIds.join(','))
+    }
     if (noFloor) params.set('no_floor', '1')
     params.set('limit', String(PAGE_SIZE))
     params.set('offset', String(pageIndex * PAGE_SIZE))
@@ -181,14 +193,21 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     },
   )
 
+  const revalidateList = useCallback(() => {
+    void mutate()
+    void mutateHighValue()
+    void mutateInboxSummary()
+  }, [mutate, mutateHighValue, mutateInboxSummary])
+
   useImperativeHandle(ref, () => ({
-    revalidate: () => mutate(),
-  }), [mutate])
+    revalidate: revalidateList,
+  }), [revalidateList])
 
   const articles = useMemo(() => data ? data.flatMap(page => page.articles) : [], [data])
   const [translateTitlesEnabled, setTranslateTitlesEnabled] = useState(false)
   const [translateTitlesStatus, setTranslateTitlesStatus] = useState<TranslateTitlesStatus>('idle')
   const [translatedTitles, setTranslatedTitles] = useState<Record<number, string>>({})
+  const [expandedHighValueGroups, setExpandedHighValueGroups] = useState<Set<number>>(() => new Set())
   const translateTitlesEnabledRef = useRef(false)
   const translatingTitleIdsRef = useRef<Set<number>>(new Set())
   const translateTitlesInFlightRef = useRef(false)
@@ -462,6 +481,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     setTranslateTitlesEnabled(false)
     setTranslateTitlesStatus('idle')
     setTranslatedTitles({})
+    setExpandedHighValueGroups(new Set())
     translatingTitleIdsRef.current.clear()
     translateTitlesInFlightRef.current = false
   }, [feedId, categoryId, setFocusedItemId])
@@ -523,7 +543,6 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     { value: 'repost', label: t('articleKind.repost') },
     { value: 'quote', label: t('articleKind.quote') },
   ]
-  const effectiveInboxViewFilter: FeedViewType | undefined = isInbox && inboxViewFilter !== 'all' ? inboxViewFilter : undefined
   const sourceFilters = useMemo(() => ({
     ...(feedId ? { feed_id: feedId } : {}),
     ...(categoryId ? { category_id: categoryId } : {}),
@@ -541,7 +560,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
 
     const groupKeys = articles.map((article) => {
       if (inboxGroupMode === 'feed') return `feed:${article.feed_id}`
-      return dayGroupMeta(article, t).key
+      return dayGroupMeta(article, t, locale).key
     })
 
     const unreadCounts = new Map<string, number>()
@@ -557,11 +576,11 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       titleForArticle: (article: ArticleListItem) => (
         inboxGroupMode === 'feed'
           ? article.feed_name
-          : dayGroupMeta(article, t).title
+          : dayGroupMeta(article, t, locale).title
       ),
       unreadCountForIndex: (index: number) => unreadCounts.get(groupKeys[index]) ?? 0,
     }
-  }, [articles, inboxGroupMode, isInbox, t])
+  }, [articles, inboxGroupMode, isInbox, t, locale])
 
   const mutateArticleInPages = useCallback((
     articleId: number,
@@ -592,9 +611,10 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
 
   const refreshListMeta = useCallback(() => {
     void mutate()
+    void mutateHighValue()
     void mutateInboxSummary()
     void globalMutate((key: string) => typeof key === 'string' && key.startsWith('/api/feeds'))
-  }, [globalMutate, mutate, mutateInboxSummary])
+  }, [globalMutate, mutate, mutateHighValue, mutateInboxSummary])
 
   const showUndoToast = useCallback((undoId: number) => {
     toast(t('inbox.undoSeenToast'), {
@@ -726,8 +746,76 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     if (totalNew > 0) toast.success(t('toast.fetchedArticles', { count: String(totalNew), name: t('feeds.inbox') }))
     else toast(t('toast.noNewArticles', { name: t('feeds.inbox') }))
     void mutate()
+    void mutateHighValue()
     void mutateInboxSummary()
-  }, [feedsData?.feeds, mutate, mutateInboxSummary, startFeedFetch, t])
+  }, [feedsData?.feeds, mutate, mutateHighValue, mutateInboxSummary, startFeedFetch, t])
+
+  const toggleHighValueGroup = useCallback((anchorArticleId: number) => {
+    setExpandedHighValueGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(anchorArticleId)) next.delete(anchorArticleId)
+      else next.add(anchorArticleId)
+      return next
+    })
+  }, [])
+
+  const renderArticleNode = useCallback((article: HighValueArticle, options?: { nested?: boolean }) => {
+    const translatedTitle = translateTitlesEnabled ? translatedTitles[article.id] : undefined
+    const articleWithTranslatedTitle = translatedTitle
+      ? { ...article, title: translatedTitle }
+      : article
+    const handleOverlayOpen = articleOpenMode === 'overlay' ? (e: React.MouseEvent<HTMLAnchorElement>) => {
+      if (e.metaKey || e.ctrlKey || e.button === 1) return
+      e.preventDefault()
+      setOverlayUrl(article.url)
+    } : undefined
+    const cardProps = {
+      article: articleWithTranslatedTitle,
+      layout,
+      feedViewType: articleWithTranslatedTitle.feed_view_type,
+      onClick: handleOverlayOpen,
+      ...displayConfig,
+    }
+
+    return (
+      <div className={options?.nested ? 'border-t border-border' : undefined}>
+        {isTouchDevice ? (
+          <SwipeableArticleCard
+            {...cardProps}
+            onSwipeOpen={(swipedArticle) => {
+              if (articleOpenMode === 'overlay') setOverlayUrl(swipedArticle.url)
+              else void navigate(articleUrlToPath(swipedArticle.url))
+            }}
+            onSwipeMarkSeen={handleMarkSeenWithUndo}
+            onSwipeBookmark={handleToggleBookmark}
+          />
+        ) : (
+          <ArticleCard {...cardProps} />
+        )}
+        <div className="px-4 pb-3 md:px-6">
+          <ArticleInlineActions
+            isSeen={articleWithTranslatedTitle.seen_at != null}
+            isBookmarked={articleWithTranslatedTitle.bookmarked_at != null}
+            isLiked={articleWithTranslatedTitle.liked_at != null}
+            isTouchDevice={isTouchDevice}
+            onToggleSeen={() => handleToggleSeen(article)}
+            onToggleBookmark={() => handleToggleBookmark(article)}
+            onToggleLike={() => handleToggleLike(article)}
+            onOpenOverlay={() => setOverlayUrl(article.url)}
+            labels={{
+              markRead: t('inbox.markRead'),
+              markUnread: t('inbox.markUnread'),
+              bookmark: t('article.addBookmark'),
+              unbookmark: t('article.removeBookmark'),
+              like: t('article.addLike'),
+              unlike: t('article.removeLike'),
+              openOverlay: t('inbox.openOverlay'),
+            }}
+          />
+        </div>
+      </div>
+    )
+  }, [articleOpenMode, displayConfig, handleMarkSeenWithUndo, handleToggleBookmark, handleToggleLike, handleToggleSeen, isTouchDevice, layout, navigate, t, translateTitlesEnabled, translatedTitles])
 
   const inboxChatTrigger = (
     <ListChatFab
@@ -822,6 +910,15 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         </div>
       )}
 
+      {isInbox && inboxSort === 'inbox_score' && highValueData && (
+        <HighValueSection
+          items={highValueData.items}
+          expandedGroupIds={expandedHighValueGroups}
+          onToggleGroup={toggleHighValueGroup}
+          renderArticle={renderArticleNode}
+        />
+      )}
+
       <div className="flex flex-wrap gap-2 px-4 md:px-6 py-2">
         <ActionChip
           active={translateTitlesStatus === 'active'}
@@ -879,6 +976,14 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       </div>
 
       {isLoading && <ArticleListSkeleton layout={layout} showThumbnails={displayConfig.showThumbnails} />}
+
+      {isInbox && inboxSort === 'inbox_score' && !highValueData && !isLoading && (
+        <section className="px-4 py-4 md:px-6" data-testid="high-value-section-loading">
+          <div className="rounded-3xl border border-border bg-bg-card/80 p-4 md:p-5">
+            <ArticleListSkeleton layout={layout} count={2} showThumbnails={displayConfig.showThumbnails} />
+          </div>
+        </section>
+      )}
 
       {error && (
         <div className="text-center py-12">

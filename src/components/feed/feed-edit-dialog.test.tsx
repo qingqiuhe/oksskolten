@@ -8,9 +8,11 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof FeedEditDia
   const props = {
     name: 'Example Feed',
     iconUrl: 'https://cdn.example.com/avatar.png',
+    priorityLevel: 3 as const,
     feedUrl: 'https://example.com',
     onNameChange: vi.fn(),
     onIconUrlChange: vi.fn(),
+    onPriorityLevelChange: vi.fn(),
     onSubmit: vi.fn(),
     onClose: vi.fn(),
     ...overrides,

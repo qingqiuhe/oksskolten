@@ -180,6 +180,21 @@ describe('createFeed with all options', () => {
   })
 })
 
+describe('getFeeds articles_per_week', () => {
+  it('derives articles_per_week from active articles instead of a stored feed column', () => {
+    const feed = seedFeed()
+    const recent = (daysAgo: number) => new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString()
+
+    for (let i = 0; i < 8; i++) {
+      seedArticle(feed.id, { published_at: recent(i + 1) })
+    }
+    seedArticle(feed.id, { published_at: recent(40) })
+
+    const feeds = getFeeds()
+    expect(feeds[0].articles_per_week).toBe(2)
+  })
+})
+
 describe('updateFeedError exponential backoff', () => {
   it('records error and increments error_count', () => {
     const feed = seedFeed()

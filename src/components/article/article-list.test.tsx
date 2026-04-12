@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import userEvent from '@testing-library/user-event'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { LocaleContext } from '../../lib/i18n'
-import type { ArticleListItem } from '../../../shared/types'
+import type { ArticleListItem, HighValueResponse } from '../../../shared/types'
 import { toast } from 'sonner'
 
 // --- Mocks ---
@@ -21,13 +22,26 @@ let swrInfiniteReturn: any = {
   isValidating: false,
   mutate: vi.fn(),
 }
+let swrInfiniteKeys: string[] = []
 
 // Control useSWR return value for /api/feeds
 let swrFeedsData: any = undefined
 let swrInboxSummaryData: any = undefined
+let swrHighValueData: any = undefined
 
 vi.mock('swr/infinite', () => ({
-  default: () => swrInfiniteReturn,
+  default: (getKey: (pageIndex: number, previousPageData: any) => string | null) => {
+    swrInfiniteKeys = []
+    const pageCount = swrInfiniteReturn.data?.length ?? 1
+    let previousPageData = null
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+      const key = getKey(pageIndex, previousPageData)
+      if (key == null) break
+      swrInfiniteKeys.push(key)
+      previousPageData = swrInfiniteReturn.data?.[pageIndex] ?? null
+    }
+    return swrInfiniteReturn
+  },
 }))
 
 vi.mock('swr', async () => {
@@ -37,7 +51,8 @@ vi.mock('swr', async () => {
     default: (key: string) => {
       if (key === '/api/feeds') return { data: swrFeedsData }
       if (key === '/api/inbox/summary') return { data: swrInboxSummaryData, mutate: vi.fn() }
-      return { data: undefined }
+      if (key && key.startsWith('/api/inbox/high-value')) return { data: swrHighValueData, mutate: vi.fn() }
+      return { data: undefined, mutate: vi.fn() }
     },
     useSWRConfig: () => ({ mutate: vi.fn() }),
   }
@@ -178,6 +193,47 @@ function makeArticle(overrides: Partial<ArticleListItem> = {}): ArticleListItem 
   }
 }
 
+function makeHighValueResponse(): HighValueResponse {
+  return {
+    items: [
+      {
+        kind: 'article',
+        display_article: {
+          ...makeArticle({
+            id: 101,
+            title: 'High-value article',
+          }),
+          inbox_reason_codes: ['feed_priority_high'],
+        },
+      },
+      {
+        kind: 'group',
+        anchor_article_id: 202,
+        display_article: {
+          ...makeArticle({
+            id: 202,
+            title: 'Grouped article',
+          }),
+          inbox_reason_codes: ['topic_collapsed'],
+        },
+        similar_count: 2,
+        source_names: ['Feed A', 'Feed B'],
+        members: [
+          {
+            ...makeArticle({ id: 202, title: 'Grouped article' }),
+            inbox_reason_codes: ['topic_collapsed'],
+          },
+          {
+            ...makeArticle({ id: 203, title: 'Grouped member' }),
+            inbox_reason_codes: ['recent_story'],
+          },
+        ],
+      },
+    ],
+    represented_article_ids: [101, 202, 203],
+  }
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
   let reject!: (reason?: unknown) => void
@@ -251,6 +307,8 @@ describe('ArticleList', () => {
     mockApiPost.mockResolvedValue({ translated_titles: {} })
     swrFeedsData = undefined
     swrInboxSummaryData = undefined
+    swrHighValueData = undefined
+    swrInfiniteKeys = []
     mockSettings.autoMarkRead = 'off' as any
     mockSettings.translateTargetLang = null
     // Stub IntersectionObserver for tests that enable autoMarkRead
@@ -330,20 +388,18 @@ describe('ArticleList', () => {
     expect(screen.getByText('Second Article')).toBeTruthy()
   })
 
-  it('renders inbox header and chat trigger on inbox', () => {
+  it('renders high-value section, excludes represented ids, and keeps the lower inbox query on the default timeline', () => {
     swrInboxSummaryData = {
-      unread_total: 2,
-      new_today: 1,
+      unread_total: 4,
+      new_today: 2,
       oldest_unread_at: '2026-01-01T00:00:00Z',
-      source_feed_count: 1,
+      source_feed_count: 2,
     }
+    swrHighValueData = makeHighValueResponse()
     swrInfiniteReturn = {
       data: [{
-        articles: [
-          makeArticle({ id: 1, title: 'First Article' }),
-          makeArticle({ id: 2, title: 'Second Article' }),
-        ],
-        total: 2,
+        articles: [makeArticle({ id: 301, title: 'Remaining inbox article' })],
+        total: 1,
         has_more: false,
       }],
       error: undefined,
@@ -353,21 +409,76 @@ describe('ArticleList', () => {
       isValidating: false,
       mutate: vi.fn(),
     }
+    window.localStorage.setItem('oksskolten.inbox.sort', 'inbox_score')
 
     renderArticleList()
 
-    expect(screen.getByText('Unread')).toBeTruthy()
-    expect(screen.getByText('New today')).toBeTruthy()
-    expect(screen.getByText('Latest')).toBeTruthy()
-    expect(screen.getByText('Backlog')).toBeTruthy()
-    expect(screen.getByText('High value')).toBeTruthy()
-    expect(screen.getByText('No grouping')).toBeTruthy()
-    expect(screen.getByText('By day')).toBeTruthy()
-    expect(screen.getByText('By feed')).toBeTruthy()
-    expect(screen.getByText('Chat')).toBeTruthy()
+    expect(screen.getByTestId('high-value-section')).toBeTruthy()
+    expect(screen.getByText('High-value picks')).toBeTruthy()
+    expect(screen.getByText('High-value article')).toBeTruthy()
+    expect(screen.getByText('Grouped article')).toBeTruthy()
+    expect(screen.getByText('Remaining inbox article')).toBeTruthy()
+    expect(swrInfiniteKeys[0]).toContain('exclude_ids=101%2C202%2C203')
+    expect(swrInfiniteKeys[0]).not.toContain('sort=inbox_score')
   })
 
-  it('migrates stored inbox sort=score to inbox_score and persists it', () => {
+  it('expands grouped high-value items on demand', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    swrInboxSummaryData = {
+      unread_total: 3,
+      new_today: 1,
+      oldest_unread_at: '2026-01-01T00:00:00Z',
+      source_feed_count: 2,
+    }
+    swrHighValueData = makeHighValueResponse()
+    swrInfiniteReturn = {
+      data: [{
+        articles: [makeArticle({ id: 301, title: 'Remaining inbox article' })],
+        total: 1,
+        has_more: false,
+      }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+    window.localStorage.setItem('oksskolten.inbox.sort', 'inbox_score')
+
+    renderArticleList()
+
+    expect(screen.queryByText('Grouped member')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Expand' }))
+    expect(screen.getByText('Grouped member')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Collapse' }))
+    expect(screen.queryByText('Grouped member')).toBeNull()
+  })
+
+  it('shows a dedicated high-value loading block before inbox articles finish loading', () => {
+    swrInboxSummaryData = {
+      unread_total: 1,
+      new_today: 1,
+      oldest_unread_at: '2026-01-01T00:00:00Z',
+      source_feed_count: 1,
+    }
+    swrInfiniteReturn = {
+      data: [{ articles: [], total: 0, has_more: false }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+    window.localStorage.setItem('oksskolten.inbox.sort', 'inbox_score')
+
+    renderArticleList()
+
+    expect(screen.getByTestId('high-value-section-loading')).toBeTruthy()
+  })
+
+  it('migrates legacy score sort to inbox_score and activates high value tab', () => {
     window.localStorage.setItem('oksskolten.inbox.sort', 'score')
     swrInboxSummaryData = {
       unread_total: 1,

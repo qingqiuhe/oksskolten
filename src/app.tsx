@@ -30,6 +30,7 @@ import { Toaster, toast } from 'sonner'
 import { FetchProgressProvider, useFetchProgressContext } from './contexts/fetch-progress-context'
 import { TooltipProvider } from './components/ui/tooltip'
 import { useFeedActions } from './hooks/use-feed-actions'
+import { getFeedPriorityLevel } from './lib/feed-priority'
 import type { Category, FeedWithCounts } from '../shared/types'
 
 export interface AppLayoutContext {
@@ -190,6 +191,8 @@ export function ArticleListPage() {
     handleDeleteFeed,
     handleMoveToCategory,
     handleUpdateViewType,
+    handleUpdatePriority,
+    handleLowerPriority,
     handleFetchFeed,
     handleReDetectFeed,
     handleConfirm,
@@ -206,6 +209,25 @@ export function ArticleListPage() {
     },
   })
 
+  const lowerHeaderFeedPriority = useCallback(async (feed: FeedWithCounts) => {
+    const nextLevel = await handleLowerPriority(feed)
+    if (nextLevel == null) return
+    toast.success(t('feeds.priority.lowered', {
+      name: feed.name,
+      priority: t(
+        nextLevel === 1
+          ? 'feeds.priority.ignore'
+          : nextLevel === 2
+            ? 'feeds.priority.low'
+            : nextLevel === 3
+              ? 'feeds.priority.medium'
+              : nextLevel === 4
+                ? 'feeds.priority.high'
+                : 'feeds.priority.mustRead',
+      ),
+    }))
+  }, [handleLowerPriority, t])
+
   const showFeedMenu = !!feedId && !!currentFeed
   const headerAction = showFeedMenu && currentFeed ? (
     <FeedDropdownMenu
@@ -215,6 +237,9 @@ export function ArticleListPage() {
       onMarkAllRead={() => handleMarkAllReadFeed(currentFeed)}
       onDelete={() => handleDeleteFeed(currentFeed)}
       onMoveToCategory={(categoryId) => handleMoveToCategory(currentFeed, categoryId)}
+      currentPriorityLevel={getFeedPriorityLevel(currentFeed)}
+      onPriorityChange={(priorityLevel) => void handleUpdatePriority(currentFeed, priorityLevel)}
+      onLowerPriority={() => { void lowerHeaderFeedPriority(currentFeed) }}
       currentViewType={currentFeed.view_type}
       onViewTypeChange={(viewType) => handleUpdateViewType(currentFeed, viewType)}
       onFetch={() => handleFetchFeed(currentFeed)}
@@ -280,9 +305,11 @@ export function ArticleListPage() {
         <FeedEditDialog
           name={renaming.name}
           iconUrl={renaming.iconUrl}
+          priorityLevel={renaming.priorityLevel}
           feedUrl={renaming.feed.url}
           onNameChange={(name) => setRenaming({ ...renaming, name })}
           onIconUrlChange={(iconUrl) => setRenaming({ ...renaming, iconUrl })}
+          onPriorityLevelChange={(priorityLevel) => setRenaming({ ...renaming, priorityLevel })}
           onSubmit={handleRenameSubmit}
           onClose={() => setRenaming(null)}
         />
