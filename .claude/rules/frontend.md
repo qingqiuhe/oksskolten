@@ -28,3 +28,9 @@ z-100  image lightbox
 - When adding a new floating element, pick from this scale — do not invent arbitrary values
 - To fix stacking issues between portaled elements (e.g. Select inside Dialog), adjust z-index in the base UI component (`src/components/ui/`), not at each call site
 - Do NOT portal floating elements into dialog containers to fix stacking — keep all portals targeting `<body>` and control layering via z-index. Portaling into dialogs causes overflow clipping issues and requires ref plumbing that silently breaks when forgotten
+
+# Frontend: Dialog Height & Scrolling
+
+- Any dialog/modal that can contain forms, editors, previews, or dynamic content must be viewport-bounded and internally scrollable
+- Default dialog containers in `src/components/ui/` must include a `max-height` tied to the viewport plus `overflow-y-auto`; do not rely on page scrolling to reveal clipped modal content
+- When a dialog starts growing beyond a simple confirmation size, fix height behavior in the shared dialog primitive first instead of patching individual call sites ad hoc
