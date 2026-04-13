@@ -158,6 +158,7 @@ interface NewArticle {
   requires_js_challenge?: boolean
   /** Excerpt from listing page (CSS Bridge content_selector), used as fullText fallback */
   excerpt?: string
+  prefer_source_excerpt?: boolean
   inline_content_html?: string | null
   inline_content_text?: string | null
   og_image?: string | null
@@ -185,7 +186,7 @@ async function processArticle(task: ArticleTask): Promise<boolean> {
 
   const effectiveLang = content.lang || (task.kind === 'retry' ? task.article.lang : null)
   const effectiveExcerpt = task.kind === 'new'
-    ? task.excerpt ?? content.excerpt
+    ? (task.prefer_source_excerpt ? (task.excerpt ?? content.excerpt) : content.excerpt)
     : content.excerpt
   const notificationPreview = buildNotificationPreview({
     articleUrl,
@@ -271,6 +272,7 @@ function mapFeedItemsToNewArticleTasks(feed: Feed, items: FeedFetchItem[], exist
       published_at: item.published_at,
       requires_js_challenge: !!feed.requires_js_challenge,
       excerpt: item.excerpt ?? undefined,
+      prefer_source_excerpt: feed.ingest_kind === 'json_api',
       inline_content_html: item.content_html ?? undefined,
       inline_content_text: item.content_text ?? undefined,
       og_image: item.og_image ?? undefined,
