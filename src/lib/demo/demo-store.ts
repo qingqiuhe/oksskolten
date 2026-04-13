@@ -69,6 +69,8 @@ interface SeedFeed {
   icon_url?: string | null
   rss_url: string | null
   rss_bridge_url: string | null
+  ingest_kind?: 'rss' | 'json_api'
+  source_config_json?: string | null
   view_type: FeedViewType | null
   category_id: number | null
   category_name: string | null
@@ -171,6 +173,8 @@ function createFeed(overrides: Partial<SeedFeed> & Pick<SeedFeed, 'name' | 'url'
     icon_url: null,
     rss_url: overrides.url,
     rss_bridge_url: null,
+    ingest_kind: 'rss',
+    source_config_json: null,
     view_type: null,
     category_id: null,
     category_name: null,
@@ -338,13 +342,17 @@ export const demoStore = {
   },
 
   // --- Write ---
-  addFeed(body: { name: string; url: string; icon_url?: string | null; category_id?: number; category_name?: string }) {
+  addFeed(body: { name: string; url: string; icon_url?: string | null; category_id?: number; category_name?: string; ingest_kind?: 'rss' | 'json_api'; source_config_json?: string | null; view_type?: FeedViewType | null }) {
     const feed = createFeed({
       name: body.name || body.url,
       url: body.url,
       icon_url: body.icon_url ?? null,
+      ingest_kind: body.ingest_kind ?? 'rss',
+      source_config_json: body.source_config_json ?? null,
+      rss_url: body.ingest_kind === 'json_api' ? null : body.url,
       category_id: body.category_id ?? null,
       category_name: body.category_name ?? null,
+      view_type: body.view_type ?? null,
     })
     feeds.push(feed)
     // Generate a couple of sample articles for the new feed
@@ -410,6 +418,24 @@ export const demoStore = {
     if (!feed) return null
     Object.assign(feed, patch)
     return { feed: toFeedWithCounts(feed) }
+  },
+
+  getJsonApiConfig(id: number) {
+    const feed = feeds.find(f => f.id === id)
+    if (!feed || feed.ingest_kind !== 'json_api') return null
+    try {
+      const parsed = JSON.parse(feed.source_config_json ?? '{}') as { transform_script?: string }
+      return { transform_script: parsed.transform_script ?? '' }
+    } catch {
+      return { transform_script: '' }
+    }
+  },
+
+  updateJsonApiConfig(id: number, transformScript: string) {
+    const feed = feeds.find(f => f.id === id)
+    if (!feed) return null
+    feed.source_config_json = JSON.stringify({ version: 1, transform_script: transformScript })
+    return { transform_script: transformScript }
   },
 
   deleteFeed(id: number) {

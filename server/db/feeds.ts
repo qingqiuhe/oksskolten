@@ -100,11 +100,13 @@ export function createFeed(data: {
   priority_level?: Feed['priority_level']
   requires_js_challenge?: number
   type?: 'rss' | 'clip'
+  ingest_kind?: NonNullable<Feed['ingest_kind']>
+  source_config_json?: string | null
 }, userId?: number | null): Feed {
   const scopedUserId = resolveUserId(userId)
   const info = runNamed(`
-    INSERT INTO feeds (user_id, name, url, icon_url, rss_url, rss_bridge_url, view_type, category_id, priority_level, requires_js_challenge, type)
-    VALUES (@user_id, @name, @url, @icon_url, @rss_url, @rss_bridge_url, @view_type, @category_id, @priority_level, @requires_js_challenge, @type)
+    INSERT INTO feeds (user_id, name, url, icon_url, rss_url, rss_bridge_url, view_type, category_id, priority_level, requires_js_challenge, type, ingest_kind, source_config_json)
+    VALUES (@user_id, @name, @url, @icon_url, @rss_url, @rss_bridge_url, @view_type, @category_id, @priority_level, @requires_js_challenge, @type, @ingest_kind, @source_config_json)
   `, {
     user_id: scopedUserId,
     name: data.name,
@@ -117,6 +119,8 @@ export function createFeed(data: {
     priority_level: data.priority_level ?? 3,
     requires_js_challenge: data.requires_js_challenge ?? 0,
     type: data.type ?? 'rss',
+    ingest_kind: data.ingest_kind ?? 'rss',
+    source_config_json: data.source_config_json ?? null,
   })
   return getDb().prepare('SELECT * FROM feeds WHERE id = ?').get(info.lastInsertRowid) as Feed
 }
@@ -213,6 +217,24 @@ export function updateFeed(
   }
 
   return updatedFeed
+}
+
+export function getFeedSourceConfig(feedId: number, userId?: number | null): string | null | undefined {
+  const scopedUserId = resolveUserId(userId)
+  if (scopedUserId == null) {
+    const row = getDb().prepare('SELECT source_config_json FROM feeds WHERE id = ?').get(feedId) as { source_config_json: string | null } | undefined
+    return row?.source_config_json
+  }
+  const row = getDb().prepare('SELECT source_config_json FROM feeds WHERE id = ? AND user_id = ?').get(feedId, scopedUserId) as { source_config_json: string | null } | undefined
+  return row?.source_config_json
+}
+
+export function updateFeedSourceConfig(feedId: number, sourceConfigJson: string | null, userId?: number | null): boolean {
+  const scopedUserId = resolveUserId(userId)
+  const result = scopedUserId == null
+    ? getDb().prepare('UPDATE feeds SET source_config_json = ? WHERE id = ?').run(sourceConfigJson, feedId)
+    : getDb().prepare('UPDATE feeds SET source_config_json = ? WHERE id = ? AND user_id = ?').run(sourceConfigJson, feedId, scopedUserId)
+  return result.changes > 0
 }
 
 export function bulkMoveFeedsToCategory(feedIds: number[], categoryId: number | null, userId?: number | null): void {

@@ -57,6 +57,23 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     })
   }
 
+  if (method === 'POST' && path === '/api/feeds/json-api') {
+    const body = JSON.parse((init?.body as string) || '{}')
+    const result = demoStore.addFeed({
+      name: body.name || body.url,
+      url: body.url,
+      icon_url: body.icon_url ?? null,
+      category_id: body.category_id ?? null,
+      ingest_kind: 'json_api',
+      source_config_json: JSON.stringify({ version: 1, transform_script: body.transform_script }),
+      view_type: body.view_type ?? null,
+    })
+    return new Response(JSON.stringify(result), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
   return originalFetch(input, init)
 }
 
@@ -125,7 +142,14 @@ export async function demoFetcher(url: string): Promise<unknown> {
   }
 
   if (path === '/api/me') {
-    return { email: 'demo@example.com' }
+    return { id: 1, email: 'demo@example.com', role: 'owner' }
+  }
+
+  const jsonApiConfigId = extractId(path, /^\/api\/feeds\/(\d+)\/json-api-config$/)
+  if (jsonApiConfigId != null) {
+    const config = demoStore.getJsonApiConfig(jsonApiConfigId)
+    if (!config) throw new Error('Not found')
+    return config
   }
 
   if (path === '/api/settings/profile') {
@@ -204,6 +228,37 @@ export async function demoApiPost(url: string, body?: unknown): Promise<unknown>
   const { path } = parsePath(url)
 
   // POST /api/feeds is handled by the fetch interceptor (SSE response)
+
+  if (path === '/api/feeds/json-api/preview') {
+    const request = asBody<{ url: string; name?: string; icon_url?: string | null; view_type?: 'article' | 'social' | null }>(body)
+    return {
+      resolved_feed: {
+        name: request.name || 'Aligned News',
+        icon_url: request.icon_url ?? 'https://alignednews.com/icon.png',
+        view_type: request.view_type ?? 'article',
+      },
+      sample_items: [
+        {
+          url: 'https://alignednews.com/story/demo-1',
+          title: 'Demo story one',
+          published_at: new Date().toISOString(),
+          excerpt: 'This is a preview item rendered in demo mode.',
+        },
+        {
+          url: 'https://alignednews.com/story/demo-2',
+          title: 'Demo story two',
+          published_at: new Date(Date.now() - 3600_000).toISOString(),
+          excerpt: 'Transform scripts can map JSON API responses into article cards.',
+        },
+      ],
+      warnings: [],
+      stats: {
+        received_count: 2,
+        accepted_count: 2,
+        dropped_count: 0,
+      },
+    }
+  }
 
   // /api/articles/from-url (web clip)
   if (path === '/api/articles/from-url') {
@@ -309,6 +364,19 @@ export async function demoApiPatch(url: string, body: unknown): Promise<unknown>
   // /api/settings/preferences
   if (path === '/api/settings/preferences') {
     return {} // no-op, settings are localStorage-based
+  }
+
+  return {}
+}
+
+// --- PUT ---
+export async function demoApiPut(url: string, body: unknown): Promise<unknown> {
+  const { path } = parsePath(url)
+
+  const jsonApiConfigId = extractId(path, /^\/api\/feeds\/(\d+)\/json-api-config$/)
+  if (jsonApiConfigId != null) {
+    const { transform_script } = asBody<{ transform_script: string }>(body)
+    return demoStore.updateJsonApiConfig(jsonApiConfigId, transform_script)
   }
 
   return {}

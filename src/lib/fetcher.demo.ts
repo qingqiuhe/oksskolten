@@ -1,4 +1,4 @@
-import { demoFetcher, demoApiPost, demoApiPatch, demoApiDelete, demoStreamPost, demoStreamPostChat } from './demo/mock-api'
+import { demoFetcher, demoApiPost, demoApiPatch, demoApiPut, demoApiDelete, demoStreamPost, demoStreamPostChat } from './demo/mock-api'
 import { demoStore } from './demo/demo-store'
 
 export { ApiError, authHeaders } from './api-base'
@@ -7,6 +7,7 @@ export type { ChatSSEEvent } from './api-base'
 export const fetcher = demoFetcher
 
 export const apiPost = demoApiPost
+export const apiPut = demoApiPut as (url: string, body: unknown) => Promise<unknown>
 export const apiPatch = demoApiPatch as (url: string, body: unknown) => Promise<unknown>
 export const apiDelete = demoApiDelete
 

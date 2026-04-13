@@ -13,6 +13,7 @@ export interface Category {
 }
 
 export type FeedPriorityLevel = 1 | 2 | 3 | 4 | 5
+export type FeedIngestKind = 'rss' | 'json_api'
 
 export interface Feed {
   id: number
@@ -29,6 +30,7 @@ export interface Feed {
   disabled: number
   requires_js_challenge: number
   type: 'rss' | 'clip'
+  ingest_kind?: FeedIngestKind
   etag: string | null
   last_modified: string | null
   last_content_hash: string | null

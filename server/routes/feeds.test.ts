@@ -8,11 +8,12 @@ import type { FastifyInstance } from 'fastify'
 // Mocks
 // ---------------------------------------------------------------------------
 
-const { mockDiscoverRssUrl, mockFetchSingleFeed, mockQueryRssBridge, mockInferCssSelectorBridge } = vi.hoisted(() => ({
+const { mockDiscoverRssUrl, mockFetchSingleFeed, mockQueryRssBridge, mockInferCssSelectorBridge, mockFetchAndTransformJsonApiFeed } = vi.hoisted(() => ({
   mockDiscoverRssUrl: vi.fn(),
   mockFetchSingleFeed: vi.fn(),
   mockQueryRssBridge: vi.fn(),
   mockInferCssSelectorBridge: vi.fn(),
+  mockFetchAndTransformJsonApiFeed: vi.fn(),
 }))
 
 vi.mock('../fetcher.js', async () => {
@@ -34,6 +35,14 @@ vi.mock('../rss-bridge.js', () => ({
   queryRssBridge: (...args: unknown[]) => mockQueryRssBridge(...args),
   inferCssSelectorBridge: (...args: unknown[]) => mockInferCssSelectorBridge(...args),
 }))
+
+vi.mock('../fetcher/json-api.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../fetcher/json-api.js')>()
+  return {
+    ...actual,
+    fetchAndTransformJsonApiFeed: (...args: unknown[]) => mockFetchAndTransformJsonApiFeed(...args),
+  }
+})
 
 vi.mock('../anthropic.js', () => ({
   anthropic: { messages: { stream: vi.fn(), create: vi.fn() } },
@@ -64,6 +73,27 @@ beforeEach(async () => {
   mockFetchSingleFeed.mockReset().mockResolvedValue(undefined)
   mockQueryRssBridge.mockReset().mockResolvedValue(null)
   mockInferCssSelectorBridge.mockReset().mockResolvedValue(null)
+  mockFetchAndTransformJsonApiFeed.mockReset().mockResolvedValue({
+    meta: { title: 'Aligned News', icon_url: 'https://alignednews.com/icon.png', view_type: null },
+    items: [
+      {
+        url: 'https://x.com/example/status/1',
+        title: 'First item',
+        published_at: '2026-04-13T00:00:00.000Z',
+        excerpt: 'Summary',
+        content_html: null,
+        content_text: 'Body text',
+        og_image: null,
+      },
+    ],
+    warnings: [],
+    receivedCount: 1,
+    notModified: false,
+    etag: '"etag"',
+    lastModified: 'Mon, 13 Apr 2026 00:00:00 GMT',
+    contentHash: 'hash',
+    httpCacheSeconds: 900,
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -332,6 +362,138 @@ describe('POST /api/feeds — RSS discovery pipeline', () => {
 
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(mockFetchSingleFeed).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// JSON API feed routes
+// ---------------------------------------------------------------------------
+
+describe('JSON API feed routes', () => {
+  it('previews a JSON API feed', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds/json-api/preview',
+      headers: json,
+      payload: {
+        url: 'https://alignednews.com/api/stories',
+        transform_script: '({ response }) => response',
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(mockFetchAndTransformJsonApiFeed).toHaveBeenCalledWith({
+      endpointUrl: 'https://alignednews.com/api/stories',
+      transformScript: '({ response }) => response',
+      skipCache: true,
+    })
+    expect(res.json().resolved_feed).toEqual({
+      name: 'Aligned News',
+      icon_url: 'https://alignednews.com/icon.png',
+      view_type: 'social',
+    })
+    expect(res.json().sample_items).toHaveLength(1)
+  })
+
+  it('creates a JSON API feed', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds/json-api',
+      headers: json,
+      payload: {
+        url: 'https://alignednews.com/api/stories',
+        transform_script: '({ response }) => response',
+      },
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(res.json().feed.url).toBe('https://alignednews.com/api/stories')
+    expect(res.json().feed.ingest_kind).toBe('json_api')
+    expect(res.json().feed.source_config_json).toBeUndefined()
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(mockFetchSingleFeed).toHaveBeenCalled()
+  })
+
+  it('returns 409 when JSON API feed URL already exists', async () => {
+    seedFeed({ url: 'https://alignednews.com/api/stories', ingest_kind: 'json_api' })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds/json-api',
+      headers: json,
+      payload: {
+        url: 'https://alignednews.com/api/stories',
+        transform_script: '({ response }) => response',
+      },
+    })
+
+    expect(res.statusCode).toBe(409)
+  })
+
+  it('returns transform_script for JSON API config', async () => {
+    const feed = seedFeed({
+      url: 'https://alignednews.com/api/stories',
+      ingest_kind: 'json_api',
+      source_config_json: JSON.stringify({
+        version: 1,
+        transform_script: '({ response }) => response',
+      }),
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/feeds/${feed.id}/json-api-config`,
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ transform_script: '({ response }) => response' })
+  })
+
+  it('updates JSON API config after validation', async () => {
+    const feed = seedFeed({
+      url: 'https://alignednews.com/api/stories',
+      ingest_kind: 'json_api',
+      source_config_json: JSON.stringify({
+        version: 1,
+        transform_script: '({ response }) => response',
+      }),
+    })
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/feeds/${feed.id}/json-api-config`,
+      headers: json,
+      payload: {
+        transform_script: '({ response }) => response.slice(0, 5)',
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ transform_script: '({ response }) => response.slice(0, 5)' })
+    expect(mockFetchAndTransformJsonApiFeed).toHaveBeenCalledWith({
+      endpointUrl: 'https://alignednews.com/api/stories',
+      transformScript: '({ response }) => response.slice(0, 5)',
+      skipCache: true,
+    })
+  })
+
+  it('rejects re-detect for JSON API feeds', async () => {
+    const feed = seedFeed({
+      url: 'https://alignednews.com/api/stories',
+      ingest_kind: 'json_api',
+      source_config_json: JSON.stringify({
+        version: 1,
+        transform_script: '({ response }) => response',
+      }),
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/feeds/${feed.id}/re-detect`,
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/JSON API/i)
   })
 })
 

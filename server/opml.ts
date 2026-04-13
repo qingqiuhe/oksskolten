@@ -67,6 +67,7 @@ export function generateOpml(feeds: Feed[], categories: Category[]): string {
   const grouped = new Map<string | null, Feed[]>()
   for (const feed of feeds) {
     if (feed.type === 'clip') continue
+    if (feed.ingest_kind === 'json_api') continue
     const catName = feed.category_id ? (categoryMap.get(feed.category_id) ?? null) : null
     if (!grouped.has(catName)) grouped.set(catName, [])
     grouped.get(catName)!.push(feed)

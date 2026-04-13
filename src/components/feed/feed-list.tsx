@@ -1,7 +1,7 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import useSWR from 'swr'
-import { fetcher } from '../../lib/fetcher'
+import { apiPatch, apiPut, fetcher } from '../../lib/fetcher'
 import { getFeedPriorityLevel } from '../../lib/feed-priority'
 import { useI18n } from '../../lib/i18n'
 import { MD_BREAKPOINT } from '../../lib/breakpoints'
@@ -28,6 +28,7 @@ import { useAppLayout } from '../../app'
 import { extractDomain } from '../../lib/url'
 import type { FeedWithCounts, Category } from '../../../shared/types'
 import { FeedNotificationDialog } from './feed-notification-dialog'
+import { FeedEditDialog } from './feed-edit-dialog'
 
 function isFeedInactive(feed: FeedWithCounts): boolean {
   if (feed.article_count === 0) return false
@@ -81,6 +82,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
   const selectedFeedId = feedId ? Number(feedId) : null
   const selectedCategoryId = categoryId ? Number(categoryId) : null
   const { progress, startFeedFetch, subscribeFeedFetch } = useFetchProgressContext()
+  const { data: me } = useSWR<{ id: number; role?: 'owner' | 'admin' | 'member' }>('/api/me', fetcher)
   const { data: feedsData, mutate: mutateFeeds } = useSWR<{ feeds: FeedWithCounts[]; bookmark_count: number; like_count: number; clip_feed_id: number | null }>('/api/feeds', fetcher)
   const { data: categoriesData, mutate: mutateCategories } = useSWR<{ categories: Category[] }>('/api/categories', fetcher)
   const feeds = useMemo(() => feedsData?.feeds ?? [], [feedsData])
@@ -224,6 +226,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
   const showFeedActivity = settings.showFeedActivity
 
   const totalUnread = feeds.reduce((sum, f) => sum + (f.disabled || f.type === 'clip' ? 0 : f.unread_count), 0)
+  const canUseJsonApi = me?.role === 'owner' || me?.role === 'admin'
 
   function showPriorityChangedToast(feed: FeedWithCounts, priorityLevel: number) {
     toast.success(t('feeds.priority.lowered', {
@@ -242,10 +245,10 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
     }))
   }
 
-  const lowerPriorityWithToast = useCallback(async (feed: FeedWithCounts) => {
+  async function lowerPriorityWithToast(feed: FeedWithCounts) {
     const nextLevel = await handleLowerPriority(feed)
     if (nextLevel != null) showPriorityChangedToast(feed, nextLevel)
-  }, [handleLowerPriority, t])
+  }
 
   function selectFeed(id: number | null) {
     if (id) {
@@ -282,33 +285,12 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
   }
 
   function renderFeedItem(feed: FeedWithCounts, indent = false) {
-    const isRenaming = renaming?.type === 'feed' && renaming.feed.id === feed.id
     const sourceUrl = getFeedSourceUrl(feed)
-    if (isRenaming && renaming?.type === 'feed') {
-      return (
-        <form
-          key={feed.id}
-          className={indent ? 'pl-6 px-2 py-1.5' : 'px-2 py-1.5'}
-          onSubmit={e => { e.preventDefault(); void handleRenameSubmit() }}
-        >
-          <Input
-            ref={renameInputRef}
-            type="text"
-            value={renaming.name}
-            onChange={e => setRenaming({ ...renaming, name: e.target.value })}
-            onKeyDown={e => { if (e.key === 'Escape') setRenaming(null) }}
-            onBlur={() => void handleRenameSubmit()}
-            className="px-2 py-1 rounded"
-          />
-        </form>
-      )
-    }
-
     const useMultiMenu = isMultiSelected(feed.id) && multiSelectedCount > 1
 
     const button = (
       <button
-        draggable={!isRenaming}
+        draggable
         onDragStart={e => handleDragStart(e, feed, multiSelectedIds)}
         onDragEnd={handleDragEnd}
         onClick={e => handleFeedClick(e, feed)}
@@ -410,7 +392,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
         currentViewType={feed.view_type}
         onViewTypeChange={(viewType) => handleUpdateViewType(feed, viewType)}
         onFetch={() => handleFetchFeed(feed)}
-        onReDetect={() => handleReDetectFeed(feed)}
+        onReDetect={feed.ingest_kind === 'json_api' ? undefined : (() => handleReDetectFeed(feed))}
         onConfigureNotifications={() => setNotificationFeed(feed)}
       >
         {button}
@@ -589,6 +571,35 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
           onFetchStarted={(feedId) => void subscribeFeedFetch(feedId)}
           onArticleCreated={() => { void mutateFeeds(); onArticleMoved?.() }}
           categories={categories}
+          canUseJsonApi={canUseJsonApi}
+        />
+      )}
+
+      {renaming?.type === 'feed' && (
+        <FeedEditDialog
+          feed={renaming.feed}
+          name={renaming.name}
+          iconUrl={renaming.iconUrl}
+          priorityLevel={renaming.priorityLevel}
+          onNameChange={(value) => setRenaming({ ...renaming, name: value })}
+          onIconUrlChange={(value) => setRenaming({ ...renaming, iconUrl: value })}
+          onPriorityLevelChange={(value) => setRenaming({ ...renaming, priorityLevel: value })}
+          onSubmit={async () => {
+            await apiPatch(`/api/feeds/${renaming.feed.id}`, {
+              name: renaming.name.trim(),
+              icon_url: renaming.iconUrl.trim() ? renaming.iconUrl.trim() : null,
+              priority_level: renaming.priorityLevel,
+            })
+            void mutateFeeds()
+          }}
+          onUpdateJsonApiConfig={async (transformScript) => {
+            await apiPut(`/api/feeds/${renaming.feed.id}/json-api-config`, { transform_script: transformScript })
+          }}
+          onFetchUpdatedJsonApiFeed={() => {
+            void startFeedFetch(renaming.feed.id).then(result => handleFetchComplete({ ...result, name: renaming.feed.name }))
+            void mutateFeeds()
+          }}
+          onClose={() => setRenaming(null)}
         />
       )}
 

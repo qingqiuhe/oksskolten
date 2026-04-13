@@ -63,6 +63,11 @@ describe('FeedModal', () => {
     expect(screen.getByText('Create a folder to organize feeds')).toBeTruthy()
   })
 
+  it('renders JSON API option when enabled', () => {
+    render(<FeedModal {...defaultProps} canUseJsonApi />)
+    expect(screen.getByText('Add a feed from a JSON API and transform script')).toBeTruthy()
+  })
+
   it('navigates to feed step on click', async () => {
     render(<FeedModal {...defaultProps} />)
     await user.click(screen.getByText('Add an RSS feed from a URL'))
@@ -80,6 +85,13 @@ describe('FeedModal', () => {
     render(<FeedModal {...defaultProps} />)
     await user.click(screen.getByText('Clip an article from a URL'))
     expect(screen.getByText('Clip Article')).toBeTruthy()
+  })
+
+  it('navigates to JSON API step on click', async () => {
+    render(<FeedModal {...defaultProps} canUseJsonApi />)
+    await user.click(screen.getByText('Add a feed from a JSON API and transform script'))
+    expect(screen.getByText('Add JSON API Feed')).toBeTruthy()
+    expect(screen.getByText('Transform Script')).toBeTruthy()
   })
 
   it('back button returns to select step', async () => {
@@ -171,6 +183,58 @@ describe('FeedModal', () => {
     await user.click(screen.getByText('Add an RSS feed from a URL'))
     await user.click(screen.getByText('Cancel'))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('previews and creates a JSON API feed', async () => {
+    vi.mocked(apiPost)
+      .mockResolvedValueOnce({
+        resolved_feed: {
+          name: 'Aligned News',
+          icon_url: 'https://alignednews.com/icon.png',
+          view_type: 'article',
+        },
+        sample_items: [
+          {
+            url: 'https://alignednews.com/story/1',
+            title: 'Story 1',
+            published_at: '2026-04-13T00:00:00.000Z',
+            excerpt: 'Summary 1',
+          },
+        ],
+        warnings: [],
+        stats: {
+          received_count: 1,
+          accepted_count: 1,
+          dropped_count: 0,
+        },
+      })
+      .mockResolvedValueOnce({
+        feed: { id: 9 },
+      })
+
+    const onCreated = vi.fn()
+    const onClose = vi.fn()
+    const onFetchStarted = vi.fn()
+    render(<FeedModal {...defaultProps} onCreated={onCreated} onClose={onClose} onFetchStarted={onFetchStarted} canUseJsonApi />)
+
+    await user.click(screen.getByText('Add a feed from a JSON API and transform script'))
+    await user.type(screen.getByLabelText('JSON API URL'), 'https://alignednews.com/api/stories')
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Resolved feed')).toBeTruthy()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenNthCalledWith(2, '/api/feeds/json-api', expect.objectContaining({
+        url: 'https://alignednews.com/api/stories',
+      }))
+    })
+    expect(onCreated).toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalled()
+    expect(onFetchStarted).toHaveBeenCalledWith(9)
   })
 
   // --- Helper for SSE tests ---

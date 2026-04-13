@@ -11,6 +11,8 @@ import {
   getFeedByUrl,
   createFeed,
   updateFeed,
+  getFeedSourceConfig,
+  updateFeedSourceConfig,
   deleteFeed,
   bulkMoveFeedsToCategory,
   markAllSeenByFeed,
@@ -25,8 +27,14 @@ import {
   deleteFeedNotificationRule,
   listNotificationChannels,
 } from '../db.js'
-import { requireJson, getRequestUserId } from '../auth.js'
+import { requireJson, getRequestUserId, requireRoles } from '../auth.js'
 import { fetchSingleFeed, discoverRssUrl } from '../fetcher.js'
+import {
+  fetchAndTransformJsonApiFeed,
+  inferJsonApiViewType,
+  parseJsonApiSourceConfig,
+  stringifyJsonApiSourceConfig,
+} from '../fetcher/json-api.js'
 import { queryRssBridge, inferCssSelectorBridge } from '../rss-bridge.js'
 import { parseOpml, generateOpml } from '../opml.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
@@ -84,6 +92,25 @@ const UpdateFeedBody = z.object({
   feed_priority: optionalPriorityLevel,
   priority_level: optionalPriorityLevel,
 })
+const transformScript = z
+  .string()
+  .min(1, 'transform_script is required')
+  .max(16_384, 'transform_script is too large')
+
+const JsonApiFeedBody = z.object({
+  url: httpsUrl,
+  name: z.string().optional(),
+  icon_url: optionalHttpsUrl,
+  category_id: z.number().nullable().optional(),
+  feed_priority: optionalPriorityLevel,
+  priority_level: optionalPriorityLevel,
+  view_type: z.enum(['article', 'social']).nullable().optional(),
+  transform_script: transformScript,
+})
+
+const UpdateJsonApiConfigBody = z.object({
+  transform_script: transformScript,
+})
 const FeedNotificationRuleBody = z.object({
   enabled: z.boolean(),
   delivery_mode: z.enum(['immediate', 'digest']).optional(),
@@ -96,6 +123,12 @@ const FeedNotificationRuleBody = z.object({
   channel_ids: z.array(z.number().int()).max(32),
 })
 
+function toPublicFeed<T extends object>(feed: T): T {
+  const copy = { ...feed } as T & { source_config_json?: unknown }
+  delete copy.source_config_json
+  return copy
+}
+
 export async function feedRoutes(api: FastifyInstance): Promise<void> {
   api.get('/api/feeds', async (request, reply) => {
     const userId = getRequestUserId(request)
@@ -104,7 +137,7 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
     const like_count = getLikeCount(userId)
     const clipFeed = getClipFeed(userId)
     const clip_feed_id = clipFeed?.id ?? null
-    reply.send({ feeds, bookmark_count, like_count, clip_feed_id })
+    reply.send({ feeds: feeds.map(toPublicFeed), bookmark_count, like_count, clip_feed_id })
   })
 
   api.get('/api/discover-title', async (request, reply) => {
@@ -117,6 +150,158 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       reply.send({ title: null })
     }
   })
+
+  api.post(
+    '/api/feeds/json-api/preview',
+    {
+      preHandler: [requireJson, requireRoles(['owner', 'admin'])],
+    },
+    async (request, reply) => {
+      const body = parseOrBadRequest(JsonApiFeedBody, request.body, reply)
+      if (!body) return
+
+      try {
+        const result = await fetchAndTransformJsonApiFeed({
+          endpointUrl: body.url,
+          transformScript: body.transform_script,
+          skipCache: true,
+        })
+        const inferredViewType = body.view_type ?? result.meta.view_type ?? inferJsonApiViewType(result.items)
+        const resolvedFeed = {
+          name: body.name || result.meta.title || new URL(body.url).hostname,
+          icon_url: body.icon_url ?? result.meta.icon_url,
+          view_type: inferredViewType,
+        }
+
+        reply.send({
+          resolved_feed: resolvedFeed,
+          sample_items: result.items.slice(0, 5),
+          warnings: result.warnings,
+          stats: {
+            received_count: result.receivedCount,
+            accepted_count: result.items.length,
+            dropped_count: result.receivedCount - result.items.length,
+          },
+        })
+      } catch (err) {
+        reply.status(400).send({ error: err instanceof Error ? err.message : 'Invalid JSON API feed' })
+      }
+    },
+  )
+
+  api.post(
+    '/api/feeds/json-api',
+    {
+      preHandler: [requireJson, requireRoles(['owner', 'admin'])],
+    },
+    async (request, reply) => {
+      const body = parseOrBadRequest(JsonApiFeedBody, request.body, reply)
+      if (!body) return
+      const userId = getRequestUserId(request)
+
+      if (getFeedByUrl(body.url, userId)) {
+        reply.status(409).send({ error: 'Feed URL already exists' })
+        return
+      }
+
+      try {
+        const result = await fetchAndTransformJsonApiFeed({
+          endpointUrl: body.url,
+          transformScript: body.transform_script,
+          skipCache: true,
+        })
+        const resolvedViewType = body.view_type ?? result.meta.view_type ?? inferJsonApiViewType(result.items)
+        const feed = createFeed({
+          name: body.name || result.meta.title || new URL(body.url).hostname,
+          url: body.url,
+          icon_url: body.icon_url ?? result.meta.icon_url,
+          category_id: body.category_id ?? null,
+          priority_level: body.priority_level ?? body.feed_priority,
+          view_type: resolvedViewType,
+          type: 'rss',
+          ingest_kind: 'json_api',
+          source_config_json: stringifyJsonApiSourceConfig({
+            version: 1,
+            transform_script: body.transform_script,
+          }),
+        }, userId)
+
+        fetchSingleFeed(feed).catch(err => {
+          log.error(`Initial JSON API fetch for ${feed.name} failed:`, err)
+        })
+
+        reply.status(201).send({ feed: toPublicFeed(feed), warnings: result.warnings })
+      } catch (err) {
+        reply.status(400).send({ error: err instanceof Error ? err.message : 'Invalid JSON API feed' })
+      }
+    },
+  )
+
+  api.get(
+    '/api/feeds/:id/json-api-config',
+    { preHandler: [requireRoles(['owner', 'admin'])] },
+    async (request, reply) => {
+      const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+      if (!params) return
+      const userId = getRequestUserId(request)
+      const feed = getFeedById(params.id, userId)
+      if (!feed) {
+        reply.status(404).send({ error: 'Feed not found' })
+        return
+      }
+      if (feed.ingest_kind !== 'json_api') {
+        reply.status(400).send({ error: 'Feed is not a JSON API feed' })
+        return
+      }
+
+      const sourceConfig = parseJsonApiSourceConfig(getFeedSourceConfig(params.id, userId))
+      if (!sourceConfig) {
+        reply.status(500).send({ error: 'Feed source config is missing or invalid' })
+        return
+      }
+
+      reply.send({ transform_script: sourceConfig.transform_script })
+    },
+  )
+
+  api.put(
+    '/api/feeds/:id/json-api-config',
+    { preHandler: [requireJson, requireRoles(['owner', 'admin'])] },
+    async (request, reply) => {
+      const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+      if (!params) return
+      const body = parseOrBadRequest(UpdateJsonApiConfigBody, request.body, reply)
+      if (!body) return
+      const userId = getRequestUserId(request)
+      const feed = getFeedById(params.id, userId)
+      if (!feed) {
+        reply.status(404).send({ error: 'Feed not found' })
+        return
+      }
+      if (feed.ingest_kind !== 'json_api') {
+        reply.status(400).send({ error: 'Feed is not a JSON API feed' })
+        return
+      }
+
+      try {
+        await fetchAndTransformJsonApiFeed({
+          endpointUrl: feed.url,
+          transformScript: body.transform_script,
+          skipCache: true,
+        })
+      } catch (err) {
+        reply.status(400).send({ error: err instanceof Error ? err.message : 'Invalid JSON API feed' })
+        return
+      }
+
+      updateFeedSourceConfig(params.id, stringifyJsonApiSourceConfig({
+        version: 1,
+        transform_script: body.transform_script,
+      }), userId)
+
+      reply.send({ transform_script: body.transform_script })
+    },
+  )
 
   api.post(
     '/api/feeds',
@@ -204,7 +389,7 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
           })
         }
 
-        send({ type: 'done', feed })
+        send({ type: 'done', feed: toPublicFeed(feed) })
       } catch (err) {
         send({ type: 'error', error: err instanceof Error ? err.message : 'Unknown error' })
       }
@@ -234,7 +419,7 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
 
       const feeds = getFeeds(userId)
       const withCounts = feeds.find(f => f.id === feed.id)
-      reply.send(withCounts || feed)
+      reply.send(toPublicFeed(withCounts || feed))
     },
   )
 
@@ -403,6 +588,10 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       const feed = getFeedById(params.id, userId)
       if (!feed) {
         reply.status(404).send({ error: 'Feed not found' })
+        return
+      }
+      if (feed.ingest_kind === 'json_api') {
+        reply.status(400).send({ error: 'JSON API feeds do not support re-detect' })
         return
       }
 

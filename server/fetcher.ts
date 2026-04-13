@@ -1,6 +1,7 @@
 import {
   getEnabledFeeds,
   getExistingArticlesByUrls,
+  getFeedSourceConfig,
   getRetryArticles,
   getRetryStats,
   insertArticle,
@@ -18,6 +19,7 @@ import { Semaphore, CONCURRENCY, errorMessage } from './fetcher/util.js'
 import { detectAndStoreSimilarArticles } from './similarity.js'
 import { type FetchProgressEvent, emitProgress, markFeedDone } from './fetcher/progress.js'
 import { fetchFullText, isBotBlockPage, convertHtmlToMarkdown, markdownToExcerpt, extractFirstVideoPoster, MIN_EXTRACTED_LENGTH } from './fetcher/content.js'
+import { fetchAndTransformJsonApiFeed, parseJsonApiSourceConfig, type JsonApiItem } from './fetcher/json-api.js'
 import { type FetchRssResult, fetchAndParseRss, RateLimitError } from './fetcher/rss.js'
 import { clampInterval, computeInterval, computeEmpiricalInterval, getFetchScheduleConfig, sqliteFuture, DEFAULT_INTERVAL } from './fetcher/schedule.js'
 import { detectLanguage } from './fetcher/ai.js'
@@ -61,12 +63,18 @@ export async function fetchArticleContent(
     requiresJsChallenge?: boolean
     /** CSS Bridge listing-page excerpt, used as fullText fallback */
     listingExcerpt?: string
+    /** Inline HTML content supplied by the source itself */
+    inlineContentHtml?: string | null
+    /** Inline text/markdown content supplied by the source itself */
+    inlineContentText?: string | null
+    /** Source-provided image URL */
+    inlineOgImage?: string | null
     /** Existing article data for retry (skips fetch if full_text present) */
     existingArticle?: { full_text: string | null; og_image: string | null; lang: string | null }
   },
 ): Promise<FetchedContent> {
   let fullText: string | null = null
-  let ogImage: string | null = null
+  let ogImage: string | null = options?.inlineOgImage ?? null
   let excerpt: string | null = null
   let lang: string | null = null
   let lastError: string | null = null
@@ -85,6 +93,12 @@ export async function fetchArticleContent(
     ogImage = existing.og_image
   } else if (isAnchorLink && options?.listingExcerpt) {
     fullText = convertHtmlToMarkdown(options.listingExcerpt, { baseUrl: url })
+    excerpt = markdownToExcerpt(fullText)
+  } else if (options?.inlineContentHtml) {
+    fullText = convertHtmlToMarkdown(options.inlineContentHtml, { baseUrl: url })
+    excerpt = markdownToExcerpt(fullText)
+  } else if (options?.inlineContentText) {
+    fullText = options.inlineContentText
     excerpt = markdownToExcerpt(fullText)
   } else {
     try {
@@ -144,6 +158,9 @@ interface NewArticle {
   requires_js_challenge?: boolean
   /** Excerpt from listing page (CSS Bridge content_selector), used as fullText fallback */
   excerpt?: string
+  inline_content_html?: string | null
+  inline_content_text?: string | null
+  og_image?: string | null
 }
 
 interface RetryArticle {
@@ -160,10 +177,16 @@ async function processArticle(task: ArticleTask): Promise<boolean> {
   const content = await fetchArticleContent(articleUrl, {
     requiresJsChallenge: task.kind === 'new' ? task.requires_js_challenge : undefined,
     listingExcerpt: task.kind === 'new' ? task.excerpt : undefined,
+    inlineContentHtml: task.kind === 'new' ? task.inline_content_html : undefined,
+    inlineContentText: task.kind === 'new' ? task.inline_content_text : undefined,
+    inlineOgImage: task.kind === 'new' ? task.og_image : undefined,
     existingArticle: task.kind === 'retry' ? task.article : undefined,
   })
 
   const effectiveLang = content.lang || (task.kind === 'retry' ? task.article.lang : null)
+  const effectiveExcerpt = task.kind === 'new'
+    ? task.excerpt ?? content.excerpt
+    : content.excerpt
   const notificationPreview = buildNotificationPreview({
     articleUrl,
     fullText: content.fullText,
@@ -183,7 +206,7 @@ async function processArticle(task: ArticleTask): Promise<boolean> {
         full_text: content.fullText,
         full_text_translated: null,
         summary: null,
-        excerpt: content.excerpt,
+        excerpt: effectiveExcerpt,
         og_image: content.ogImage,
         notification_body_text: notificationPreview.notification_body_text,
         notification_media_json: notificationPreview.notification_media_json,
@@ -202,7 +225,7 @@ async function processArticle(task: ArticleTask): Promise<boolean> {
     updateArticleContent(task.article.id, {
       lang: effectiveLang,
       full_text: content.fullText,
-      excerpt: content.excerpt,
+      excerpt: effectiveExcerpt,
       og_image: content.ogImage,
       notification_body_text: notificationPreview.notification_body_text,
       notification_media_json: notificationPreview.notification_media_json,
@@ -225,6 +248,47 @@ function backfillExistingArticleKinds(
   }
 }
 
+interface FeedFetchItem {
+  title: string
+  url: string
+  published_at: string | null
+  article_kind?: ArticleKind | null
+  excerpt?: string
+  content_html?: string | null
+  content_text?: string | null
+  og_image?: string | null
+}
+
+function mapFeedItemsToNewArticleTasks(feed: Feed, items: FeedFetchItem[], existing: Map<string, { id: number; article_kind: ArticleKind | null }>): ArticleTask[] {
+  return items
+    .filter(item => !existing.has(item.url))
+    .map(item => ({
+      kind: 'new' as const,
+      feed_id: feed.id,
+      title: item.title,
+      url: item.url,
+      article_kind: item.article_kind ?? null,
+      published_at: item.published_at,
+      requires_js_challenge: !!feed.requires_js_challenge,
+      excerpt: item.excerpt ?? undefined,
+      inline_content_html: item.content_html ?? undefined,
+      inline_content_text: item.content_text ?? undefined,
+      og_image: item.og_image ?? undefined,
+    }))
+}
+
+function mapJsonApiItems(items: JsonApiItem[]): FeedFetchItem[] {
+  return items.map(item => ({
+    title: item.title,
+    url: item.url,
+    published_at: item.published_at,
+    excerpt: item.excerpt ?? undefined,
+    content_html: item.content_html,
+    content_text: item.content_text,
+    og_image: item.og_image,
+  }))
+}
+
 // --- Single feed fetch ---
 
 export async function fetchSingleFeed(
@@ -235,11 +299,37 @@ export async function fetchSingleFeed(
   const semaphore = new Semaphore(CONCURRENCY)
   const { minIntervalSeconds } = getFetchScheduleConfig()
 
-  let rssResult: FetchRssResult
+  let items: FeedFetchItem[]
+  let notModified: boolean
+  let httpCacheSeconds: number | null
+  let rssTtlSeconds: number | null
   try {
-    rssResult = await fetchAndParseRss(feed, opts)
-    updateFeedError(feed.id, null)
-    updateFeedCacheHeaders(feed.id, rssResult.etag, rssResult.lastModified, rssResult.contentHash)
+    if (feed.ingest_kind === 'json_api') {
+      const sourceConfig = parseJsonApiSourceConfig(getFeedSourceConfig(feed.id))
+      if (!sourceConfig) throw new Error('Missing or invalid JSON API source config')
+      const jsonApiResult = await fetchAndTransformJsonApiFeed({
+        endpointUrl: feed.url,
+        transformScript: sourceConfig.transform_script,
+        etag: feed.etag,
+        lastModified: feed.last_modified,
+        lastContentHash: feed.last_content_hash,
+        skipCache: opts?.skipCache,
+      })
+      items = mapJsonApiItems(jsonApiResult.items)
+      notModified = jsonApiResult.notModified
+      httpCacheSeconds = jsonApiResult.httpCacheSeconds
+      rssTtlSeconds = null
+      updateFeedError(feed.id, null)
+      updateFeedCacheHeaders(feed.id, jsonApiResult.etag, jsonApiResult.lastModified, jsonApiResult.contentHash)
+    } else {
+      const rssResult = await fetchAndParseRss(feed, opts)
+      items = rssResult.items
+      notModified = rssResult.notModified
+      httpCacheSeconds = rssResult.httpCacheSeconds
+      rssTtlSeconds = rssResult.rssTtlSeconds
+      updateFeedError(feed.id, null)
+      updateFeedCacheHeaders(feed.id, rssResult.etag, rssResult.lastModified, rssResult.contentHash)
+    }
   } catch (err) {
     if (err instanceof RateLimitError) {
       log.warn(`Feed ${feed.name}: ${err.message}`)
@@ -252,7 +342,7 @@ export async function fetchSingleFeed(
     return
   }
 
-  if (rssResult.notModified) {
+  if (notModified) {
     // Reschedule using stored interval (or default)
     const interval = clampInterval(feed.check_interval ?? DEFAULT_INTERVAL, minIntervalSeconds)
     updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
@@ -262,26 +352,17 @@ export async function fetchSingleFeed(
 
   // Compute and store adaptive interval
   {
-    const empirical = computeEmpiricalInterval(rssResult.items)
-    const interval = computeInterval(rssResult.httpCacheSeconds, rssResult.rssTtlSeconds, empirical, minIntervalSeconds)
+    const empirical = computeEmpiricalInterval(items)
+    const interval = computeInterval(httpCacheSeconds, rssTtlSeconds, empirical, minIntervalSeconds)
     updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
   }
 
-  const urls = rssResult.items.map(i => i.url)
+  const urls = items.map(i => i.url)
   const existing = getExistingArticlesByUrls(urls)
-  backfillExistingArticleKinds(rssResult, existing)
-  const tasks: ArticleTask[] = rssResult.items
-    .filter(item => !existing.has(item.url))
-    .map(item => ({
-      kind: 'new' as const,
-      feed_id: feed.id,
-      title: item.title,
-      url: item.url,
-      article_kind: item.article_kind ?? null,
-      published_at: item.published_at,
-      requires_js_challenge: !!feed.requires_js_challenge,
-      excerpt: item.excerpt,
-    }))
+  if (feed.ingest_kind !== 'json_api') {
+    backfillExistingArticleKinds({ items, notModified: false, etag: null, lastModified: null, contentHash: null, httpCacheSeconds: null, rssTtlSeconds: null }, existing)
+  }
+  const tasks = mapFeedItemsToNewArticleTasks(feed, items, existing)
 
   if (tasks.length === 0) {
     log.info(`Feed ${feed.name}: no new articles`)
@@ -353,11 +434,38 @@ export async function fetchAllFeeds(
     feeds.map(feed =>
       semaphore.run(async () => {
         try {
-          const rssResult = await fetchAndParseRss(feed)
-          updateFeedError(feed.id, null)
-          updateFeedCacheHeaders(feed.id, rssResult.etag, rssResult.lastModified, rssResult.contentHash)
+          let items: FeedFetchItem[]
+          let notModified: boolean
+          let httpCacheSeconds: number | null
+          let rssTtlSeconds: number | null
 
-          if (rssResult.notModified) {
+          if (feed.ingest_kind === 'json_api') {
+            const sourceConfig = parseJsonApiSourceConfig(getFeedSourceConfig(feed.id))
+            if (!sourceConfig) throw new Error('Missing or invalid JSON API source config')
+            const jsonApiResult = await fetchAndTransformJsonApiFeed({
+              endpointUrl: feed.url,
+              transformScript: sourceConfig.transform_script,
+              etag: feed.etag,
+              lastModified: feed.last_modified,
+              lastContentHash: feed.last_content_hash,
+            })
+            items = mapJsonApiItems(jsonApiResult.items)
+            notModified = jsonApiResult.notModified
+            httpCacheSeconds = jsonApiResult.httpCacheSeconds
+            rssTtlSeconds = null
+            updateFeedError(feed.id, null)
+            updateFeedCacheHeaders(feed.id, jsonApiResult.etag, jsonApiResult.lastModified, jsonApiResult.contentHash)
+          } else {
+            const rssResult = await fetchAndParseRss(feed)
+            items = rssResult.items
+            notModified = rssResult.notModified
+            httpCacheSeconds = rssResult.httpCacheSeconds
+            rssTtlSeconds = rssResult.rssTtlSeconds
+            updateFeedError(feed.id, null)
+            updateFeedCacheHeaders(feed.id, rssResult.etag, rssResult.lastModified, rssResult.contentHash)
+          }
+
+          if (notModified) {
             const interval = clampInterval(feed.check_interval ?? DEFAULT_INTERVAL, minIntervalSeconds)
             updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
             log.info(`Feed ${feed.name}: not modified (304)`)
@@ -367,27 +475,18 @@ export async function fetchAllFeeds(
 
           // Compute and store adaptive interval
           {
-            const empirical = computeEmpiricalInterval(rssResult.items)
-            const interval = computeInterval(rssResult.httpCacheSeconds, rssResult.rssTtlSeconds, empirical, minIntervalSeconds)
+            const empirical = computeEmpiricalInterval(items)
+            const interval = computeInterval(httpCacheSeconds, rssTtlSeconds, empirical, minIntervalSeconds)
             updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
           }
 
-          const urls = rssResult.items.map(i => i.url)
+          const urls = items.map(i => i.url)
           const existing = getExistingArticlesByUrls(urls)
-          backfillExistingArticleKinds(rssResult, existing)
+          if (feed.ingest_kind !== 'json_api') {
+            backfillExistingArticleKinds({ items, notModified: false, etag: null, lastModified: null, contentHash: null, httpCacheSeconds: null, rssTtlSeconds: null }, existing)
+          }
 
-          const newItems: ArticleTask[] = rssResult.items
-            .filter(item => !existing.has(item.url))
-            .map(item => ({
-              kind: 'new' as const,
-              feed_id: feed.id,
-              title: item.title,
-              url: item.url,
-              article_kind: item.article_kind ?? null,
-              published_at: item.published_at,
-              requires_js_challenge: !!feed.requires_js_challenge,
-              excerpt: item.excerpt,
-            }))
+          const newItems = mapFeedItemsToNewArticleTasks(feed, items, existing)
 
           allTasks.push(...newItems)
           feedNewCounts.set(feed.id, newItems.length)

@@ -64,6 +64,8 @@ interface SourceFeedRow {
   category_id: number | null
   category_name: string | null
   type: Feed['type']
+  ingest_kind?: Feed['ingest_kind']
+  source_config_json?: string | null
 }
 
 export async function userRoutes(api: FastifyInstance): Promise<void> {
@@ -104,6 +106,8 @@ export async function userRoutes(api: FastifyInstance): Promise<void> {
           f.rss_bridge_url,
           f.view_type,
           f.requires_js_challenge,
+          f.ingest_kind,
+          f.source_config_json,
           f.category_id,
           c.name AS category_name,
           f.type
@@ -122,6 +126,8 @@ export async function userRoutes(api: FastifyInstance): Promise<void> {
           f.rss_bridge_url,
           f.view_type,
           f.requires_js_challenge,
+          f.ingest_kind,
+          f.source_config_json,
           f.category_id,
           c.name AS category_name,
           f.type
@@ -174,6 +180,8 @@ export async function userRoutes(api: FastifyInstance): Promise<void> {
           category_id: feed.category_id == null ? null : (categoryMap.get(feed.category_id) ?? null),
           requires_js_challenge: feed.requires_js_challenge,
           type: 'rss',
+          ingest_kind: feed.ingest_kind ?? 'rss',
+          source_config_json: feed.source_config_json ?? null,
         }, user.id)
         importedFeedsToFetch.push(importedFeed)
       }

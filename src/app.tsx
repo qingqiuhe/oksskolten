@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Settings2 } from 'lucide-react'
 import useSWR, { SWRConfig } from 'swr'
 import { useSettings, type Settings } from './hooks/use-settings'
-import { fetcher } from './lib/fetcher'
+import { apiPatch, apiPut, fetcher } from './lib/fetcher'
 import { LocaleContext, APP_NAME, type Locale, useI18n, normalizeLocale, resolvePreferredLocale } from './lib/i18n'
 import { MD_BREAKPOINT } from './lib/breakpoints'
 import { useIsTouchDevice } from './hooks/use-is-touch-device'
@@ -196,7 +196,6 @@ export function ArticleListPage() {
     handleFetchFeed,
     handleReDetectFeed,
     handleConfirm,
-    handleRenameSubmit,
   } = useFeedActions({
     categorized,
     mutateFeeds,
@@ -243,7 +242,7 @@ export function ArticleListPage() {
       currentViewType={currentFeed.view_type}
       onViewTypeChange={(viewType) => handleUpdateViewType(currentFeed, viewType)}
       onFetch={() => handleFetchFeed(currentFeed)}
-      onReDetect={() => handleReDetectFeed(currentFeed)}
+      onReDetect={currentFeed.ingest_kind === 'json_api' ? undefined : (() => handleReDetectFeed(currentFeed))}
       onConfigureNotifications={() => setNotificationFeed(currentFeed)}
     >
       <IconButton
@@ -303,14 +302,28 @@ export function ArticleListPage() {
 
       {renaming?.type === 'feed' && (
         <FeedEditDialog
+          feed={renaming.feed}
           name={renaming.name}
           iconUrl={renaming.iconUrl}
           priorityLevel={renaming.priorityLevel}
-          feedUrl={renaming.feed.url}
           onNameChange={(name) => setRenaming({ ...renaming, name })}
           onIconUrlChange={(iconUrl) => setRenaming({ ...renaming, iconUrl })}
           onPriorityLevelChange={(priorityLevel) => setRenaming({ ...renaming, priorityLevel })}
-          onSubmit={handleRenameSubmit}
+          onSubmit={async () => {
+            await apiPatch(`/api/feeds/${renaming.feed.id}`, {
+              name: renaming.name.trim(),
+              icon_url: renaming.iconUrl.trim() ? renaming.iconUrl.trim() : null,
+              priority_level: renaming.priorityLevel,
+            })
+            void mutateFeeds()
+          }}
+          onUpdateJsonApiConfig={async (transformScript) => {
+            await apiPut(`/api/feeds/${renaming.feed.id}/json-api-config`, { transform_script: transformScript })
+          }}
+          onFetchUpdatedJsonApiFeed={() => {
+            void startFeedFetch(renaming.feed.id).then(result => handleFetchComplete({ ...result, name: renaming.feed.name }))
+            void mutateFeeds()
+          }}
           onClose={() => setRenaming(null)}
         />
       )}

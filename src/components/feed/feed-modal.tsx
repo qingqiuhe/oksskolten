@@ -3,10 +3,11 @@ import { useI18n } from '../../lib/i18n'
 import { Dialog, DialogContent, DialogTitle } from '../ui/dialog'
 import * as VisuallyHidden from '@radix-ui/react-visually-hidden'
 import { IconButton } from '../ui/icon-button'
-import { Rss, FolderPlus, Globe, ChevronLeft, X } from 'lucide-react'
+import { Rss, FolderPlus, Globe, ChevronLeft, X, Braces } from 'lucide-react'
 import { FeedStep } from './feed-step'
 import { FolderStep } from './folder-step'
 import { ArticleStep } from './article-step'
+import { JsonApiFeedStep } from './json-api-feed-step'
 import type { Category } from '../../../shared/types'
 
 interface FeedModalProps {
@@ -16,9 +17,10 @@ interface FeedModalProps {
   onFetchStarted?: (feedId: number) => void
   onArticleCreated?: () => void
   categories?: Category[]
+  canUseJsonApi?: boolean
 }
 
-type ModalStep = 'select' | 'feed' | 'folder' | 'article'
+type ModalStep = 'select' | 'feed' | 'folder' | 'article' | 'jsonApi'
 
 function BackButton({ onClick }: { onClick: () => void }) {
   return (
@@ -28,13 +30,13 @@ function BackButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarted, onArticleCreated, categories = [] }: FeedModalProps) {
+export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarted, onArticleCreated, categories = [], canUseJsonApi = false }: FeedModalProps) {
   const { t } = useI18n()
   const [step, setStep] = useState<ModalStep>('select')
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-sm" aria-describedby={undefined}>
+      <DialogContent className={step === 'jsonApi' ? 'max-w-3xl' : 'max-w-sm'} aria-describedby={undefined}>
       <VisuallyHidden.Root asChild><DialogTitle>Modal</DialogTitle></VisuallyHidden.Root>
       {step === 'select' && (
         <>
@@ -60,6 +62,23 @@ export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarte
                 <div className="text-xs text-muted">{t('modal.addFeedDesc')}</div>
               </div>
             </button>
+            {canUseJsonApi && (
+              <button
+                onClick={() => setStep('jsonApi')}
+                className="w-full p-3 rounded-xl border border-border hover:border-accent hover:bg-hover transition-colors text-left flex items-center gap-3"
+              >
+                <div
+                  className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+                  style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' }}
+                >
+                  <Braces size={18} strokeWidth={1.5} className="text-accent" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-text">{t('modal.addJsonApiOption')}</div>
+                  <div className="text-xs text-muted">{t('modal.addJsonApiDesc')}</div>
+                </div>
+              </button>
+            )}
             <button
               onClick={() => setStep('article')}
               className="w-full p-3 rounded-xl border border-border hover:border-accent hover:bg-hover transition-colors text-left flex items-center gap-3"
@@ -119,6 +138,21 @@ export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarte
             onClose={onClose}
             onCreated={onCreated}
             onArticleCreated={onArticleCreated}
+          />
+        </>
+      )}
+
+      {step === 'jsonApi' && (
+        <>
+          <div className="flex items-center gap-2 mb-4">
+            <BackButton onClick={() => setStep('select')} />
+            <h2 className="text-base font-semibold">{t('modal.addJsonApi')}</h2>
+          </div>
+          <JsonApiFeedStep
+            onClose={onClose}
+            onCreated={onCreated}
+            onFetchStarted={onFetchStarted}
+            categories={categories}
           />
         </>
       )}
