@@ -49,6 +49,8 @@ export function FeedEditDialog({
   const [preview, setPreview] = useState<JsonApiPreviewResponse | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewKey, setPreviewKey] = useState<string | null>(null)
+  const [generateError, setGenerateError] = useState('')
+  const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
   const { data: jsonApiConfig, error: jsonApiConfigError } = useSWR<{ transform_script: string }>(
     isJsonApiFeed ? `/api/feeds/${feed.id}/json-api-config` : null,
@@ -78,6 +80,7 @@ export function FeedEditDialog({
   async function handlePreview() {
     setPreviewLoading(true)
     setJsonApiError('')
+    setGenerateError('')
     try {
       const result = await apiPost('/api/feeds/json-api/preview', {
         url: feed.url,
@@ -92,6 +95,24 @@ export function FeedEditDialog({
       setJsonApiError(err instanceof Error ? err.message : t('modal.genericError'))
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  async function handleGenerateWithAi() {
+    setGenerating(true)
+    setGenerateError('')
+    try {
+      const result = await apiPost('/api/feeds/json-api/generate-script', {
+        url: feed.url,
+      }) as { transform_script: string }
+      setTransformScript(result.transform_script)
+      setPreview(null)
+      setPreviewKey(null)
+      setJsonApiError('')
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : t('modal.genericError'))
+    } finally {
+      setGenerating(false)
     }
   }
 
@@ -223,6 +244,9 @@ export function FeedEditDialog({
                   previewLoading={previewLoading}
                   previewDirty={previewDirty}
                   onPreview={() => { void handlePreview() }}
+                  generateError={generateError}
+                  generating={generating}
+                  onGenerateWithAi={() => { void handleGenerateWithAi() }}
                 />
               )}
             </div>

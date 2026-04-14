@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto'
 import vm from 'node:vm'
 import type { FeedViewType } from '../../shared/article-kind.js'
 import { resolveFeedViewType } from '../../shared/article-kind.js'
+import { TASK_DEFAULTS } from '../../shared/models.js'
+import { getSetting } from '../db.js'
 import { decodeResponse, DEFAULT_TIMEOUT, USER_AGENT } from './http.js'
+import { getProvider } from '../providers/llm/index.js'
 import { parseHttpCacheInterval } from './schedule.js'
 import { safeFetch } from './ssrf.js'
 import { normalizeDate } from './util.js'
@@ -44,6 +47,12 @@ export interface FetchJsonApiResult extends JsonApiTransformResult {
   lastModified: string | null
   contentHash: string | null
   httpCacheSeconds: number | null
+}
+
+export interface GeneratedJsonApiTransform {
+  transform_script: string
+  provider: string
+  model: string
 }
 
 function normalizeText(value: unknown): string | null {
@@ -148,6 +157,61 @@ export function inferJsonApiViewType(items: JsonApiItem[]): FeedViewType | null 
     resolveFeedViewType({ url: item.url }) === 'social' ? count + 1 : count
   ), 0)
   return socialCount > items.length / 2 ? 'social' : 'article'
+}
+
+function sampleJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.slice(0, 3).map(sampleJsonValue)
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, 20)
+    return Object.fromEntries(entries.map(([key, entryValue]) => [key, sampleJsonValue(entryValue)]))
+  }
+  return value
+}
+
+function stringifySampleJson(value: unknown): string {
+  const sampled = sampleJsonValue(value)
+  const text = JSON.stringify(sampled, null, 2)
+  return text.length > 12_000 ? `${text.slice(0, 12_000)}\n...` : text
+}
+
+function buildGenerateTransformPrompt(endpointUrl: string, response: unknown): string {
+  return `You are generating a JavaScript transform function for Oksskolten JSON API feeds.
+
+Return only a JavaScript function expression. Do not use markdown fences.
+
+Feed endpoint:
+${endpointUrl}
+
+The function must have this signature:
+({ response, endpointUrl, fetchedAt, helpers }) => ...
+
+It may return either:
+1. an array of items
+2. an object like { title?, icon_url?, view_type?, items: [...] }
+
+Each item should use these fields:
+- url: string, required, final article URL, must be https://
+- title: string, required
+- published_at: string | null
+- excerpt: string | null
+- content_text: string | null
+- content_html: string | null
+- og_image: string | null
+
+Rules:
+- Be defensive. If response is unusable, return []
+- Prefer content_text for plain text/full body fields
+- Prefer content_html only when the API clearly returns rich HTML
+- Use null for missing optional fields
+- If dates are inconsistent, use helpers.normalizeDate(...)
+- If URLs may contain tracking params, use helpers.cleanUrl(...)
+- Do not use fetch, imports, timers, or external libraries
+- Keep the function compact and readable
+
+Sample response JSON:
+${stringifySampleJson(response)}`
 }
 
 function runTransformScript(response: unknown, endpointUrl: string, transformScript: string): unknown {
@@ -287,5 +351,57 @@ export async function fetchAndTransformJsonApiFeed(input: {
     lastModified: res.headers.get('last-modified'),
     contentHash,
     httpCacheSeconds: parseHttpCacheInterval(res.headers),
+  }
+}
+
+export async function generateJsonApiTransformScript(
+  endpointUrl: string,
+  userId?: number | null,
+): Promise<GeneratedJsonApiTransform> {
+  const providerName = getSetting('chat.provider', userId) || TASK_DEFAULTS.chat.provider
+  const model = getSetting('chat.model', userId) || TASK_DEFAULTS.chat.model
+  const provider = getProvider(providerName)
+  provider.requireKey()
+
+  const res = await safeFetch(endpointUrl, {
+    headers: {
+      'Accept': 'application/json',
+      'User-Agent': USER_AGENT,
+    },
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT),
+  })
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`)
+  }
+
+  const body = await decodeResponse(res)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    throw new Error('Response is not valid JSON')
+  }
+
+  const result = await provider.createMessage({
+    model,
+    maxTokens: 1600,
+    messages: [
+      {
+        role: 'user',
+        content: buildGenerateTransformPrompt(endpointUrl, parsed),
+      },
+    ],
+  })
+
+  const transform_script = result.text.trim()
+  if (!transform_script) {
+    throw new Error('Model returned an empty transform script')
+  }
+
+  return {
+    transform_script,
+    provider: providerName,
+    model,
   }
 }

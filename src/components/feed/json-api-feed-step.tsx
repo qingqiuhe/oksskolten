@@ -7,7 +7,6 @@ import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { FeedIconPreview } from './feed-icon-preview'
 import {
-  ALIGNED_NEWS_EXAMPLE,
   JSON_API_TEMPLATE,
   JsonApiSourceEditor,
   type JsonApiPreviewResponse,
@@ -36,7 +35,7 @@ function localizeJsonApiError(raw: string, t: ReturnType<typeof useI18n>['t']): 
 export function JsonApiFeedStep({ onClose, onCreated, onFetchStarted, categories }: JsonApiFeedStepProps) {
   const { t } = useI18n()
   const [endpointUrl, setEndpointUrl] = useState('')
-  const [transformScript, setTransformScript] = useState(ALIGNED_NEWS_EXAMPLE)
+  const [transformScript, setTransformScript] = useState(JSON_API_TEMPLATE)
   const [name, setName] = useState('')
   const [iconUrl, setIconUrl] = useState('')
   const [categoryId, setCategoryId] = useState<number | ''>('')
@@ -45,6 +44,8 @@ export function JsonApiFeedStep({ onClose, onCreated, onFetchStarted, categories
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [generateError, setGenerateError] = useState<string | null>(null)
+  const [generating, setGenerating] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -58,6 +59,7 @@ export function JsonApiFeedStep({ onClose, onCreated, onFetchStarted, categories
   async function handlePreview() {
     setPreviewLoading(true)
     setPreviewError(null)
+    setGenerateError(null)
     setSubmitError(null)
     try {
       const result = await apiPost('/api/feeds/json-api/preview', {
@@ -75,6 +77,26 @@ export function JsonApiFeedStep({ onClose, onCreated, onFetchStarted, categories
       setPreviewError(localizeJsonApiError(message, t))
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  async function handleGenerateWithAi() {
+    setGenerating(true)
+    setGenerateError(null)
+    setSubmitError(null)
+    try {
+      const result = await apiPost('/api/feeds/json-api/generate-script', {
+        url: endpointUrl.trim(),
+      }) as { transform_script: string }
+      setTransformScript(result.transform_script)
+      setPreview(null)
+      setPreviewKey(null)
+      setPreviewError(null)
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : '')
+      setGenerateError(localizeJsonApiError(message, t))
+    } finally {
+      setGenerating(false)
     }
   }
 
@@ -134,8 +156,10 @@ export function JsonApiFeedStep({ onClose, onCreated, onFetchStarted, categories
         previewLoading={previewLoading}
         previewDirty={previewDirty}
         onPreview={() => { void handlePreview() }}
+        generateError={generateError}
+        generating={generating}
+        onGenerateWithAi={() => { void handleGenerateWithAi() }}
         onLoadTemplate={() => setTransformScript(JSON_API_TEMPLATE)}
-        onLoadExample={() => setTransformScript(ALIGNED_NEWS_EXAMPLE)}
       />
 
       <div className="grid gap-4 md:grid-cols-2">

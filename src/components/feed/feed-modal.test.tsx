@@ -92,6 +92,7 @@ describe('FeedModal', () => {
     await user.click(screen.getByText('Add a feed from a JSON API and transform script'))
     expect(screen.getByText('Add JSON API Feed')).toBeTruthy()
     expect(screen.getByText('Transform Script')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Generate With AI' })).toBeTruthy()
   })
 
   it('back button returns to select step', async () => {
@@ -188,6 +189,9 @@ describe('FeedModal', () => {
   it('previews and creates a JSON API feed', async () => {
     vi.mocked(apiPost)
       .mockResolvedValueOnce({
+        transform_script: '({ response }) => response',
+      })
+      .mockResolvedValueOnce({
         resolved_feed: {
           name: 'Aligned News',
           icon_url: 'https://alignednews.com/icon.png',
@@ -219,6 +223,12 @@ describe('FeedModal', () => {
 
     await user.click(screen.getByText('Add a feed from a JSON API and transform script'))
     await user.type(screen.getByLabelText('JSON API URL'), 'https://alignednews.com/api/stories')
+    await user.click(screen.getByRole('button', { name: 'Generate With AI' }))
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenNthCalledWith(1, '/api/feeds/json-api/generate-script', {
+        url: 'https://alignednews.com/api/stories',
+      })
+    })
     await user.click(screen.getByRole('button', { name: 'Preview' }))
 
     await waitFor(() => {
@@ -228,7 +238,7 @@ describe('FeedModal', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }))
 
     await waitFor(() => {
-      expect(apiPost).toHaveBeenNthCalledWith(2, '/api/feeds/json-api', expect.objectContaining({
+      expect(apiPost).toHaveBeenNthCalledWith(3, '/api/feeds/json-api', expect.objectContaining({
         url: 'https://alignednews.com/api/stories',
       }))
     })

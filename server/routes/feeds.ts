@@ -31,6 +31,7 @@ import { requireJson, getRequestUserId, requireRoles } from '../auth.js'
 import { fetchSingleFeed, discoverRssUrl } from '../fetcher.js'
 import {
   fetchAndTransformJsonApiFeed,
+  generateJsonApiTransformScript,
   inferJsonApiViewType,
   parseJsonApiSourceConfig,
   stringifyJsonApiSourceConfig,
@@ -111,6 +112,9 @@ const JsonApiFeedBody = z.object({
 const UpdateJsonApiConfigBody = z.object({
   transform_script: transformScript,
 })
+const GenerateJsonApiScriptBody = z.object({
+  url: httpsUrl,
+})
 const FeedNotificationRuleBody = z.object({
   enabled: z.boolean(),
   delivery_mode: z.enum(['immediate', 'digest']).optional(),
@@ -150,6 +154,25 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
       reply.send({ title: null })
     }
   })
+
+  api.post(
+    '/api/feeds/json-api/generate-script',
+    {
+      preHandler: [requireJson, requireRoles(['owner', 'admin'])],
+    },
+    async (request, reply) => {
+      const body = parseOrBadRequest(GenerateJsonApiScriptBody, request.body, reply)
+      if (!body) return
+
+      try {
+        const userId = getRequestUserId(request)
+        const result = await generateJsonApiTransformScript(body.url, userId)
+        reply.send(result)
+      } catch (err) {
+        reply.status(400).send({ error: err instanceof Error ? err.message : 'Failed to generate transform script' })
+      }
+    },
+  )
 
   api.post(
     '/api/feeds/json-api/preview',

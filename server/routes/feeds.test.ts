@@ -8,12 +8,13 @@ import type { FastifyInstance } from 'fastify'
 // Mocks
 // ---------------------------------------------------------------------------
 
-const { mockDiscoverRssUrl, mockFetchSingleFeed, mockQueryRssBridge, mockInferCssSelectorBridge, mockFetchAndTransformJsonApiFeed } = vi.hoisted(() => ({
+const { mockDiscoverRssUrl, mockFetchSingleFeed, mockQueryRssBridge, mockInferCssSelectorBridge, mockFetchAndTransformJsonApiFeed, mockGenerateJsonApiTransformScript } = vi.hoisted(() => ({
   mockDiscoverRssUrl: vi.fn(),
   mockFetchSingleFeed: vi.fn(),
   mockQueryRssBridge: vi.fn(),
   mockInferCssSelectorBridge: vi.fn(),
   mockFetchAndTransformJsonApiFeed: vi.fn(),
+  mockGenerateJsonApiTransformScript: vi.fn(),
 }))
 
 vi.mock('../fetcher.js', async () => {
@@ -41,6 +42,7 @@ vi.mock('../fetcher/json-api.js', async (importOriginal) => {
   return {
     ...actual,
     fetchAndTransformJsonApiFeed: (...args: unknown[]) => mockFetchAndTransformJsonApiFeed(...args),
+    generateJsonApiTransformScript: (...args: unknown[]) => mockGenerateJsonApiTransformScript(...args),
   }
 })
 
@@ -93,6 +95,11 @@ beforeEach(async () => {
     lastModified: 'Mon, 13 Apr 2026 00:00:00 GMT',
     contentHash: 'hash',
     httpCacheSeconds: 900,
+  })
+  mockGenerateJsonApiTransformScript.mockReset().mockResolvedValue({
+    transform_script: '({ response }) => response',
+    provider: 'anthropic',
+    model: 'claude-haiku-4-5-20251001',
   })
 })
 
@@ -370,6 +377,25 @@ describe('POST /api/feeds — RSS discovery pipeline', () => {
 // ---------------------------------------------------------------------------
 
 describe('JSON API feed routes', () => {
+  it('generates a transform script with the configured LLM', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds/json-api/generate-script',
+      headers: json,
+      payload: {
+        url: 'https://alignednews.com/api/stories',
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(mockGenerateJsonApiTransformScript).toHaveBeenCalledWith('https://alignednews.com/api/stories', null)
+    expect(res.json()).toEqual({
+      transform_script: '({ response }) => response',
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+    })
+  })
+
   it('previews a JSON API feed', async () => {
     const res = await app.inject({
       method: 'POST',

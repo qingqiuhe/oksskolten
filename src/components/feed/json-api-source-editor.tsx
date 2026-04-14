@@ -1,11 +1,14 @@
+import { useMemo, useState } from 'react'
 import Editor from 'react-simple-code-editor'
 import hljs from 'highlight.js/lib/core'
 import javascriptLang from 'highlight.js/lib/languages/javascript'
+import { Sparkles, Info } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { useI18n } from '../../lib/i18n'
 import { extractDomain } from '../../lib/url'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
 hljs.registerLanguage('javascript', javascriptLang)
 
@@ -44,18 +47,6 @@ export const JSON_API_TEMPLATE = `({ response }) => {
   }))
 }`
 
-export const ALIGNED_NEWS_EXAMPLE = `({ response }) => {
-  if (!Array.isArray(response)) return []
-
-  return response.map(story => ({
-    url: story.source_url,
-    title: story.headline,
-    published_at: story.published_at,
-    excerpt: story.summary,
-    content_text: story.body ?? story.summary,
-  }))
-}`
-
 interface JsonApiSourceEditorProps {
   endpointUrl: string
   endpointReadOnly?: boolean
@@ -69,14 +60,56 @@ interface JsonApiSourceEditorProps {
   previewLoading: boolean
   previewDirty: boolean
   onPreview: () => void
+  generateError?: string | null
+  generating?: boolean
+  onGenerateWithAi?: () => void
   onLoadTemplate?: () => void
-  onLoadExample?: () => void
 }
 
 function renderCode(code: string): string {
   const source = code.trim() || JSON_API_TEMPLATE
   const html = hljs.highlight(source, { language: 'javascript' }).value
   return code.trim() ? html : `<span class="text-muted opacity-40">${html}</span>`
+}
+
+function buildAiPrompt(endpointUrl: string): string {
+  const targetUrl = endpointUrl.trim() || 'https://example.com/api/stories'
+  return `Write a JavaScript transform function for Oksskolten JSON API feeds.
+
+Return only a JavaScript function expression. Do not wrap it in markdown.
+
+Feed endpoint:
+${targetUrl}
+
+Required function signature:
+({ response, endpointUrl, fetchedAt, helpers }) => ({ items: [...] })
+or
+({ response, endpointUrl, fetchedAt, helpers }) => [...]
+
+The function should map the JSON response into feed items with this shape:
+- url: string, required, final article URL, must be https
+- title: string, required, article title
+- published_at: string | null, optional ISO date/time
+- excerpt: string | null, optional short preview text shown in the list
+- content_text: string | null, optional plain text or markdown body
+- content_html: string | null, optional HTML body if the API returns rich text
+- og_image: string | null, optional preview image URL
+
+Optional top-level return fields:
+- title: feed display name
+- icon_url: feed icon URL
+- view_type: "article" or "social"
+
+Rules:
+- Preserve useful text fields from the API whenever possible
+- Prefer content_text for plain text fields and content_html for HTML fields
+- If the response is nested, first locate the array of stories/items/posts
+- Use null for missing optional fields
+- Keep the script defensive: return [] if the response is unusable
+- Do not use fetch, imports, timers, or external libraries
+- You may use helpers.cleanUrl and helpers.normalizeDate if useful
+
+Produce only the function expression.`
 }
 
 export function JsonApiSourceEditor({
@@ -92,11 +125,26 @@ export function JsonApiSourceEditor({
   previewLoading,
   previewDirty,
   onPreview,
+  generateError,
+  generating = false,
+  onGenerateWithAi,
   onLoadTemplate,
-  onLoadExample,
 }: JsonApiSourceEditorProps) {
   const { t } = useI18n()
+  const [showAiPrompt, setShowAiPrompt] = useState(false)
+  const [copiedPrompt, setCopiedPrompt] = useState(false)
   const canPreview = endpointUrl.trim().length > 0 && transformScript.trim().length > 0 && !previewLoading
+  const aiPrompt = useMemo(() => buildAiPrompt(endpointUrl), [endpointUrl])
+
+  async function handleCopyAiPrompt() {
+    try {
+      await navigator.clipboard.writeText(aiPrompt)
+      setCopiedPrompt(true)
+      window.setTimeout(() => setCopiedPrompt(false), 1500)
+    } catch {
+      setCopiedPrompt(false)
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -140,22 +188,61 @@ export function JsonApiSourceEditor({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <label className="block text-xs font-medium text-muted" htmlFor="json-api-transform-script">
-            {t('jsonApi.transformScript')}
-          </label>
+          <div className="flex items-center gap-2">
+            <label className="block text-xs font-medium text-muted" htmlFor="json-api-transform-script">
+              {t('jsonApi.transformScript')}
+            </label>
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex h-5 w-5 items-center justify-center rounded-full text-muted hover:text-text transition-colors"
+                    aria-label={t('jsonApi.aiPromptTooltip')}
+                    onClick={() => setShowAiPrompt(prev => !prev)}
+                  >
+                    <Info size={14} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent className="hidden max-w-[18rem] md:block">
+                  {t('jsonApi.aiPromptTooltip')}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
           <div className="flex items-center gap-2">
             {onLoadTemplate && (
               <Button type="button" size="sm" variant="outline" onClick={onLoadTemplate}>
                 {t('jsonApi.useTemplate')}
               </Button>
             )}
-            {onLoadExample && (
-              <Button type="button" size="sm" variant="outline" onClick={onLoadExample}>
-                {t('jsonApi.useAlignedNewsExample')}
+            {onGenerateWithAi && (
+              <Button type="button" size="sm" variant="outline" onClick={onGenerateWithAi} disabled={generating || !endpointUrl.trim()}>
+                <Sparkles size={14} />
+                {generating ? t('jsonApi.generating') : t('jsonApi.generateWithAi')}
               </Button>
             )}
+            <Button type="button" size="sm" variant="outline" onClick={() => setShowAiPrompt(prev => !prev)}>
+              <Sparkles size={14} />
+              {t('jsonApi.aiPromptButton')}
+            </Button>
           </div>
         </div>
+
+        {showAiPrompt && (
+          <div className="rounded-md border border-border bg-bg-subtle p-3 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-text">{t('jsonApi.aiPromptTitle')}</p>
+                <p className="text-xs text-muted">{t('jsonApi.aiPromptDesc')}</p>
+              </div>
+              <Button type="button" size="sm" variant="outline" onClick={() => void handleCopyAiPrompt()}>
+                {copiedPrompt ? t('jsonApi.copied') : t('jsonApi.copyPrompt')}
+              </Button>
+            </div>
+            <pre className="max-h-64 overflow-auto rounded-md border border-border bg-bg-card px-3 py-3 text-xs text-text whitespace-pre-wrap break-words">{aiPrompt}</pre>
+          </div>
+        )}
 
         <div className="rounded-md border border-border bg-bg-input overflow-auto h-64 sm:h-72">
           <Editor
@@ -170,9 +257,50 @@ export function JsonApiSourceEditor({
         </div>
 
         <div className="rounded-md border border-border bg-bg-subtle px-3 py-2 text-xs text-muted space-y-1">
-          <p>{t('jsonApi.contractTitle')}</p>
+          <p className="font-medium text-text">{t('jsonApi.contractTitle')}</p>
           <p><code>{t('jsonApi.contractInput')}</code></p>
           <p><code>{t('jsonApi.contractOutput')}</code></p>
+        </div>
+
+        <div className="rounded-md border border-border bg-bg-subtle px-3 py-3 text-xs text-muted space-y-3">
+          <div>
+            <p className="font-medium text-text">{t('jsonApi.fieldGuideTitle')}</p>
+            <p className="mt-1">{t('jsonApi.fieldGuideDesc')}</p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <p className="font-medium text-text"><code>url</code></p>
+              <p>{t('jsonApi.field.url')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-text"><code>title</code></p>
+              <p>{t('jsonApi.field.title')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-text"><code>published_at</code></p>
+              <p>{t('jsonApi.field.publishedAt')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-text"><code>excerpt</code></p>
+              <p>{t('jsonApi.field.excerpt')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-text"><code>content_text</code></p>
+              <p>{t('jsonApi.field.contentText')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-text"><code>content_html</code></p>
+              <p>{t('jsonApi.field.contentHtml')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-text"><code>og_image</code></p>
+              <p>{t('jsonApi.field.ogImage')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-text"><code>title / icon_url / view_type</code></p>
+              <p>{t('jsonApi.field.feedMeta')}</p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -185,9 +313,8 @@ export function JsonApiSourceEditor({
         </Button>
       </div>
 
-      {previewError && (
-        <p className="text-xs text-error">{previewError}</p>
-      )}
+      {generateError && <p className="text-xs text-error">{generateError}</p>}
+      {previewError && <p className="text-xs text-error">{previewError}</p>}
 
       {preview && (
         <div className="rounded-xl border border-border bg-bg-subtle p-4 space-y-4">
