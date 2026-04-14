@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import useSWR from 'swr'
 import { fetcher, apiPost, apiPatch } from '../../../lib/fetcher'
-import { PROVIDER_LABELS, LLM_API_PROVIDERS, TRANSLATE_SERVICE_PROVIDERS } from '../../../data/aiModels'
+import { PROVIDER_LABELS, LLM_API_PROVIDERS, TRANSLATE_SERVICE_PROVIDERS, DEFAULT_MODELS } from '../../../data/aiModels'
 import { Input } from '@/components/ui/input'
 import { FormField } from '@/components/ui/form-field'
 import { ExternalLink, CircleDot, CircleCheck, CircleSlash } from 'lucide-react'
@@ -120,9 +120,13 @@ function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
         await apiPost(endpoint, { apiKey: apiKeyInput })
         void mutateKeyStatus()
       }
-      if (hasBaseUrlChanges) {
-        await apiPatch('/api/settings/preferences', { 'openai.base_url': trimmedBaseUrl })
-        void mutatePrefs()
+      if (isOpenAIProvider && (hasBaseUrlChanges || apiKeyInput)) {
+        const updatedPrefs = await apiPatch('/api/settings/preferences', {
+          'openai.base_url': trimmedBaseUrl,
+          'chat.provider': 'openai',
+          'chat.model': DEFAULT_MODELS.openai,
+        })
+        void mutatePrefs(updatedPrefs, false)
       }
       setApiKeyInput('')
       const successMessage = apiKeyInput && hasBaseUrlChanges
