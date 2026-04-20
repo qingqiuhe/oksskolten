@@ -1,9 +1,12 @@
+import useSWR from 'swr'
 import { Construction } from 'lucide-react'
 import { useI18n } from '../../lib/i18n'
 import { DataSection } from './sections/data-section'
 import { FetchScheduleSection } from './sections/fetch-schedule-section'
+import { SocialSourcesSection } from './sections/social-sources-section'
 import { RetentionSection } from './sections/retention-section'
 import { Separator } from '@/components/ui/separator'
+import { fetcher } from '../../lib/fetcher'
 
 function PlaceholderSection({ titleKey, descKey }: { titleKey: string; descKey: string }) {
   const { t } = useI18n()
@@ -22,10 +25,19 @@ function PlaceholderSection({ titleKey, descKey }: { titleKey: string; descKey: 
 }
 
 export function DataTab() {
+  const { data: me } = useSWR<{ id: number; role?: 'owner' | 'admin' | 'member' }>('/api/me', fetcher)
+  const isAdminLike = me?.role === 'owner' || me?.role === 'admin'
+
   return (
     <>
       <DataSection />
       <Separator />
+      {isAdminLike && (
+        <>
+          <SocialSourcesSection />
+          <Separator />
+        </>
+      )}
       <FetchScheduleSection />
       <Separator />
       <PlaceholderSection titleKey="settings.dbBackup" descKey="settings.dbBackupDesc" />

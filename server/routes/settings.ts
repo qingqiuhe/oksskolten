@@ -70,6 +70,9 @@ const NotificationChannelPatchBody = z.object({
 const FetchScheduleBody = z.object({
   min_interval_minutes: z.number().int().min(1).max(240),
 })
+const SocialSourcesBody = z.object({
+  rsshub_base_url: z.string(),
+})
 const NotificationTaskQuery = z.object({
   scope: z.enum(['self', 'all']).optional(),
 })
@@ -575,6 +578,47 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
 
     upsertSetting(FETCH_MIN_INTERVAL_SETTING_KEY, String(body.min_interval_minutes))
     reply.send({ min_interval_minutes: getFetchScheduleConfig().minIntervalMinutes })
+  })
+
+  // --- Social source settings ---
+
+  api.get('/api/settings/social-sources', async (_request, reply) => {
+    reply.send({ rsshub_base_url: getSetting('social.rsshub_base_url') ?? '' })
+  })
+
+  api.patch('/api/settings/social-sources', {
+    preHandler: [requireJson, requireRoles(['owner', 'admin'])],
+  }, async (request, reply) => {
+    const body = parseOrBadRequest(SocialSourcesBody, request.body, reply)
+    if (!body) return
+
+    const trimmed = body.rsshub_base_url.trim()
+    if (!trimmed) {
+      deleteSetting('social.rsshub_base_url')
+      reply.send({ rsshub_base_url: '' })
+      return
+    }
+
+    let parsed: URL
+    try {
+      parsed = new URL(trimmed)
+    } catch {
+      reply.status(400).send({ error: 'rsshub_base_url must be a valid URL' })
+      return
+    }
+
+    if (parsed.protocol !== 'https:') {
+      reply.status(400).send({ error: 'rsshub_base_url must use https' })
+      return
+    }
+
+    parsed.hash = ''
+    parsed.search = ''
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '')
+    const normalized = parsed.toString().replace(/\/+$/, '')
+    upsertSetting('social.rsshub_base_url', normalized)
+
+    reply.send({ rsshub_base_url: normalized })
   })
 
   // --- Image storage settings ---

@@ -5,7 +5,7 @@ import { getCurrentUserId } from '../identity.js'
 
 const log = logger.child('db')
 
-const INSTANCE_PREFIXES = ['auth.', 'system.', 'images.'] as const
+const INSTANCE_PREFIXES = ['auth.', 'system.', 'images.', 'social.'] as const
 
 function isInstanceSetting(key: string): boolean {
   return INSTANCE_PREFIXES.some(prefix => key.startsWith(prefix))

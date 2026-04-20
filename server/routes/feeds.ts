@@ -37,6 +37,7 @@ import {
   stringifyJsonApiSourceConfig,
 } from '../fetcher/json-api.js'
 import { queryRssBridge, inferCssSelectorBridge } from '../rss-bridge.js'
+import { probeRssFeedUrl, resolveXSocialFeed, SocialFeedError } from '../social-feeds.js'
 import { parseOpml, generateOpml } from '../opml.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 import {
@@ -114,6 +115,15 @@ const UpdateJsonApiConfigBody = z.object({
 })
 const GenerateJsonApiScriptBody = z.object({
   url: httpsUrl,
+})
+const CreateSocialFeedBody = z.object({
+  platform: z.literal('x'),
+  input: z.string().min(1, 'input is required'),
+  name: z.string().optional(),
+  icon_url: optionalHttpsUrl,
+  category_id: z.number().nullable().optional(),
+  feed_priority: optionalPriorityLevel,
+  priority_level: optionalPriorityLevel,
 })
 const FeedNotificationRuleBody = z.object({
   enabled: z.boolean(),
@@ -256,6 +266,58 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
         reply.status(201).send({ feed: toPublicFeed(feed), warnings: result.warnings })
       } catch (err) {
         reply.status(400).send({ error: err instanceof Error ? err.message : 'Invalid JSON API feed' })
+      }
+    },
+  )
+
+  api.post(
+    '/api/feeds/social',
+    { preHandler: [requireJson] },
+    async (request, reply) => {
+      const body = parseOrBadRequest(CreateSocialFeedBody, request.body, reply)
+      if (!body) return
+      const userId = getRequestUserId(request)
+
+      try {
+        if (body.platform !== 'x') {
+          reply.status(400).send({ error: 'Unsupported social platform' })
+          return
+        }
+
+        const resolved = resolveXSocialFeed(body.input)
+        if (getFeedByUrl(resolved.profileUrl, userId)) {
+          reply.status(409).send({ error: 'Feed URL already exists' })
+          return
+        }
+
+        await probeRssFeedUrl(resolved.rssUrl)
+
+        const feed = createFeed({
+          name: body.name?.trim() || `@${resolved.handle}`,
+          url: resolved.profileUrl,
+          icon_url: body.icon_url ?? null,
+          rss_url: resolved.rssUrl,
+          rss_bridge_url: null,
+          category_id: body.category_id ?? null,
+          priority_level: body.priority_level ?? body.feed_priority,
+          view_type: 'social',
+          type: 'rss',
+          ingest_kind: 'rss',
+          source_kind: 'social',
+          source_platform: 'x',
+        }, userId)
+
+        fetchSingleFeed(feed).catch(err => {
+          log.error(`Initial social feed fetch for ${feed.name} failed:`, err)
+        })
+
+        reply.status(201).send({ feed: toPublicFeed(feed) })
+      } catch (err) {
+        if (err instanceof SocialFeedError) {
+          reply.status(err.statusCode).send({ error: err.message })
+          return
+        }
+        reply.status(400).send({ error: err instanceof Error ? err.message : 'Invalid social feed' })
       }
     },
   )

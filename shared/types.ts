@@ -3,6 +3,7 @@
 
 import type { ArticleKind, FeedViewType } from './article-kind.js'
 import type { NotificationTimezone } from './notification-timezone.js'
+import type { FeedSourceKind, SocialSourcePlatform } from './social-sources.js'
 
 export interface Category {
   id: number
@@ -31,6 +32,8 @@ export interface Feed {
   requires_js_challenge: number
   type: 'rss' | 'clip'
   ingest_kind?: FeedIngestKind
+  source_kind?: FeedSourceKind | null
+  source_platform?: SocialSourcePlatform | null
   etag: string | null
   last_modified: string | null
   last_content_hash: string | null

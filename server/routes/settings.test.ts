@@ -489,6 +489,43 @@ describe('fetch schedule settings endpoints', () => {
   })
 })
 
+describe('social source settings endpoints', () => {
+  it('GET returns an empty RSSHub base url when unset', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/settings/social-sources',
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ rsshub_base_url: '' })
+  })
+
+  it('PATCH stores a normalized RSSHub base url', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/social-sources',
+      headers: json,
+      payload: { rsshub_base_url: 'https://rsshub-gamma-ebon.vercel.app/' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ rsshub_base_url: 'https://rsshub-gamma-ebon.vercel.app' })
+    expect(getSetting('social.rsshub_base_url')).toBe('https://rsshub-gamma-ebon.vercel.app')
+  })
+
+  it('PATCH rejects non-https urls', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/social-sources',
+      headers: json,
+      payload: { rsshub_base_url: 'http://rsshub.local' },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/https/i)
+  })
+})
+
 describe('notification task settings endpoints', () => {
   let savedAuthDisabled: string | undefined
 

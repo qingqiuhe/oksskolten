@@ -8,13 +8,15 @@ import type { FastifyInstance } from 'fastify'
 // Mocks
 // ---------------------------------------------------------------------------
 
-const { mockDiscoverRssUrl, mockFetchSingleFeed, mockQueryRssBridge, mockInferCssSelectorBridge, mockFetchAndTransformJsonApiFeed, mockGenerateJsonApiTransformScript } = vi.hoisted(() => ({
+const { mockDiscoverRssUrl, mockFetchSingleFeed, mockQueryRssBridge, mockInferCssSelectorBridge, mockFetchAndTransformJsonApiFeed, mockGenerateJsonApiTransformScript, mockResolveXSocialFeed, mockProbeRssFeedUrl } = vi.hoisted(() => ({
   mockDiscoverRssUrl: vi.fn(),
   mockFetchSingleFeed: vi.fn(),
   mockQueryRssBridge: vi.fn(),
   mockInferCssSelectorBridge: vi.fn(),
   mockFetchAndTransformJsonApiFeed: vi.fn(),
   mockGenerateJsonApiTransformScript: vi.fn(),
+  mockResolveXSocialFeed: vi.fn(),
+  mockProbeRssFeedUrl: vi.fn(),
 }))
 
 vi.mock('../fetcher.js', async () => {
@@ -36,6 +38,15 @@ vi.mock('../rss-bridge.js', () => ({
   queryRssBridge: (...args: unknown[]) => mockQueryRssBridge(...args),
   inferCssSelectorBridge: (...args: unknown[]) => mockInferCssSelectorBridge(...args),
 }))
+
+vi.mock('../social-feeds.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../social-feeds.js')>()
+  return {
+    ...actual,
+    resolveXSocialFeed: (...args: unknown[]) => mockResolveXSocialFeed(...args),
+    probeRssFeedUrl: (...args: unknown[]) => mockProbeRssFeedUrl(...args),
+  }
+})
 
 vi.mock('../fetcher/json-api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../fetcher/json-api.js')>()
@@ -101,6 +112,12 @@ beforeEach(async () => {
     provider: 'anthropic',
     model: 'claude-haiku-4-5-20251001',
   })
+  mockResolveXSocialFeed.mockReset().mockReturnValue({
+    handle: 'elonmusk',
+    profileUrl: 'https://x.com/elonmusk',
+    rssUrl: 'https://rsshub-gamma-ebon.vercel.app/twitter/user/elonmusk',
+  })
+  mockProbeRssFeedUrl.mockReset().mockResolvedValue(undefined)
 })
 
 // ---------------------------------------------------------------------------
@@ -369,6 +386,75 @@ describe('POST /api/feeds — RSS discovery pipeline', () => {
 
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(mockFetchSingleFeed).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/feeds/social', () => {
+  it('creates an X social feed via RSSHub', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds/social',
+      headers: json,
+      payload: {
+        platform: 'x',
+        input: '@elonmusk',
+      },
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(mockResolveXSocialFeed).toHaveBeenCalledWith('@elonmusk')
+    expect(mockProbeRssFeedUrl).toHaveBeenCalledWith('https://rsshub-gamma-ebon.vercel.app/twitter/user/elonmusk')
+    expect(res.json().feed).toEqual(expect.objectContaining({
+      name: '@elonmusk',
+      url: 'https://x.com/elonmusk',
+      rss_url: 'https://rsshub-gamma-ebon.vercel.app/twitter/user/elonmusk',
+      view_type: 'social',
+      source_kind: 'social',
+      source_platform: 'x',
+    }))
+  })
+
+  it('returns 409 when the canonical X profile url already exists', async () => {
+    seedFeed({
+      name: '@elonmusk',
+      url: 'https://x.com/elonmusk',
+      rss_url: 'https://rsshub-gamma-ebon.vercel.app/twitter/user/elonmusk',
+      view_type: 'social',
+      source_kind: 'social',
+      source_platform: 'x',
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds/social',
+      headers: json,
+      payload: {
+        platform: 'x',
+        input: 'https://twitter.com/elonmusk',
+      },
+    })
+
+    expect(res.statusCode).toBe(409)
+    expect(res.json().error).toMatch(/already exists/i)
+  })
+
+  it('returns a social feed validation error', async () => {
+    mockResolveXSocialFeed.mockImplementation(() => {
+      throw new Error('Enter an X handle or profile URL')
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/feeds/social',
+      headers: json,
+      payload: {
+        platform: 'x',
+        input: 'https://x.com/elonmusk/status/1',
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/X handle or profile URL/i)
   })
 })
 

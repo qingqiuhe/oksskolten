@@ -1,5 +1,6 @@
 import { demoStore } from './demo-store'
 import { dt, getLocale, streamText } from './i18n'
+import { buildRssHubTwitterUserUrl, parseXAccountInput } from '../../../shared/social-sources'
 
 // ---------------------------------------------------------------------------
 // Intercept global fetch for endpoints that use raw fetch (SSE streams, etc.)
@@ -94,6 +95,7 @@ function matchSuggestionReply(suggestionKey: string | undefined): string | null 
 
 let demoProfileCustomName: string | null = null
 let demoProfileAvatarSeed: string | null = null
+let demoSocialRssHubBaseUrl = 'https://rsshub-gamma-ebon.vercel.app'
 
 /** Narrow unknown body to a typed object. No runtime validation (demo-only). */
 function asBody<T>(body: unknown): T {
@@ -167,6 +169,10 @@ export async function demoFetcher(url: string): Promise<unknown> {
       'translate.model': '',
       'translate.target_lang': null,
     }
+  }
+
+  if (path === '/api/settings/social-sources') {
+    return { rsshub_base_url: demoSocialRssHubBaseUrl }
   }
 
   if (path === '/api/chat/conversations') {
@@ -258,6 +264,24 @@ export async function demoApiPost(url: string, body?: unknown): Promise<unknown>
         dropped_count: 0,
       },
     }
+  }
+
+  if (path === '/api/feeds/social') {
+    const request = asBody<{ platform: 'x'; input: string; name?: string; icon_url?: string | null; category_id?: number | null; priority_level?: number }>(body)
+    if (request.platform !== 'x') throw new Error('Unsupported social platform')
+    const parsed = parseXAccountInput(request.input)
+    if (!parsed) throw new Error('Enter an X handle or profile URL')
+    if (!demoSocialRssHubBaseUrl) throw new Error('RSSHub instance is not configured')
+    return demoStore.addFeed({
+      name: request.name || `@${parsed.handle}`,
+      url: parsed.profileUrl,
+      icon_url: request.icon_url ?? null,
+      category_id: request.category_id ?? undefined,
+      rss_url: buildRssHubTwitterUserUrl(demoSocialRssHubBaseUrl, parsed.handle),
+      view_type: 'social',
+      source_kind: 'social',
+      source_platform: 'x',
+    })
   }
 
   // /api/articles/from-url (web clip)
@@ -364,6 +388,12 @@ export async function demoApiPatch(url: string, body: unknown): Promise<unknown>
   // /api/settings/preferences
   if (path === '/api/settings/preferences') {
     return {} // no-op, settings are localStorage-based
+  }
+
+  if (path === '/api/settings/social-sources') {
+    const patch = asBody<{ rsshub_base_url?: string }>(body)
+    demoSocialRssHubBaseUrl = patch.rsshub_base_url?.trim() || ''
+    return { rsshub_base_url: demoSocialRssHubBaseUrl }
   }
 
   return {}

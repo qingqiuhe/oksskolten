@@ -61,6 +61,8 @@ interface SourceFeedRow {
   rss_bridge_url: string | null
   view_type: Feed['view_type']
   requires_js_challenge: number
+  source_kind?: Feed['source_kind']
+  source_platform?: Feed['source_platform']
   category_id: number | null
   category_name: string | null
   type: Feed['type']
@@ -106,6 +108,8 @@ export async function userRoutes(api: FastifyInstance): Promise<void> {
           f.rss_bridge_url,
           f.view_type,
           f.requires_js_challenge,
+          f.source_kind,
+          f.source_platform,
           f.ingest_kind,
           f.source_config_json,
           f.category_id,
@@ -126,6 +130,8 @@ export async function userRoutes(api: FastifyInstance): Promise<void> {
           f.rss_bridge_url,
           f.view_type,
           f.requires_js_challenge,
+          f.source_kind,
+          f.source_platform,
           f.ingest_kind,
           f.source_config_json,
           f.category_id,
@@ -181,6 +187,8 @@ export async function userRoutes(api: FastifyInstance): Promise<void> {
           requires_js_challenge: feed.requires_js_challenge,
           type: 'rss',
           ingest_kind: feed.ingest_kind ?? 'rss',
+          source_kind: feed.source_kind ?? 'site',
+          source_platform: feed.source_platform ?? null,
           source_config_json: feed.source_config_json ?? null,
         }, user.id)
         importedFeedsToFetch.push(importedFeed)

@@ -70,6 +70,8 @@ interface SeedFeed {
   rss_url: string | null
   rss_bridge_url: string | null
   ingest_kind?: 'rss' | 'json_api'
+  source_kind?: 'site' | 'social' | null
+  source_platform?: 'x' | null
   source_config_json?: string | null
   view_type: FeedViewType | null
   category_id: number | null
@@ -174,6 +176,8 @@ function createFeed(overrides: Partial<SeedFeed> & Pick<SeedFeed, 'name' | 'url'
     rss_url: overrides.url,
     rss_bridge_url: null,
     ingest_kind: 'rss',
+    source_kind: 'site',
+    source_platform: null,
     source_config_json: null,
     view_type: null,
     category_id: null,
@@ -342,14 +346,16 @@ export const demoStore = {
   },
 
   // --- Write ---
-  addFeed(body: { name: string; url: string; icon_url?: string | null; category_id?: number; category_name?: string; ingest_kind?: 'rss' | 'json_api'; source_config_json?: string | null; view_type?: FeedViewType | null }) {
+  addFeed(body: { name: string; url: string; icon_url?: string | null; rss_url?: string | null; category_id?: number; category_name?: string; ingest_kind?: 'rss' | 'json_api'; source_kind?: 'site' | 'social' | null; source_platform?: 'x' | null; source_config_json?: string | null; view_type?: FeedViewType | null }) {
     const feed = createFeed({
       name: body.name || body.url,
       url: body.url,
       icon_url: body.icon_url ?? null,
+      rss_url: body.rss_url ?? (body.ingest_kind === 'json_api' ? null : body.url),
       ingest_kind: body.ingest_kind ?? 'rss',
+      source_kind: body.source_kind ?? 'site',
+      source_platform: body.source_platform ?? null,
       source_config_json: body.source_config_json ?? null,
-      rss_url: body.ingest_kind === 'json_api' ? null : body.url,
       category_id: body.category_id ?? null,
       category_name: body.category_name ?? null,
       view_type: body.view_type ?? null,

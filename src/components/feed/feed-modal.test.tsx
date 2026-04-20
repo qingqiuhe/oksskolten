@@ -11,6 +11,8 @@ vi.mock('react-router-dom', () => ({
 
 vi.mock('../../lib/fetcher', () => ({
   apiPost: vi.fn().mockResolvedValue(undefined),
+  apiPatch: vi.fn(),
+  fetcher: vi.fn().mockResolvedValue({ rsshub_base_url: 'https://rsshub-gamma-ebon.vercel.app' }),
   ApiError: class ApiError extends Error {
     status: number
     data: Record<string, unknown>
@@ -59,6 +61,7 @@ describe('FeedModal', () => {
     render(<FeedModal {...defaultProps} />)
     expect(screen.getByText('Get Started')).toBeTruthy()
     expect(screen.getByText('Add an RSS feed from a URL')).toBeTruthy()
+    expect(screen.getByText('Subscribe to a social media account')).toBeTruthy()
     expect(screen.getByText('Clip an article from a URL')).toBeTruthy()
     expect(screen.getByText('Create a folder to organize feeds')).toBeTruthy()
   })
@@ -93,6 +96,16 @@ describe('FeedModal', () => {
     expect(screen.getByText('Add JSON API Feed')).toBeTruthy()
     expect(screen.getByText('Transform Script')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Generate With AI' })).toBeTruthy()
+  })
+
+  it('navigates through social platform selection to the X step', async () => {
+    render(<FeedModal {...defaultProps} />)
+    await user.click(screen.getByText('Subscribe to a social media account'))
+    expect(screen.getByText('Add Social Media Feed')).toBeTruthy()
+
+    await user.click(screen.getByText('Subscribe to an X user timeline'))
+    expect(screen.getByText('Add X Feed')).toBeTruthy()
+    expect(screen.getByLabelText('X handle or profile URL')).toBeTruthy()
   })
 
   it('back button returns to select step', async () => {
@@ -245,6 +258,32 @@ describe('FeedModal', () => {
     expect(onCreated).toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
     expect(onFetchStarted).toHaveBeenCalledWith(9)
+  })
+
+  it('creates a social X feed', async () => {
+    vi.mocked(apiPost).mockResolvedValueOnce({
+      feed: { id: 13 },
+    })
+
+    const onCreated = vi.fn()
+    const onClose = vi.fn()
+    const onFetchStarted = vi.fn()
+    render(<FeedModal {...defaultProps} onCreated={onCreated} onClose={onClose} onFetchStarted={onFetchStarted} />)
+
+    await user.click(screen.getByText('Subscribe to a social media account'))
+    await user.click(screen.getByText('Subscribe to an X user timeline'))
+    await user.type(screen.getByLabelText('X handle or profile URL'), '@elonmusk')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith('/api/feeds/social', expect.objectContaining({
+        platform: 'x',
+        input: '@elonmusk',
+      }))
+    })
+    expect(onCreated).toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalled()
+    expect(onFetchStarted).toHaveBeenCalledWith(13)
   })
 
   // --- Helper for SSE tests ---

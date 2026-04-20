@@ -101,12 +101,14 @@ export function createFeed(data: {
   requires_js_challenge?: number
   type?: 'rss' | 'clip'
   ingest_kind?: NonNullable<Feed['ingest_kind']>
+  source_kind?: NonNullable<Feed['source_kind']>
+  source_platform?: Feed['source_platform']
   source_config_json?: string | null
 }, userId?: number | null): Feed {
   const scopedUserId = resolveUserId(userId)
   const info = runNamed(`
-    INSERT INTO feeds (user_id, name, url, icon_url, rss_url, rss_bridge_url, view_type, category_id, priority_level, requires_js_challenge, type, ingest_kind, source_config_json)
-    VALUES (@user_id, @name, @url, @icon_url, @rss_url, @rss_bridge_url, @view_type, @category_id, @priority_level, @requires_js_challenge, @type, @ingest_kind, @source_config_json)
+    INSERT INTO feeds (user_id, name, url, icon_url, rss_url, rss_bridge_url, view_type, category_id, priority_level, requires_js_challenge, type, ingest_kind, source_kind, source_platform, source_config_json)
+    VALUES (@user_id, @name, @url, @icon_url, @rss_url, @rss_bridge_url, @view_type, @category_id, @priority_level, @requires_js_challenge, @type, @ingest_kind, @source_kind, @source_platform, @source_config_json)
   `, {
     user_id: scopedUserId,
     name: data.name,
@@ -120,6 +122,8 @@ export function createFeed(data: {
     requires_js_challenge: data.requires_js_challenge ?? 0,
     type: data.type ?? 'rss',
     ingest_kind: data.ingest_kind ?? 'rss',
+    source_kind: data.source_kind ?? 'site',
+    source_platform: data.source_platform ?? null,
     source_config_json: data.source_config_json ?? null,
   })
   return getDb().prepare('SELECT * FROM feeds WHERE id = ?').get(info.lastInsertRowid) as Feed
