@@ -38,7 +38,8 @@ describe('SocialSourcesSection', () => {
   it('renders the current RSSHub base url from the API', () => {
     render(<SocialSourcesSection />)
     expect(screen.getByDisplayValue('https://rsshub-gamma-ebon.vercel.app')).toBeTruthy()
-    expect(screen.getByText('Configure the RSSHub instance used for social media subscriptions')).toBeTruthy()
+    expect(screen.getByText('Used to fetch subscription content from social media sources')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'RSSHub is a service that turns content from many websites into RSS feeds' })).toBeTruthy()
   })
 
   it('saves a new RSSHub base url', async () => {

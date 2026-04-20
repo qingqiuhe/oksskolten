@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import { SWRConfig } from 'swr'
 import { LocaleContext } from '../../lib/i18n'
@@ -32,8 +33,10 @@ vi.mock('../../contexts/fetch-progress-context', () => ({
 }))
 
 
+const mockFeedModal = vi.fn(() => null)
+
 vi.mock('./feed-modal', () => ({
-  FeedModal: () => null,
+  FeedModal: (props: unknown) => mockFeedModal(props),
 }))
 
 vi.mock('../ui/ConfirmDialog', () => ({
@@ -163,6 +166,21 @@ function renderFeedList(
 describe('FeedList', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('keeps social feed creation enabled while the RSSHub setting is still loading', () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    renderFeedList(
+      {},
+      { feeds: [], bookmark_count: 0, like_count: 0, clip_feed_id: null },
+      { categories: [] },
+    )
+
+    return user.click(screen.getByText('Get Started')).then(() => {
+      expect(mockFeedModal).toHaveBeenCalled()
+      const lastProps = mockFeedModal.mock.calls.at(-1)?.[0] as { canUseSocial?: boolean }
+      expect(lastProps.canUseSocial).toBe(true)
+    })
   })
 
   it('renders nav items: Inbox, Read Later, Liked, Read', () => {

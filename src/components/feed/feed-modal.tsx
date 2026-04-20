@@ -19,6 +19,7 @@ interface FeedModalProps {
   onArticleCreated?: () => void
   categories?: Category[]
   canUseJsonApi?: boolean
+  canUseSocial?: boolean
 }
 
 type ModalStep = 'select' | 'feed' | 'folder' | 'article' | 'jsonApi' | 'social' | 'socialX'
@@ -31,7 +32,7 @@ function BackButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarted, onArticleCreated, categories = [], canUseJsonApi = false }: FeedModalProps) {
+export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarted, onArticleCreated, categories = [], canUseJsonApi = false, canUseSocial = true }: FeedModalProps) {
   const { t } = useI18n()
   const [step, setStep] = useState<ModalStep>('select')
 
@@ -80,21 +81,23 @@ export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarte
                 </div>
               </button>
             )}
-            <button
-              onClick={() => setStep('social')}
-              className="w-full p-3 rounded-xl border border-border hover:border-accent hover:bg-hover transition-colors text-left flex items-center gap-3"
-            >
-              <div
-                className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-                style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' }}
+            {canUseSocial && (
+              <button
+                onClick={() => setStep('social')}
+                className="w-full p-3 rounded-xl border border-border hover:border-accent hover:bg-hover transition-colors text-left flex items-center gap-3"
               >
-                <Share2 size={18} strokeWidth={1.5} className="text-accent" />
-              </div>
-              <div>
-                <div className="text-sm font-medium text-text">{t('modal.addSocialOption')}</div>
-                <div className="text-xs text-muted">{t('modal.addSocialDesc')}</div>
-              </div>
-            </button>
+                <div
+                  className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+                  style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' }}
+                >
+                  <Share2 size={18} strokeWidth={1.5} className="text-accent" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-text">{t('modal.addSocialOption')}</div>
+                  <div className="text-xs text-muted">{t('modal.addSocialDesc')}</div>
+                </div>
+              </button>
+            )}
             <button
               onClick={() => setStep('article')}
               className="w-full p-3 rounded-xl border border-border hover:border-accent hover:bg-hover transition-colors text-left flex items-center gap-3"

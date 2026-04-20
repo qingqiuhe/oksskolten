@@ -71,6 +71,11 @@ describe('FeedModal', () => {
     expect(screen.getByText('Add a feed from a JSON API and transform script')).toBeTruthy()
   })
 
+  it('hides the social option when RSSHub is unavailable', () => {
+    render(<FeedModal {...defaultProps} canUseSocial={false} />)
+    expect(screen.queryByText('Subscribe to a social media account')).toBeNull()
+  })
+
   it('navigates to feed step on click', async () => {
     render(<FeedModal {...defaultProps} />)
     await user.click(screen.getByText('Add an RSS feed from a URL'))
@@ -284,6 +289,18 @@ describe('FeedModal', () => {
     expect(onCreated).toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
     expect(onFetchStarted).toHaveBeenCalledWith(13)
+  })
+
+  it('does not expose the generated RSSHub feed URL in the social X form', async () => {
+    render(<FeedModal {...defaultProps} />)
+
+    await user.click(screen.getByText('Subscribe to a social media account'))
+    await user.click(screen.getByText('Subscribe to an X user timeline'))
+    await user.type(screen.getByLabelText('X handle or profile URL'), '@elonmusk')
+
+    expect(screen.queryByText('Generated feed URL')).toBeNull()
+    expect(screen.queryByText('生成的 feed URL')).toBeNull()
+    expect(screen.queryByText(/twitter\/user\/elonmusk/i)).toBeNull()
   })
 
   // --- Helper for SSE tests ---

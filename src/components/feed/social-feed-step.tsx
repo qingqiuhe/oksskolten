@@ -8,7 +8,7 @@ import { Input } from '../ui/input'
 import { FeedIconPreview } from './feed-icon-preview'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import type { Category } from '../../../shared/types'
-import { buildRssHubTwitterUserUrl, parseXAccountInput } from '../../../shared/social-sources'
+import { parseXAccountInput } from '../../../shared/social-sources'
 
 interface SocialFeedStepProps {
   onClose: () => void
@@ -39,7 +39,6 @@ export function SocialFeedStep({ onClose, onCreated, onFetchStarted, categories 
 
   const parsed = useMemo(() => parseXAccountInput(input), [input])
   const rsshubBaseUrl = data?.rsshub_base_url?.trim() ?? ''
-  const rssPreviewUrl = parsed && rsshubBaseUrl ? buildRssHubTwitterUserUrl(rsshubBaseUrl, parsed.handle) : ''
   const canCreate = Boolean(parsed) && Boolean(rsshubBaseUrl) && !submitting
 
   async function handleSubmit(e: React.FormEvent) {
@@ -96,12 +95,6 @@ export function SocialFeedStep({ onClose, onCreated, onFetchStarted, categories 
         <div>
           <p className="text-xs font-medium text-muted">{t('socialFeed.profilePreview')}</p>
           <p className="text-sm break-all text-text">{parsed?.profileUrl ?? t('socialFeed.previewPending')}</p>
-        </div>
-        <div>
-          <p className="text-xs font-medium text-muted">{t('socialFeed.feedPreview')}</p>
-          <p className="text-sm break-all text-text">
-            {rssPreviewUrl || (rsshubBaseUrl ? t('socialFeed.previewPending') : t('socialFeed.rsshubNotConfigured'))}
-          </p>
         </div>
       </div>
 

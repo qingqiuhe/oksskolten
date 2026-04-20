@@ -85,6 +85,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
   const { data: me } = useSWR<{ id: number; role?: 'owner' | 'admin' | 'member' }>('/api/me', fetcher)
   const { data: feedsData, mutate: mutateFeeds } = useSWR<{ feeds: FeedWithCounts[]; bookmark_count: number; like_count: number; clip_feed_id: number | null }>('/api/feeds', fetcher)
   const { data: categoriesData, mutate: mutateCategories } = useSWR<{ categories: Category[] }>('/api/categories', fetcher)
+  const { data: socialSourcesData } = useSWR<{ rsshub_base_url: string }>('/api/settings/social-sources', fetcher)
   const feeds = useMemo(() => feedsData?.feeds ?? [], [feedsData])
   const categories = useMemo(() => categoriesData?.categories ?? [], [categoriesData])
 
@@ -227,6 +228,9 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
 
   const totalUnread = feeds.reduce((sum, f) => sum + (f.disabled || f.type === 'clip' ? 0 : f.unread_count), 0)
   const canUseJsonApi = me?.role === 'owner' || me?.role === 'admin'
+  const canUseSocial = socialSourcesData == null
+    ? true
+    : Boolean(socialSourcesData.rsshub_base_url?.trim())
 
   function showPriorityChangedToast(feed: FeedWithCounts, priorityLevel: number) {
     toast.success(t('feeds.priority.lowered', {
@@ -572,6 +576,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
           onArticleCreated={() => { void mutateFeeds(); onArticleMoved?.() }}
           categories={categories}
           canUseJsonApi={canUseJsonApi}
+          canUseSocial={canUseSocial}
         />
       )}
 
