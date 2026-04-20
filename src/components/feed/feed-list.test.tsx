@@ -32,11 +32,13 @@ vi.mock('../../contexts/fetch-progress-context', () => ({
   }),
 }))
 
-
-const mockFeedModal = vi.fn(() => null)
+let lastFeedModalProps: { canUseSocial?: boolean } | null = null
 
 vi.mock('./feed-modal', () => ({
-  FeedModal: (props: unknown) => mockFeedModal(props),
+  FeedModal: (props: unknown) => {
+    lastFeedModalProps = props as { canUseSocial?: boolean }
+    return null
+  },
 }))
 
 vi.mock('../ui/ConfirmDialog', () => ({
@@ -166,6 +168,7 @@ function renderFeedList(
 describe('FeedList', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    lastFeedModalProps = null
   })
 
   it('keeps social feed creation enabled while the RSSHub setting is still loading', () => {
@@ -177,9 +180,8 @@ describe('FeedList', () => {
     )
 
     return user.click(screen.getByText('Get Started')).then(() => {
-      expect(mockFeedModal).toHaveBeenCalled()
-      const lastProps = mockFeedModal.mock.calls.at(-1)?.[0] as { canUseSocial?: boolean }
-      expect(lastProps.canUseSocial).toBe(true)
+      expect(lastFeedModalProps).not.toBeNull()
+      expect(lastFeedModalProps?.canUseSocial).toBe(true)
     })
   })
 
