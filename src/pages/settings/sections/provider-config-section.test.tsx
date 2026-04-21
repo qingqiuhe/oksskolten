@@ -112,6 +112,7 @@ describe('ProviderConfigSection', () => {
       <ProviderConfigSection
         t={t}
         settings={{
+          chatProvider: 'anthropic',
           translateTargetLang: '',
           setTranslateTargetLang: vi.fn(),
         } as any}
@@ -130,6 +131,31 @@ describe('ProviderConfigSection', () => {
         'openai.base_url': 'https://new.example/v1',
         'chat.provider': 'openai',
         'chat.model': 'gpt-4.1-mini',
+      })
+    })
+  })
+
+  it('does not reset chat.model when chat provider is already openai', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+
+    render(
+      <ProviderConfigSection
+        t={t}
+        settings={{
+          chatProvider: 'openai',
+          translateTargetLang: '',
+          setTranslateTargetLang: vi.fn(),
+        } as any}
+      />,
+    )
+
+    await user.type(screen.getByPlaceholderText('sk-...'), 'sk-new')
+    await user.click(screen.getAllByRole('button', { name: 'Save' })[0])
+
+    await waitFor(() => {
+      expect(mockApiPatch).toHaveBeenCalledWith('/api/settings/preferences', {
+        'openai.base_url': 'https://old.example/v1',
+        'chat.provider': 'openai',
       })
     })
   })

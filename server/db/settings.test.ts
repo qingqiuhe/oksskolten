@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
-import { getSetting, upsertSetting, deleteSetting, getOrCreateJwtSecret } from '../db.js'
+import { getDb, getSetting, upsertSetting, deleteSetting, getOrCreateJwtSecret, upsertUserSetting } from '../db.js'
+
+function insertActiveUser(userId: number, email = `user-${userId}@example.com`) {
+  getDb().prepare(`
+    INSERT INTO users (id, email, password_hash, role, status)
+    VALUES (?, ?, ?, 'member', 'active')
+  `).run(userId, email, 'hash')
+}
 
 beforeEach(() => {
   setupTestDb()
@@ -79,5 +86,27 @@ describe('getOrCreateJwtSecret', () => {
     const secret = getOrCreateJwtSecret()
     // base64url uses only [A-Za-z0-9_-]
     expect(secret).toMatch(/^[A-Za-z0-9_-]+$/)
+  })
+})
+
+describe('legacy fallback for user-scoped reads', () => {
+  it('falls back to legacy instance config keys for logged-in users', () => {
+    upsertSetting('openai.base_url', 'https://legacy.example/v1')
+
+    expect(getSetting('openai.base_url', 42)).toBe('https://legacy.example/v1')
+  })
+
+  it('prefers user-scoped value over legacy fallback for instance config keys', () => {
+    insertActiveUser(42)
+    upsertSetting('openai.base_url', 'https://legacy.example/v1')
+    upsertUserSetting(42, 'openai.base_url', 'https://user.example/v1')
+
+    expect(getSetting('openai.base_url', 42)).toBe('https://user.example/v1')
+  })
+
+  it('does not fall back to legacy api keys for logged-in users', () => {
+    upsertSetting('api_key.openai', 'legacy-secret')
+
+    expect(getSetting('api_key.openai', 42)).toBeUndefined()
   })
 })

@@ -6,9 +6,18 @@ import { getCurrentUserId } from '../identity.js'
 const log = logger.child('db')
 
 const INSTANCE_PREFIXES = ['auth.', 'system.', 'images.', 'social.'] as const
+const LEGACY_INSTANCE_FALLBACK_KEYS = new Set([
+  'openai.base_url',
+  'ollama.base_url',
+  'ollama.custom_headers',
+])
 
 function isInstanceSetting(key: string): boolean {
   return INSTANCE_PREFIXES.some(prefix => key.startsWith(prefix))
+}
+
+function shouldFallbackToLegacyForUserScopedKey(key: string): boolean {
+  return LEGACY_INSTANCE_FALLBACK_KEYS.has(key)
 }
 
 function resolveUserId(userId?: number | null): number | null {
@@ -66,7 +75,9 @@ export function getSetting(key: string, userId?: number | null): string | undefi
 
   const scopedUserId = resolveUserId(userId)
   if (scopedUserId != null) {
-    return getUserSetting(scopedUserId, key)
+    const userValue = getUserSetting(scopedUserId, key)
+    if (userValue !== undefined) return userValue
+    return shouldFallbackToLegacyForUserScopedKey(key) ? getLegacySetting(key) : undefined
   }
 
   return getLegacySetting(key)

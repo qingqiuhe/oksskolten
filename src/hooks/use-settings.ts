@@ -94,7 +94,83 @@ export function useSettings() {
 
   const dirtyKeysRef = useRef<Set<string>>(new Set())
   const pendingRef = useRef<Partial<Prefs>>({})
+  const inFlightCountsRef = useRef<Map<keyof Prefs, number>>(new Map())
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  const startInFlight = useCallback((keys: Array<keyof Prefs>) => {
+    const counts = inFlightCountsRef.current
+    for (const key of keys) {
+      counts.set(key, (counts.get(key) || 0) + 1)
+    }
+  }, [])
+
+  const finishInFlight = useCallback((keys: Array<keyof Prefs>, clearDirty: boolean) => {
+    const counts = inFlightCountsRef.current
+    for (const key of keys) {
+      const current = counts.get(key) || 0
+      const next = current <= 1 ? 0 : current - 1
+      if (next === 0) counts.delete(key)
+      else counts.set(key, next)
+      if (clearDirty && next === 0 && !(key in pendingRef.current)) {
+        dirtyKeysRef.current.delete(key)
+      }
+    }
+  }, [])
+
+  const isHydrationBlocked = useCallback((key: keyof Prefs): boolean => {
+    return key in pendingRef.current || (inFlightCountsRef.current.get(key) || 0) > 0
+  }, [])
+
+  const isCustomThemesHydrationBlocked = useCallback((): boolean => {
+    return 'custom_themes' in pendingRef.current || (inFlightCountsRef.current.get('custom_themes') || 0) > 0
+  }, [])
+
+  const savePatch = useCallback((patch: Partial<Prefs>): void => {
+    const keys = Object.keys(patch) as Array<keyof Prefs>
+    if (keys.length === 0) return
+    startInFlight(keys)
+    void apiPatch('/api/settings/preferences', patch)
+      .then(() => {
+        finishInFlight(keys, true)
+      })
+      .catch(() => {
+        finishInFlight(keys, false)
+      })
+  }, [finishInFlight, startInFlight])
+
+  const flushPatchKeepalive = useCallback((patch: Partial<Prefs>): void => {
+    const keys = Object.keys(patch) as Array<keyof Prefs>
+    if (keys.length === 0) return
+    startInFlight(keys)
+    fetch('/api/settings/preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(patch),
+      keepalive: true,
+    }).catch(() => {})
+  }, [startInFlight])
+
+  const backfillPatch = useCallback((patch: Partial<Prefs>): void => {
+    const keys = Object.keys(patch) as Array<keyof Prefs>
+    if (keys.length === 0) return
+    startInFlight(keys)
+    void apiPatch('/api/settings/preferences', patch)
+      .then(() => {
+        finishInFlight(keys, false)
+      })
+      .catch(() => {
+        finishInFlight(keys, false)
+      })
+  }, [finishInFlight, startInFlight])
+
+  const updatePending = useCallback((key: keyof Prefs, value: string): void => {
+    dirtyKeysRef.current.add(key)
+    pendingRef.current = {
+      ...pendingRef.current,
+      [key]: value,
+    }
+  }, [])
+
 
   // Stable refs for backfill values (only needed for keys that backfill to DB)
   const themeNameRef = useRef(themeName)
@@ -176,7 +252,7 @@ export function useSettings() {
     ]
 
     for (const { key, setter, backfillRef, validate } of hydrationMap) {
-      if (dirty.has(key)) continue
+      if (dirty.has(key) && isHydrationBlocked(key)) continue
       const value = prefs[key]
       if (value) {
         if (!validate || validate(value)) setter(value)
@@ -186,23 +262,21 @@ export function useSettings() {
       }
     }
 
-    if (Object.keys(backfill).length > 0) {
-      apiPatch('/api/settings/preferences', backfill).catch(() => {})
-    }
-  }, [prefs, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setCategoryUnreadOnly, setLayout, setMascot, setHighlightTheme, setArticleFont, setKeyboardNavigation, setKeybindings])
+    backfillPatch(backfill)
+  }, [prefs, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setCategoryUnreadOnly, setLayout, setMascot, setHighlightTheme, setArticleFont, setKeyboardNavigation, setKeybindings, backfillPatch, isHydrationBlocked])
 
   // Hydrate custom themes from DB
   useEffect(() => {
     if (!prefs) return
     const raw = prefs['custom_themes']
-    if (raw && !dirtyKeysRef.current.has('custom_themes')) {
+    if (raw && !(dirtyKeysRef.current.has('custom_themes') && isCustomThemesHydrationBlocked())) {
       try {
         const parsed = JSON.parse(raw) as Theme[]
         setCustomThemesState(parsed)
         localStorage.setItem('custom-themes', raw)
       } catch { /* ignore malformed JSON from DB — keep existing localStorage themes */ }
     }
-  }, [prefs])
+  }, [prefs, isCustomThemesHydrationBlocked])
 
   // Flush pending changes immediately via fetch keepalive (survives page unload)
   const flushNow = useCallback(() => {
@@ -212,28 +286,20 @@ export function useSettings() {
     }
     const patch = { ...pendingRef.current }
     pendingRef.current = {}
-    if (Object.keys(patch).length > 0) {
-      fetch('/api/settings/preferences', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(patch),
-        keepalive: true,
-      }).catch(() => {})
-    }
-  }, [])
+    flushPatchKeepalive(patch)
+  }, [flushPatchKeepalive])
 
-  // Debounced save: 500ms after last change
   const scheduleSave = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
       timerRef.current = undefined
       const patch = { ...pendingRef.current }
       pendingRef.current = {}
-      if (Object.keys(patch).length > 0) {
-        apiPatch('/api/settings/preferences', patch).catch(() => {})
-      }
+      savePatch(patch)
     }, SETTINGS_SYNC_DEBOUNCE_MS)
-  }, [])
+  }, [savePatch])
+
+  // Flush on beforeunload + unmount
 
   // Flush on beforeunload + unmount
   useEffect(() => {
@@ -274,9 +340,8 @@ export function useSettings() {
   } = useMemo(() => {
     const make = <T extends string>(key: keyof Prefs, setter: (v: T) => void) =>
       (value: T) => {
-        dirtyKeysRef.current.add(key)
+        updatePending(key, value)
         setter(value)
-        pendingRef.current[key] = value
         scheduleSaveRef.current()
       }
     return {
@@ -307,30 +372,26 @@ export function useSettings() {
 
   // Special: keybindings setter serializes to JSON
   const syncedSetKeybindings = useCallback((value: import('./use-keyboard-navigation').KeyBindings) => {
-    dirtyKeysRef.current.add('reading.keybindings')
+    updatePending('reading.keybindings', JSON.stringify(value))
     setKeybindings(value)
-    pendingRef.current['reading.keybindings'] = JSON.stringify(value)
     scheduleSave()
-  }, [setKeybindings, scheduleSave])
+  }, [setKeybindings, scheduleSave, updatePending])
 
   // Special: theme setter updates 2 keys + resets highlight
   const syncedSetTheme = useCallback((name: string) => {
-    dirtyKeysRef.current.add('appearance.color_theme')
-    dirtyKeysRef.current.add('appearance.highlight_theme')
+    updatePending('appearance.color_theme', name)
+    updatePending('appearance.highlight_theme', '')
     setTheme(name)
     setHighlightTheme(null) // reset to auto on app theme change
-    pendingRef.current['appearance.color_theme'] = name
-    pendingRef.current['appearance.highlight_theme'] = '' // empty string = delete from DB
     scheduleSave()
-  }, [setTheme, setHighlightTheme, scheduleSave])
+  }, [setTheme, setHighlightTheme, scheduleSave, updatePending])
 
   // Special: highlight setter converts null → '' for DB
   const syncedSetHighlightTheme = useCallback((value: string | null) => {
-    dirtyKeysRef.current.add('appearance.highlight_theme')
+    updatePending('appearance.highlight_theme', value || '')
     setHighlightTheme(value)
-    pendingRef.current['appearance.highlight_theme'] = value || '' // empty string = delete from DB (auto)
     scheduleSave()
-  }, [setHighlightTheme, scheduleSave])
+  }, [setHighlightTheme, scheduleSave, updatePending])
 
   // Custom themes setter: updates local state + syncs JSON blob to DB
   const setCustomThemes = useCallback((updater: (prev: Theme[]) => Theme[]) => {
@@ -338,12 +399,11 @@ export function useSettings() {
       const next = updater(prev)
       const json = JSON.stringify(next)
       localStorage.setItem('custom-themes', json)
-      dirtyKeysRef.current.add('custom_themes')
-      pendingRef.current['custom_themes'] = json
+      updatePending('custom_themes', json)
       scheduleSave()
       return next
     })
-  }, [scheduleSave])
+  }, [scheduleSave, updatePending])
 
   return {
     isDark,

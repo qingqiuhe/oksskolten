@@ -17,7 +17,7 @@ export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Set
         <p className="text-xs text-muted mb-4">{t('integration.llmProviderConfigDesc')}</p>
         <div className="space-y-3">
           {LLM_API_PROVIDERS.map(provider => (
-            <ApiProviderCard key={provider} provider={provider} t={t} />
+            <ApiProviderCard key={provider} provider={provider} t={t} chatProvider={settings.chatProvider} />
           ))}
           <ClaudeCodeCard t={t} />
           <OllamaCard t={t} />
@@ -61,7 +61,7 @@ export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Set
   )
 }
 
-function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
+function ApiProviderCard({ provider, t, chatProvider }: { provider: string; t: TFunc; chatProvider?: string | null }) {
   const { data: keyStatus, mutate: mutateKeyStatus } = useSWR<{ configured: boolean }>(
     `/api/settings/api-keys/${provider}`,
     fetcher,
@@ -121,11 +121,14 @@ function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
         void mutateKeyStatus()
       }
       if (isOpenAIProvider && (hasBaseUrlChanges || apiKeyInput)) {
-        const updatedPrefs = await apiPatch('/api/settings/preferences', {
+        const patch: Record<string, string> = {
           'openai.base_url': trimmedBaseUrl,
           'chat.provider': 'openai',
-          'chat.model': DEFAULT_MODELS.openai,
-        })
+        }
+        if (chatProvider !== 'openai') {
+          patch['chat.model'] = DEFAULT_MODELS.openai
+        }
+        const updatedPrefs = await apiPatch('/api/settings/preferences', patch)
         void mutatePrefs(updatedPrefs, false)
       }
       setApiKeyInput('')
@@ -148,6 +151,7 @@ function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
     try {
       await apiPost(endpoint, { apiKey: '' })
       void mutateKeyStatus()
+      if (isOpenAIProvider) void mutatePrefs()
       setApiKeyInput('')
       showMessage(deletedMsg, 'success')
     } catch (err: unknown) {

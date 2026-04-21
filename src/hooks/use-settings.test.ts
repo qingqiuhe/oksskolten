@@ -338,6 +338,57 @@ describe('useSettings', () => {
     expect(lastPatch['appearance.highlight_theme']).toBe('')
   })
 
+  it('hydrates dirty key after in-flight save completes', async () => {
+    let resolvePatch: (() => void) | null = null
+    mockApiPatch.mockImplementation(() => new Promise<void>((resolve) => { resolvePatch = resolve }))
+
+    swrData = {
+      'appearance.color_theme': 'default',
+      'reading.date_mode': 'relative',
+      'reading.auto_mark_read': 'off',
+      'reading.unread_indicator': 'on',
+      'reading.internal_links': 'off',
+      'reading.show_thumbnails': 'on',
+      'reading.show_feed_activity': 'on',
+      'reading.chat_position': 'fab',
+      'reading.article_open_mode': 'page',
+      'reading.category_unread_only': 'off',
+      'appearance.list_layout': 'list',
+      'appearance.mascot': 'off',
+      'reading.keyboard_navigation': 'off',
+      'appearance.highlight_theme': null,
+    }
+
+    const { result, rerender } = renderHook(() => useSettings())
+    mockSetDateMode.mockClear()
+
+    act(() => {
+      result.current.setDateMode('absolute')
+      vi.advanceTimersByTime(500)
+    })
+
+    swrData = {
+      ...swrData,
+      'reading.date_mode': 'relative',
+    }
+    rerender()
+
+    expect(mockSetDateMode).not.toHaveBeenCalledWith('relative')
+
+    await act(async () => {
+      resolvePatch?.()
+      await Promise.resolve()
+    })
+
+    swrData = {
+      ...swrData,
+      'reading.date_mode': 'relative',
+    }
+    rerender()
+
+    expect(mockSetDateMode).toHaveBeenLastCalledWith('relative')
+  })
+
   it('hydrates highlight_theme from DB prefs', () => {
     swrData = {
       'appearance.color_theme': null,
