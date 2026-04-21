@@ -6,23 +6,23 @@ let cachedBaseUrl = ''
 let cachedHeaders = ''
 let cachedClient: OpenAI | null = null
 
-export function getOllamaBaseUrl(): string {
-  return getSetting('ollama.base_url') || process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
+export function getOllamaBaseUrl(userId?: number | null): string {
+  return getSetting('ollama.base_url', userId) || process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
 }
 
-export function getOllamaCustomHeaders(): Record<string, string> {
-  const raw = getSetting('ollama.custom_headers')
+export function getOllamaCustomHeaders(userId?: number | null): Record<string, string> {
+  const raw = getSetting('ollama.custom_headers', userId)
   if (!raw) return {}
   try { return JSON.parse(raw) } catch { return {} }
 }
 
-export function getOllamaClient(): OpenAI {
-  const baseUrl = getOllamaBaseUrl()
-  const headersJson = getSetting('ollama.custom_headers') || ''
+export function getOllamaClient(userId?: number | null): OpenAI {
+  const baseUrl = getOllamaBaseUrl(userId)
+  const headersJson = getSetting('ollama.custom_headers', userId) || ''
   if (cachedClient && baseUrl === cachedBaseUrl && headersJson === cachedHeaders) return cachedClient
   cachedBaseUrl = baseUrl
   cachedHeaders = headersJson
-  const customHeaders = headersJson ? getOllamaCustomHeaders() : {}
+  const customHeaders = headersJson ? getOllamaCustomHeaders(userId) : {}
   cachedClient = new OpenAI({
     baseURL: `${baseUrl}/v1`,
     apiKey: 'ollama',  // Ollama ignores this but the SDK requires it
@@ -39,7 +39,7 @@ export const ollamaProvider: LLMProvider = {
   },
 
   async createMessage(params: LLMMessageParams): Promise<LLMStreamResult> {
-    const client = getOllamaClient()
+    const client = getOllamaClient(params.userId)
     const messages: OpenAI.ChatCompletionMessageParam[] = []
     if (params.systemInstruction) {
       messages.push({ role: 'system', content: params.systemInstruction })
@@ -66,7 +66,7 @@ export const ollamaProvider: LLMProvider = {
   },
 
   async streamMessage(params: LLMMessageParams, onText: (delta: string) => void): Promise<LLMStreamResult> {
-    const client = getOllamaClient()
+    const client = getOllamaClient(params.userId)
     const messages: OpenAI.ChatCompletionMessageParam[] = []
     if (params.systemInstruction) {
       messages.push({ role: 'system', content: params.systemInstruction })

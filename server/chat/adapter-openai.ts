@@ -87,12 +87,12 @@ function convertResponseToNeutral(
 }
 
 export async function runOpenAITurn(params: ChatTurnParams, externalClient?: OpenAI): Promise<RunChatTurnResult> {
-  if (!externalClient && !getSetting('api_key.openai')) {
+  if (!externalClient && !getSetting('api_key.openai', params.userId)) {
     throw new Error('OPENAI_KEY_NOT_SET')
   }
 
   const { system, model } = params
-  const client = externalClient ?? getOpenAIClient()
+  const client = externalClient ?? getOpenAIClient(params.userId)
   const tools = toOpenAITools()
 
   return runToolLoop(params, async (allMessages, onEvent) => {

@@ -413,9 +413,9 @@ describe('POST /api/chat — error handling', () => {
 // ---------------------------------------------------------------------------
 describe('POST /api/chat — settings', () => {
   it('uses custom chat provider from settings', async () => {
-    seedUser()
+    const userId = seedUser()
     const token = getToken()
-    upsertSetting('chat.provider', 'gemini')
+    upsertSetting('chat.provider', 'gemini', userId)
 
     await app.inject({
       method: 'POST',
@@ -428,9 +428,9 @@ describe('POST /api/chat — settings', () => {
   })
 
   it('uses custom chat model from settings', async () => {
-    seedUser()
+    const userId = seedUser()
     const token = getToken()
-    upsertSetting('chat.model', 'gpt-4.1')
+    upsertSetting('chat.model', 'gpt-4.1', userId)
 
     await app.inject({
       method: 'POST',
@@ -441,6 +441,25 @@ describe('POST /api/chat — settings', () => {
 
     const callArgs = mockRunChatTurn.mock.calls[0][1]
     expect(callArgs.model).toBe('gpt-4.1')
+  })
+
+  it('passes user-scoped settings context into the chat turn', async () => {
+    const userId = seedUser()
+    const token = getToken()
+    upsertSetting('chat.provider', 'openai', userId)
+    upsertSetting('chat.model', 'deepseek-chat', userId)
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/chat',
+      headers: { ...json, authorization: `Bearer ${token}` },
+      payload: { message: 'test' },
+    })
+
+    expect(mockRunChatTurn).toHaveBeenCalledWith('openai', expect.objectContaining({
+      model: 'deepseek-chat',
+      userId,
+    }))
   })
 })
 

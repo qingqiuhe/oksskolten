@@ -2,13 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ChatSSEEvent } from './adapter.js'
 import type { ContentBlock, ToolResultBlock } from './types.js'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
-import { upsertSetting } from '../db.js'
+import { getDb, upsertSetting } from '../db.js'
+import { hashSync } from 'bcryptjs'
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
 const mockExecuteTool = vi.fn()
+const mockGetOpenAIClient = vi.fn()
 
 vi.mock('./tools.js', () => ({
   toOpenAITools: () => [{ type: 'function', function: { name: 'search_articles', description: 'Search', parameters: { type: 'object', properties: {} } } }],
@@ -26,13 +28,16 @@ function createMockStream(chunks: Record<string, unknown>[]) {
 const mockCreate = vi.fn()
 
 vi.mock('../providers/llm/openai.js', () => ({
-  getOpenAIClient: () => ({
-    chat: {
-      completions: {
-        create: (...args: unknown[]) => mockCreate(...args),
+  getOpenAIClient: (...args: unknown[]) => {
+    mockGetOpenAIClient(...args)
+    return {
+      chat: {
+        completions: {
+          create: (...innerArgs: unknown[]) => mockCreate(...innerArgs),
+        },
       },
-    },
-  }),
+    }
+  },
   openaiProvider: {
     name: 'openai',
     requireKey: () => {},
@@ -59,10 +64,19 @@ describe('runOpenAITurn', () => {
     setupTestDb()
     mockCreate.mockReset()
     mockExecuteTool.mockReset()
+    mockGetOpenAIClient.mockReset()
   })
 
   async function loadModule() {
     return import('./adapter-openai.js')
+  }
+
+  function seedUser(userId: number) {
+    getDb().prepare('INSERT OR REPLACE INTO users (id, email, password_hash) VALUES (?, ?, ?)').run(
+      userId,
+      `user${userId}@example.com`,
+      hashSync('testpass', 4),
+    )
   }
 
   it('throws when OpenAI API key is not set', async () => {
@@ -96,6 +110,26 @@ describe('runOpenAITurn', () => {
     expect(events.find(e => e.type === 'done')).toBeDefined()
     expect(result.usage.input_tokens).toBe(10)
     expect(result.usage.output_tokens).toBe(5)
+  })
+
+  it('passes userId to the OpenAI client lookup', async () => {
+    seedUser(42)
+    upsertSetting('api_key.openai', 'test-key', 42)
+
+    mockCreate.mockResolvedValue(createMockStream([
+      { choices: [{ delta: { content: 'Hello' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+    ]))
+
+    const { runOpenAITurn } = await loadModule()
+    await runOpenAITurn({
+      messages: [{ role: 'user', content: 'hi' }],
+      system: 'You are helpful.',
+      model: 'gpt-4o',
+      userId: 42,
+      onEvent: vi.fn(),
+    })
+
+    expect(mockGetOpenAIClient).toHaveBeenCalledWith(42)
   })
 
   it('handles tool use loop with streaming tool call deltas', async () => {

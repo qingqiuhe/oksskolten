@@ -7,8 +7,8 @@ import type { LLMProvider, LLMMessageParams, LLMStreamResult } from './provider.
 let cachedKey = ''
 let cachedClient: Anthropic | null = null
 
-export function getAnthropicClient(): Anthropic {
-  const key = getSetting('api_key.anthropic') || ''
+export function getAnthropicClient(userId?: number | null): Anthropic {
+  const key = getSetting('api_key.anthropic', userId) || ''
   if (cachedClient && key === cachedKey) return cachedClient
   cachedKey = key
   cachedClient = new Anthropic({ apiKey: key })
@@ -26,14 +26,15 @@ export const anthropic = new Proxy({} as Anthropic, {
 export const anthropicProvider: LLMProvider = {
   name: 'anthropic',
 
-  requireKey() {
-    if (!getSetting('api_key.anthropic')) {
+  requireKey(userId) {
+    if (!getSetting('api_key.anthropic', userId)) {
       throw new Error('ANTHROPIC_KEY_NOT_SET')
     }
   },
 
   async createMessage(params: LLMMessageParams): Promise<LLMStreamResult> {
-    const message = await anthropic.messages.create({
+    const client = getAnthropicClient(params.userId)
+    const message = await client.messages.create({
       model: params.model,
       max_tokens: params.maxTokens,
       ...(params.systemInstruction ? { system: params.systemInstruction } : {}),
@@ -52,7 +53,8 @@ export const anthropicProvider: LLMProvider = {
   },
 
   async streamMessage(params: LLMMessageParams, onText: (delta: string) => void): Promise<LLMStreamResult> {
-    const stream = anthropic.messages.stream({
+    const client = getAnthropicClient(params.userId)
+    const stream = client.messages.stream({
       model: params.model,
       max_tokens: params.maxTokens,
       ...(params.systemInstruction ? { system: params.systemInstruction } : {}),

@@ -99,8 +99,8 @@ export function registerChatApi(app: FastifyInstance): void {
       const body = parseOrBadRequest(ChatBody, request.body, reply)
       if (!body) return
 
-      const model = getSetting('chat.model') || TASK_DEFAULTS.chat.model
       const userId = getRequestUserId(request)
+      const model = getSetting('chat.model', userId) || TASK_DEFAULTS.chat.model
       const requestedScope = normalizeChatScope({
         scope: body.scope as IncomingChatScope | undefined,
         article_id: body.article_id,
@@ -135,7 +135,7 @@ export function registerChatApi(app: FastifyInstance): void {
 
       // Restore and repair previous messages so both backends see a valid history.
       const dbMessages = getChatMessages(conversationId)
-      const backend = getSetting('chat.provider') || TASK_DEFAULTS.chat.provider
+      const backend = getSetting('chat.provider', userId) || TASK_DEFAULTS.chat.provider
       const repairedHistory = repairStoredConversation(dbMessages)
       if (repairedHistory.changed) {
         replaceChatMessages(
@@ -176,6 +176,7 @@ export function registerChatApi(app: FastifyInstance): void {
           messages: normalizedMessages,
           system: systemPrompt,
           model,
+          userId,
           timeZone: body.timeZone,
           scope,
           onEvent: (event) => {
@@ -215,7 +216,7 @@ export function registerChatApi(app: FastifyInstance): void {
             .map(b => b.text)
             .join('')
           if (assistantText) {
-            generateConversationTitle(conversationId, body.message, assistantText, backend)
+            generateConversationTitle(conversationId, body.message, assistantText, backend, userId)
               .catch(() => {/* fallback title already set */})
           }
         }

@@ -8,8 +8,6 @@ const log = logger.child('db')
 const INSTANCE_PREFIXES = ['auth.', 'system.', 'images.', 'social.'] as const
 const LEGACY_INSTANCE_FALLBACK_KEYS = new Set([
   'openai.base_url',
-  'ollama.base_url',
-  'ollama.custom_headers',
 ])
 
 function isInstanceSetting(key: string): boolean {

@@ -20,6 +20,7 @@ export interface ChatTurnParams {
   messages: Message[]
   system: string
   model: string
+  userId?: number | null
   timeZone?: string
   scope?: ChatScope
   onEvent: (event: ChatSSEEvent) => void

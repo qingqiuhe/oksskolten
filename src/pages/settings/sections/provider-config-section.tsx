@@ -151,7 +151,6 @@ function ApiProviderCard({ provider, t, chatProvider }: { provider: string; t: T
     try {
       await apiPost(endpoint, { apiKey: '' })
       void mutateKeyStatus()
-      if (isOpenAIProvider) void mutatePrefs()
       setApiKeyInput('')
       showMessage(deletedMsg, 'success')
     } catch (err: unknown) {

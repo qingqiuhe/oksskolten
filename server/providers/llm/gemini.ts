@@ -5,8 +5,8 @@ import type { LLMProvider, LLMMessageParams, LLMStreamResult } from './provider.
 let cachedKey = ''
 let cachedClient: GoogleGenAI | null = null
 
-export function getGeminiClient(): GoogleGenAI {
-  const key = getSetting('api_key.gemini') || ''
+export function getGeminiClient(userId?: number | null): GoogleGenAI {
+  const key = getSetting('api_key.gemini', userId) || ''
   if (cachedClient && key === cachedKey) return cachedClient
   cachedKey = key
   cachedClient = new GoogleGenAI({ apiKey: key })
@@ -16,14 +16,14 @@ export function getGeminiClient(): GoogleGenAI {
 export const geminiProvider: LLMProvider = {
   name: 'gemini',
 
-  requireKey() {
-    if (!getSetting('api_key.gemini')) {
+  requireKey(userId) {
+    if (!getSetting('api_key.gemini', userId)) {
       throw new Error('GEMINI_KEY_NOT_SET')
     }
   },
 
   async createMessage(params: LLMMessageParams): Promise<LLMStreamResult> {
-    const ai = getGeminiClient()
+    const ai = getGeminiClient(params.userId)
     const response = await ai.models.generateContent({
       model: params.model,
       contents: params.messages.map(m => ({
@@ -44,7 +44,7 @@ export const geminiProvider: LLMProvider = {
   },
 
   async streamMessage(params: LLMMessageParams, onText: (delta: string) => void): Promise<LLMStreamResult> {
-    const ai = getGeminiClient()
+    const ai = getGeminiClient(params.userId)
     const stream = await ai.models.generateContentStream({
       model: params.model,
       contents: params.messages.map(m => ({

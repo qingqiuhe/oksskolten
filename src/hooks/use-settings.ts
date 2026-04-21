@@ -94,76 +94,62 @@ export function useSettings() {
 
   const dirtyKeysRef = useRef<Set<string>>(new Set())
   const pendingRef = useRef<Partial<Prefs>>({})
-  const inFlightCountsRef = useRef<Map<keyof Prefs, number>>(new Map())
+  const editVersionRef = useRef<Partial<Record<keyof Prefs, number>>>({})
+  const pendingVersionRef = useRef<Partial<Record<keyof Prefs, number>>>({})
+  const inFlightVersionRef = useRef<Partial<Record<keyof Prefs, number>>>({})
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  const startInFlight = useCallback((keys: Array<keyof Prefs>) => {
-    const counts = inFlightCountsRef.current
-    for (const key of keys) {
-      counts.set(key, (counts.get(key) || 0) + 1)
-    }
+  const isHydrationBlocked = useCallback((key: keyof Prefs): boolean => {
+    const latestVersion = editVersionRef.current[key] ?? 0
+    const pendingVersion = pendingVersionRef.current[key]
+    if (pendingVersion !== undefined) return pendingVersion === latestVersion
+    const inFlightVersion = inFlightVersionRef.current[key]
+    return inFlightVersion !== undefined && inFlightVersion === latestVersion
   }, [])
 
-  const finishInFlight = useCallback((keys: Array<keyof Prefs>, clearDirty: boolean) => {
-    const counts = inFlightCountsRef.current
-    for (const key of keys) {
-      const current = counts.get(key) || 0
-      const next = current <= 1 ? 0 : current - 1
-      if (next === 0) counts.delete(key)
-      else counts.set(key, next)
-      if (clearDirty && next === 0 && !(key in pendingRef.current)) {
+  const settleInFlight = useCallback((patchVersions: Partial<Record<keyof Prefs, number>>, clearDirty: boolean) => {
+    for (const key of Object.keys(patchVersions) as Array<keyof Prefs>) {
+      const version = patchVersions[key]
+      if (version === undefined) continue
+      if (inFlightVersionRef.current[key] !== version) continue
+      delete inFlightVersionRef.current[key]
+      if (clearDirty && pendingVersionRef.current[key] === undefined && editVersionRef.current[key] === version) {
         dirtyKeysRef.current.delete(key)
       }
     }
   }, [])
 
-  const isHydrationBlocked = useCallback((key: keyof Prefs): boolean => {
-    return key in pendingRef.current || (inFlightCountsRef.current.get(key) || 0) > 0
-  }, [])
-
-  const isCustomThemesHydrationBlocked = useCallback((): boolean => {
-    return 'custom_themes' in pendingRef.current || (inFlightCountsRef.current.get('custom_themes') || 0) > 0
-  }, [])
-
-  const savePatch = useCallback((patch: Partial<Prefs>): void => {
-    const keys = Object.keys(patch) as Array<keyof Prefs>
+  const savePatch = useCallback((patch: Partial<Prefs>, patchVersions: Partial<Record<keyof Prefs, number>>): void => {
+    const keys = Object.keys(patchVersions) as Array<keyof Prefs>
     if (keys.length === 0) return
-    startInFlight(keys)
     void apiPatch('/api/settings/preferences', patch)
       .then(() => {
-        finishInFlight(keys, true)
+        settleInFlight(patchVersions, true)
       })
       .catch(() => {
-        finishInFlight(keys, false)
+        settleInFlight(patchVersions, false)
       })
-  }, [finishInFlight, startInFlight])
+  }, [settleInFlight])
 
-  const flushPatchKeepalive = useCallback((patch: Partial<Prefs>): void => {
-    const keys = Object.keys(patch) as Array<keyof Prefs>
-    if (keys.length === 0) return
-    startInFlight(keys)
+  const flushPatchKeepalive = useCallback((patch: Partial<Prefs>, patchVersions: Partial<Record<keyof Prefs, number>>): void => {
+    if (Object.keys(patchVersions).length === 0) return
     fetch('/api/settings/preferences', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(patch),
       keepalive: true,
     }).catch(() => {})
-  }, [startInFlight])
+  }, [])
 
   const backfillPatch = useCallback((patch: Partial<Prefs>): void => {
-    const keys = Object.keys(patch) as Array<keyof Prefs>
-    if (keys.length === 0) return
-    startInFlight(keys)
-    void apiPatch('/api/settings/preferences', patch)
-      .then(() => {
-        finishInFlight(keys, false)
-      })
-      .catch(() => {
-        finishInFlight(keys, false)
-      })
-  }, [finishInFlight, startInFlight])
+    if (Object.keys(patch).length === 0) return
+    void apiPatch('/api/settings/preferences', patch).catch(() => {})
+  }, [])
 
   const updatePending = useCallback((key: keyof Prefs, value: string): void => {
+    const nextVersion = (editVersionRef.current[key] ?? 0) + 1
+    editVersionRef.current[key] = nextVersion
+    pendingVersionRef.current[key] = nextVersion
     dirtyKeysRef.current.add(key)
     pendingRef.current = {
       ...pendingRef.current,
@@ -269,14 +255,14 @@ export function useSettings() {
   useEffect(() => {
     if (!prefs) return
     const raw = prefs['custom_themes']
-    if (raw && !(dirtyKeysRef.current.has('custom_themes') && isCustomThemesHydrationBlocked())) {
+    if (raw && !(dirtyKeysRef.current.has('custom_themes') && isHydrationBlocked('custom_themes'))) {
       try {
         const parsed = JSON.parse(raw) as Theme[]
         setCustomThemesState(parsed)
         localStorage.setItem('custom-themes', raw)
       } catch { /* ignore malformed JSON from DB — keep existing localStorage themes */ }
     }
-  }, [prefs, isCustomThemesHydrationBlocked])
+  }, [prefs, isHydrationBlocked])
 
   // Flush pending changes immediately via fetch keepalive (survives page unload)
   const flushNow = useCallback(() => {
@@ -285,8 +271,14 @@ export function useSettings() {
       timerRef.current = undefined
     }
     const patch = { ...pendingRef.current }
+    const patchVersions = { ...pendingVersionRef.current }
     pendingRef.current = {}
-    flushPatchKeepalive(patch)
+    pendingVersionRef.current = {}
+    for (const key of Object.keys(patchVersions) as Array<keyof Prefs>) {
+      const version = patchVersions[key]
+      if (version !== undefined) inFlightVersionRef.current[key] = version
+    }
+    flushPatchKeepalive(patch, patchVersions)
   }, [flushPatchKeepalive])
 
   const scheduleSave = useCallback(() => {
@@ -294,8 +286,14 @@ export function useSettings() {
     timerRef.current = setTimeout(() => {
       timerRef.current = undefined
       const patch = { ...pendingRef.current }
+      const patchVersions = { ...pendingVersionRef.current }
       pendingRef.current = {}
-      savePatch(patch)
+      pendingVersionRef.current = {}
+      for (const key of Object.keys(patchVersions) as Array<keyof Prefs>) {
+        const version = patchVersions[key]
+        if (version !== undefined) inFlightVersionRef.current[key] = version
+      }
+      savePatch(patch, patchVersions)
     }, SETTINGS_SYNC_DEBOUNCE_MS)
   }, [savePatch])
 

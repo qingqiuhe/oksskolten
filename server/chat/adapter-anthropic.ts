@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { ContentBlock } from './types.js'
-import { anthropic } from '../providers/llm/anthropic.js'
+import { getAnthropicClient } from '../providers/llm/anthropic.js'
 import { getSetting } from '../db.js'
 import { toAnthropicTools } from './tools.js'
 import type { ChatTurnParams, RunChatTurnResult } from './adapter.js'
@@ -32,16 +32,17 @@ function toNeutralContent(blocks: Anthropic.ContentBlock[]): ContentBlock[] {
 }
 
 export async function runAnthropicTurn(params: ChatTurnParams): Promise<RunChatTurnResult> {
-  if (!getSetting('api_key.anthropic')) {
+  if (!getSetting('api_key.anthropic', params.userId)) {
     throw new Error('ANTHROPIC_KEY_NOT_SET')
   }
 
   const { system, model } = params
+  const client = getAnthropicClient(params.userId)
   const tools = toAnthropicTools()
 
   return runToolLoop(params, async (allMessages, onEvent) => {
     const apiMessages = toAnthropicMessages(allMessages)
-    const stream = anthropic.messages.stream({
+    const stream = client.messages.stream({
       model,
       max_tokens: CHAT_MAX_TOKENS,
       system,

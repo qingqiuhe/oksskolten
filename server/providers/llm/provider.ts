@@ -3,6 +3,7 @@ export interface LLMMessageParams {
   maxTokens: number
   messages: Array<{ role: string; content: string }>
   systemInstruction?: string
+  userId?: number | null
 }
 
 export interface LLMStreamResult {
@@ -13,7 +14,7 @@ export interface LLMStreamResult {
 
 export interface LLMProvider {
   name: string
-  requireKey(): void
+  requireKey(userId?: number | null): void
   createMessage(params: LLMMessageParams): Promise<LLMStreamResult>
   streamMessage(params: LLMMessageParams, onText: (delta: string) => void): Promise<LLMStreamResult>
 }

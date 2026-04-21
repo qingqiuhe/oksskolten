@@ -361,7 +361,7 @@ export async function generateJsonApiTransformScript(
   const providerName = getSetting('chat.provider', userId) || TASK_DEFAULTS.chat.provider
   const model = getSetting('chat.model', userId) || TASK_DEFAULTS.chat.model
   const provider = getProvider(providerName)
-  provider.requireKey()
+  provider.requireKey(userId)
 
   const res = await safeFetch(endpointUrl, {
     headers: {
@@ -386,6 +386,7 @@ export async function generateJsonApiTransformScript(
   const result = await provider.createMessage({
     model,
     maxTokens: 1600,
+    userId,
     messages: [
       {
         role: 'user',

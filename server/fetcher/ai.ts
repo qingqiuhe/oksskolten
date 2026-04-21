@@ -70,21 +70,23 @@ async function runAiTask(
   config: AiTaskConfig,
   fullText: string,
   onText?: (delta: string) => void,
+  userId?: number | null,
 ): Promise<{ text: string } & AiTextResult> {
-  const providerName = getSetting(config.providerKey) || TASK_DEFAULTS.summarize.provider
-  const model = getSetting(config.modelKey) || config.defaultModel
+  const providerName = getSetting(config.providerKey, userId) || TASK_DEFAULTS.summarize.provider
+  const model = getSetting(config.modelKey, userId) || config.defaultModel
   const provider = getProvider(providerName)
-  provider.requireKey()
+  provider.requireKey(userId)
   const prompt = config.buildPrompt(fullText)
   const result = onText
     ? await provider.streamMessage(
-        { model, maxTokens: config.maxTokens, messages: [{ role: 'user', content: prompt }] },
+        { model, maxTokens: config.maxTokens, messages: [{ role: 'user', content: prompt }], userId },
         onText,
       )
     : await provider.createMessage({
         model,
         maxTokens: config.maxTokens,
         messages: [{ role: 'user', content: prompt }],
+        userId,
       })
   return {
     text: result.text,
@@ -152,17 +154,18 @@ async function runTranslateTask(
   }
   const model = getSetting('translate.model', options?.userId) || TASK_DEFAULTS.translate.model
   const llmProvider = getProvider(provider)
-  llmProvider.requireKey()
+  llmProvider.requireKey(options?.userId)
   const prompt = buildTranslatePrompt(fullText, targetLang)
   const r = onText
     ? await llmProvider.streamMessage(
-        { model, maxTokens: TRANSLATE_MAX_TOKENS, messages: [{ role: 'user', content: prompt }] },
+        { model, maxTokens: TRANSLATE_MAX_TOKENS, messages: [{ role: 'user', content: prompt }], userId: options?.userId },
         onText,
       )
     : await llmProvider.createMessage({
         model,
         maxTokens: TRANSLATE_MAX_TOKENS,
         messages: [{ role: 'user', content: prompt }],
+        userId: options?.userId,
       })
   return {
     fullTextTranslated: r.text,

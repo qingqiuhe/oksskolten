@@ -109,4 +109,10 @@ describe('legacy fallback for user-scoped reads', () => {
 
     expect(getSetting('api_key.openai', 42)).toBeUndefined()
   })
+
+  it('does not fall back to legacy ollama custom headers for logged-in users', () => {
+    upsertSetting('ollama.custom_headers', '{"Authorization":"Bearer legacy"}')
+
+    expect(getSetting('ollama.custom_headers', 42)).toBeUndefined()
+  })
 })

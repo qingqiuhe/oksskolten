@@ -14,6 +14,7 @@ export async function generateConversationTitle(
   userMessage: string,
   assistantResponse: string,
   providerName: string,
+  userId?: number | null,
 ): Promise<void> {
   const model = SUB_AGENT_MODELS[providerName]
   if (!model) return
@@ -23,6 +24,7 @@ export async function generateConversationTitle(
   const result = await provider.createMessage({
     model,
     maxTokens: 100,
+    userId,
     systemInstruction: 'Summarize the conversation into a short title (15-30 characters). Output only the title — no decoration or brackets. Generate the title in the same language as the user message.',
     messages: [
       { role: 'user', content: `User: ${userMessage}\n\nAI: ${assistantResponse.slice(0, 500)}` },
