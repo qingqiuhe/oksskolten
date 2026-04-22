@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, useReducer } from 'react'
 import useSWR from 'swr'
 import { useDarkMode } from './use-dark-mode'
 import { useTheme } from './use-theme'
@@ -91,6 +91,7 @@ export function useSettings() {
     fetcher,
     { revalidateOnFocus: false, revalidateOnReconnect: false },
   )
+  const [hydrationEpoch, bumpHydrationEpoch] = useReducer((count: number) => count + 1, 0)
 
   const dirtyKeysRef = useRef<Set<string>>(new Set())
   const pendingRef = useRef<Partial<Prefs>>({})
@@ -98,6 +99,13 @@ export function useSettings() {
   const pendingVersionRef = useRef<Partial<Record<keyof Prefs, number>>>({})
   const inFlightVersionRef = useRef<Partial<Record<keyof Prefs, number>>>({})
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const isMountedRef = useRef(true)
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
 
   const isHydrationBlocked = useCallback((key: keyof Prefs): boolean => {
     const latestVersion = editVersionRef.current[key] ?? 0
@@ -108,6 +116,7 @@ export function useSettings() {
   }, [])
 
   const settleInFlight = useCallback((patchVersions: Partial<Record<keyof Prefs, number>>, clearDirty: boolean) => {
+    let shouldReplayHydration = false
     for (const key of Object.keys(patchVersions) as Array<keyof Prefs>) {
       const version = patchVersions[key]
       if (version === undefined) continue
@@ -115,7 +124,11 @@ export function useSettings() {
       delete inFlightVersionRef.current[key]
       if (clearDirty && pendingVersionRef.current[key] === undefined && editVersionRef.current[key] === version) {
         dirtyKeysRef.current.delete(key)
+        shouldReplayHydration = true
       }
+    }
+    if (shouldReplayHydration && isMountedRef.current) {
+      bumpHydrationEpoch()
     }
   }, [])
 
@@ -249,7 +262,7 @@ export function useSettings() {
     }
 
     backfillPatch(backfill)
-  }, [prefs, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setCategoryUnreadOnly, setLayout, setMascot, setHighlightTheme, setArticleFont, setKeyboardNavigation, setKeybindings, backfillPatch, isHydrationBlocked])
+  }, [prefs, hydrationEpoch, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setCategoryUnreadOnly, setLayout, setMascot, setHighlightTheme, setArticleFont, setKeyboardNavigation, setKeybindings, backfillPatch, isHydrationBlocked])
 
   // Hydrate custom themes from DB
   useEffect(() => {
@@ -262,7 +275,7 @@ export function useSettings() {
         localStorage.setItem('custom-themes', raw)
       } catch { /* ignore malformed JSON from DB — keep existing localStorage themes */ }
     }
-  }, [prefs, isHydrationBlocked])
+  }, [prefs, hydrationEpoch, isHydrationBlocked])
 
   // Flush pending changes immediately via fetch keepalive (survives page unload)
   const flushNow = useCallback(() => {
