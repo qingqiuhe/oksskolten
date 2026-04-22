@@ -6,6 +6,7 @@ import {
   deleteSetting,
   listCustomLLMProviders,
   getCustomLLMProviderById,
+  getCustomLLMProviderSecretById,
   createCustomLLMProvider,
   updateCustomLLMProvider,
   deleteCustomLLMProvider,
@@ -33,6 +34,7 @@ import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 import { sendFeishuTestMessage } from '../notifications/feishu.js'
 import { FETCH_MIN_INTERVAL_SETTING_KEY, getFetchScheduleConfig } from '../fetcher/schedule.js'
 import { isAdminLike, roleCanManage, type UserRole } from '../identity.js'
+import { runOpenAICompatibleDiagnostics } from '../providers/llm/openai-compatible-test.js'
 import {
   DEFAULT_NOTIFICATION_TIMEZONE,
   isNotificationTimezone,
@@ -76,6 +78,9 @@ const CustomLLMProviderPatchBody = z.object({
   base_url: HttpUrlString.optional(),
   api_key: z.string().trim().min(1, 'api_key must not be empty').optional(),
 }).refine(body => Object.keys(body).length > 0, { message: 'No fields to update' })
+const CustomLLMProviderTestBody = z.object({
+  model: z.string().trim().min(1, 'model is required'),
+})
 const NotificationChannelBody = z.object({
   type: z.literal('feishu_webhook'),
   name: z.string().trim().min(1, 'name is required'),
@@ -480,6 +485,31 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
 
     deleteCustomLLMProvider(params.id, userId)
     reply.send({ ok: true })
+  })
+
+  api.post('/api/settings/custom-llm-providers/:id/test', { preHandler: [requireJson] }, async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+    const body = parseOrBadRequest(CustomLLMProviderTestBody, request.body, reply)
+    if (!body) return
+
+    const userId = getRequestUserId(request)
+    const provider = getCustomLLMProviderSecretById(params.id, userId)
+    if (!provider) {
+      reply.status(404).send({ error: 'Custom LLM provider not found' })
+      return
+    }
+
+    const diagnostics = await runOpenAICompatibleDiagnostics(provider, body.model)
+    if (!diagnostics.ok) {
+      reply.status(502).send({
+        error: diagnostics.error || 'Custom LLM provider test failed',
+        ...diagnostics,
+      })
+      return
+    }
+
+    reply.send(diagnostics)
   })
 
   // --- Notification channels ---

@@ -77,6 +77,10 @@ beforeEach(async () => {
   app = await buildApp()
 })
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 // =========================================================================
 // Provider-model consistency validation
 // =========================================================================
@@ -1216,6 +1220,98 @@ describe('custom LLM providers', () => {
 
     expect(res.statusCode).toBe(409)
     expect(res.json().error).toContain('chat')
+  })
+
+  it('tests a custom provider and returns structured diagnostics on success', async () => {
+    const { userId, headers } = createAuthedUserWithId('member')
+    const provider = createCustomLLMProvider({
+      name: 'OpenRouter',
+      base_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-openrouter',
+    }, userId)
+    const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"id":"chatcmpl_test"}\n\n', {
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'x-request-id': 'req_test',
+      },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/settings/custom-llm-providers/${provider.id}/test`,
+      headers: { ...json, ...headers },
+      payload: { model: 'openai/gpt-4.1-mini' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://openrouter.ai/api/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(res.json()).toEqual(expect.objectContaining({
+      ok: true,
+      request: expect.objectContaining({
+        method: 'POST',
+        url: 'https://openrouter.ai/api/v1/chat/completions',
+        headers: expect.objectContaining({
+          Authorization: '[REDACTED]',
+          'Content-Type': 'application/json',
+        }),
+      }),
+      response: expect.objectContaining({
+        status: 200,
+        statusText: '',
+        headers: expect.objectContaining({
+          'content-type': 'text/event-stream',
+          'x-request-id': 'req_test',
+        }),
+        body: 'data: {"id":"chatcmpl_test"}\n\n',
+      }),
+    }))
+    expect(res.json().request.body).toContain('"model": "openai/gpt-4.1-mini"')
+  })
+
+  it('wraps upstream auth failures as app errors and redacts request diagnostics', async () => {
+    const { userId, headers } = createAuthedUserWithId('member')
+    const provider = createCustomLLMProvider({
+      name: 'OpenRouter',
+      base_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-openrouter',
+    }, userId)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { message: 'blocked' },
+    }), {
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: {
+        'content-type': 'application/json',
+      },
+    })))
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/settings/custom-llm-providers/${provider.id}/test`,
+      headers: { ...json, ...headers },
+      payload: { model: 'openai/gpt-4.1-mini' },
+    })
+
+    expect(res.statusCode).toBe(502)
+    expect(res.json()).toEqual(expect.objectContaining({
+      ok: false,
+      error: 'Upstream returned 401 Unauthorized',
+      request: expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: '[REDACTED]',
+        }),
+      }),
+      response: expect.objectContaining({
+        status: 401,
+        statusText: 'Unauthorized',
+      }),
+    }))
+    expect(res.json().request.body).not.toContain('sk-openrouter')
   })
 })
 

@@ -38,6 +38,18 @@ function t(key: string) {
     'integration.customLlmProviderType': 'OpenAI-compatible',
     'integration.customLlmProviderApiKey': 'Replace API key',
     'integration.customLlmProviderApiKeyHint': 'Leave blank to keep the current API key',
+    'integration.customLlmProviderTest': 'Test Connection',
+    'integration.customLlmProviderTesting': 'Testing...',
+    'integration.customLlmProviderViewDetails': 'View Details',
+    'integration.customLlmProviderTestModelHint': 'Model ID to probe. Prefilled from the current task assignment when available',
+    'integration.customLlmProviderTestSaveHint': 'Save changes before running the test',
+    'integration.customLlmProviderTestSucceeded': 'Connection test succeeded',
+    'integration.customLlmProviderTestFailed': 'Connection test failed',
+    'integration.customLlmProviderSecretsRedacted': 'Sensitive values are redacted in the request / response shown here',
+    'integration.customLlmProviderTestDetailsDesc': 'Request / response diagnostics from the saved provider configuration test',
+    'integration.customLlmProviderRequestDetails': 'Request',
+    'integration.customLlmProviderResponseDetails': 'Response',
+    'integration.customLlmProviderNoResponse': 'No response',
     'integration.translateServiceConfig': 'Translate Service Config',
     'integration.translateServiceConfigDesc': 'Configure translation providers',
     'settings.translateTargetLang': 'Target language',
@@ -102,6 +114,9 @@ describe('ProviderConfigSection', () => {
       '/api/settings/preferences': {
         'ollama.base_url': '',
         'ollama.custom_headers': '',
+        'chat.provider': 'openai',
+        'chat.provider_instance_id': '7',
+        'chat.model': 'openai/gpt-4.1-mini',
       },
       '/api/settings/custom-llm-providers': {
         providers: [
@@ -198,5 +213,56 @@ describe('ProviderConfigSection', () => {
     await waitFor(() => {
       expect(mockApiDelete).toHaveBeenCalledWith('/api/settings/custom-llm-providers/7')
     })
+  })
+
+  it('tests a custom provider and shows request/response diagnostics on failure', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    mockApiPost.mockRejectedValueOnce(Object.assign(new Error('Upstream returned 403 Forbidden'), {
+      data: {
+        ok: false,
+        duration_ms: 42,
+        request: {
+          method: 'POST',
+          url: 'https://openrouter.ai/api/v1/chat/completions',
+          headers: {
+            Authorization: '[REDACTED]',
+            'Content-Type': 'application/json',
+          },
+          body: '{\n  "model": "openai/gpt-4.1-mini"\n}',
+        },
+        response: {
+          status: 403,
+          statusText: 'Forbidden',
+          headers: { 'content-type': 'application/json' },
+          body: '{"error":{"message":"blocked"}}',
+        },
+        error: 'Upstream returned 403 Forbidden',
+      },
+    }))
+
+    render(
+      <ProviderConfigSection
+        t={t}
+        settings={{
+          translateTargetLang: '',
+          setTranslateTargetLang: vi.fn(),
+        } as any}
+      />,
+    )
+
+    expect(screen.getByDisplayValue('openai/gpt-4.1-mini')).toBeTruthy()
+    await user.click(screen.getAllByRole('button', { name: 'Test Connection' }).at(-1)!)
+
+    await waitFor(() => {
+      expect(mockApiPost).toHaveBeenCalledWith('/api/settings/custom-llm-providers/7/test', {
+        model: 'openai/gpt-4.1-mini',
+      })
+    })
+
+    expect(await screen.findByText('Request')).toBeTruthy()
+    expect(screen.getByText('Response')).toBeTruthy()
+    expect(screen.getAllByText('Sensitive values are redacted in the request / response shown here')).toHaveLength(2)
+    expect(screen.getAllByText('Upstream returned 403 Forbidden')).toHaveLength(2)
+    expect(screen.getByText(/"status": 403/)).toBeTruthy()
   })
 })

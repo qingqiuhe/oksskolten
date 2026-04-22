@@ -4,6 +4,7 @@ import { fetcher, apiPost, apiPatch, apiDelete } from '../../../lib/fetcher'
 import { PROVIDER_LABELS, LLM_API_PROVIDERS, TRANSLATE_SERVICE_PROVIDERS } from '../../../data/aiModels'
 import { Input } from '@/components/ui/input'
 import { FormField } from '@/components/ui/form-field'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ExternalLink, CircleDot, CircleCheck, CircleSlash } from 'lucide-react'
 import type { Settings } from '../../../hooks/use-settings'
 
@@ -14,6 +15,24 @@ type CustomLLMProvider = {
   kind: 'openai-compatible'
   base_url: string
   has_api_key: boolean
+}
+type Prefs = Record<string, string | null>
+type ProviderDiagnostics = {
+  ok: boolean
+  duration_ms: number
+  request: {
+    method: string
+    url: string
+    headers: Record<string, string>
+    body: string
+  }
+  response: {
+    status: number
+    statusText: string
+    headers: Record<string, string>
+    body: string
+  } | null
+  error?: string
 }
 
 export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Settings }) {
@@ -200,6 +219,11 @@ function CustomProviderSection({ t }: { t: TFunc }) {
     fetcher,
     { revalidateOnFocus: false },
   )
+  const { data: prefs } = useSWR<Prefs>(
+    '/api/settings/preferences',
+    fetcher,
+    { revalidateOnFocus: false },
+  )
 
   const providers = data?.providers || []
 
@@ -207,13 +231,37 @@ function CustomProviderSection({ t }: { t: TFunc }) {
     <div className="space-y-3">
       <CreateCustomProviderCard t={t} onCreated={() => void mutate()} />
       {providers.map(provider => (
-        <CustomProviderCard key={provider.id} provider={provider} t={t} onChanged={() => void mutate()} />
+        <CustomProviderCard key={provider.id} provider={provider} prefs={prefs} t={t} onChanged={() => void mutate()} />
       ))}
       {providers.length === 0 && (
         <p className="text-xs text-muted">{t('integration.customLlmProvidersEmpty')}</p>
       )}
     </div>
   )
+}
+
+function getAssignedModelForProvider(providerId: number, prefs?: Prefs): string {
+  if (!prefs) return ''
+  for (const taskKey of ['chat', 'summary', 'translate'] as const) {
+    if (
+      prefs[`${taskKey}.provider`] === 'openai'
+      && prefs[`${taskKey}.provider_instance_id`] === String(providerId)
+      && prefs[`${taskKey}.model`]
+    ) {
+      return prefs[`${taskKey}.model`] || ''
+    }
+  }
+  return ''
+}
+
+function getDiagnosticsFromError(err: unknown): ProviderDiagnostics | null {
+  if (!err || typeof err !== 'object' || !('data' in err)) return null
+  const data = (err as { data?: unknown }).data
+  if (!data || typeof data !== 'object') return null
+  const diagnostics = data as Partial<ProviderDiagnostics>
+  if (!diagnostics.request || typeof diagnostics.request !== 'object') return null
+  if (typeof diagnostics.duration_ms !== 'number') return null
+  return diagnostics as ProviderDiagnostics
 }
 
 function CreateCustomProviderCard({ t, onCreated }: { t: TFunc; onCreated: () => void }) {
@@ -308,8 +356,9 @@ function CreateCustomProviderCard({ t, onCreated }: { t: TFunc; onCreated: () =>
   )
 }
 
-function CustomProviderCard({ provider, t, onChanged }: {
+function CustomProviderCard({ provider, prefs, t, onChanged }: {
   provider: CustomLLMProvider
+  prefs?: Prefs
   t: TFunc
   onChanged: () => void
 }) {
@@ -317,13 +366,25 @@ function CustomProviderCard({ provider, t, onChanged }: {
   const [baseUrl, setBaseUrl] = useState(provider.base_url)
   const [apiKey, setApiKey] = useState('')
   const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testModel, setTestModel] = useState('')
+  const [testResult, setTestResult] = useState<ProviderDiagnostics | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
   useEffect(() => {
     setName(provider.name)
     setBaseUrl(provider.base_url)
     setApiKey('')
+    setTestModel('')
+    setTestResult(null)
+    setDetailsOpen(false)
   }, [provider.id, provider.name, provider.base_url])
+
+  useEffect(() => {
+    if (testModel) return
+    setTestModel(getAssignedModelForProvider(provider.id, prefs))
+  }, [provider.id, prefs, testModel])
 
   function showMessage(text: string, type: 'success' | 'error') {
     setMessage({ text, type })
@@ -331,6 +392,7 @@ function CustomProviderCard({ provider, t, onChanged }: {
   }
 
   const hasChanges = name.trim() !== provider.name || baseUrl.trim() !== provider.base_url || Boolean(apiKey.trim())
+  const canTest = Boolean(testModel.trim()) && !hasChanges
 
   async function handleSave() {
     if (saving || !hasChanges) return
@@ -362,6 +424,31 @@ function CustomProviderCard({ provider, t, onChanged }: {
       setSaving(false)
     }
   }
+
+  async function handleTest() {
+    if (testing || !canTest) return
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const result = await apiPost(`/api/settings/custom-llm-providers/${provider.id}/test`, {
+        model: testModel.trim(),
+      }) as ProviderDiagnostics
+      setTestResult(result)
+    } catch (err: unknown) {
+      const diagnostics = getDiagnosticsFromError(err)
+      if (diagnostics) {
+        setTestResult(diagnostics)
+        setDetailsOpen(true)
+      }
+      showMessage(err instanceof Error ? err.message : 'Test failed', 'error')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const responseSummary = testResult?.response
+    ? `${testResult.response.status}${testResult.response.statusText ? ` ${testResult.response.statusText}` : ''}`
+    : t('integration.customLlmProviderNoResponse')
 
   return (
     <div className="p-3 rounded-lg bg-bg-card border border-border space-y-3">
@@ -411,6 +498,16 @@ function CustomProviderCard({ provider, t, onChanged }: {
         />
       </FormField>
 
+      <FormField label={t('openai.customModelName')} compact hint={t('integration.customLlmProviderTestModelHint')}>
+        <Input
+          type="text"
+          value={testModel}
+          onChange={e => setTestModel(e.target.value)}
+          placeholder={t('openai.customModelPlaceholder')}
+          className="py-1.5"
+        />
+      </FormField>
+
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -420,13 +517,81 @@ function CustomProviderCard({ provider, t, onChanged }: {
         >
           {saving ? '...' : t('settings.save')}
         </button>
+        <button
+          type="button"
+          onClick={handleTest}
+          disabled={testing || !canTest}
+          className="px-3 py-1.5 text-xs rounded-lg border border-border text-muted hover:text-text hover:bg-hover transition-colors disabled:opacity-50 select-none"
+        >
+          {testing ? t('integration.customLlmProviderTesting') : t('integration.customLlmProviderTest')}
+        </button>
+        {testResult && (
+          <button
+            type="button"
+            onClick={() => setDetailsOpen(true)}
+            className="px-3 py-1.5 text-xs rounded-lg border border-border text-muted hover:text-text hover:bg-hover transition-colors select-none"
+          >
+            {t('integration.customLlmProviderViewDetails')}
+          </button>
+        )}
       </div>
+
+      {hasChanges && (
+        <p className="text-[11px] text-muted">{t('integration.customLlmProviderTestSaveHint')}</p>
+      )}
+
+      {testResult && (
+        <div className={`rounded-lg border px-3 py-2 text-xs ${testResult.ok ? 'border-success/30 bg-success/5 text-text' : 'border-error/30 bg-error/5 text-text'}`}>
+          <p className="font-medium">
+            {testResult.ok ? t('integration.customLlmProviderTestSucceeded') : t('integration.customLlmProviderTestFailed')}
+          </p>
+          <p className="mt-1 text-muted">
+            {responseSummary} · {testResult.duration_ms}ms
+          </p>
+          {!testResult.ok && testResult.error && (
+            <p className="mt-1 text-error">{testResult.error}</p>
+          )}
+          <p className="mt-1 text-muted">{t('integration.customLlmProviderSecretsRedacted')}</p>
+        </div>
+      )}
 
       {message && (
         <p className={`text-xs ${message.type === 'error' ? 'text-error' : 'text-accent'}`}>
           {message.text}
         </p>
       )}
+
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent className="max-w-3xl" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>{provider.name}</DialogTitle>
+            <DialogDescription>{t('integration.customLlmProviderTestDetailsDesc')}</DialogDescription>
+          </DialogHeader>
+
+          {testResult && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-border bg-bg-subtle px-3 py-2 text-xs text-muted">
+                <p>{t('integration.customLlmProviderSecretsRedacted')}</p>
+                <p className="mt-1">{responseSummary} · {testResult.duration_ms}ms</p>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-text">{t('integration.customLlmProviderRequestDetails')}</h4>
+                <pre className="max-h-72 overflow-auto rounded-lg border border-border bg-bg-subtle p-3 text-[11px] text-text whitespace-pre-wrap break-all">
+                  {JSON.stringify(testResult.request, null, 2)}
+                </pre>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-text">{t('integration.customLlmProviderResponseDetails')}</h4>
+                <pre className="max-h-72 overflow-auto rounded-lg border border-border bg-bg-subtle p-3 text-[11px] text-text whitespace-pre-wrap break-all">
+                  {testResult.response ? JSON.stringify(testResult.response, null, 2) : t('integration.customLlmProviderNoResponse')}
+                </pre>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
