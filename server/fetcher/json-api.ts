@@ -3,9 +3,9 @@ import vm from 'node:vm'
 import type { FeedViewType } from '../../shared/article-kind.js'
 import { resolveFeedViewType } from '../../shared/article-kind.js'
 import { TASK_DEFAULTS } from '../../shared/models.js'
-import { getSetting } from '../db.js'
 import { decodeResponse, DEFAULT_TIMEOUT, USER_AGENT } from './http.js'
 import { getProvider } from '../providers/llm/index.js'
+import { resolveLLMTaskConfig } from '../llm-task-config.js'
 import { parseHttpCacheInterval } from './schedule.js'
 import { safeFetch } from './ssrf.js'
 import { normalizeDate } from './util.js'
@@ -358,10 +358,11 @@ export async function generateJsonApiTransformScript(
   endpointUrl: string,
   userId?: number | null,
 ): Promise<GeneratedJsonApiTransform> {
-  const providerName = getSetting('chat.provider', userId) || TASK_DEFAULTS.chat.provider
-  const model = getSetting('chat.model', userId) || TASK_DEFAULTS.chat.model
+  const resolvedTask = resolveLLMTaskConfig('chat', userId)
+  const providerName = resolvedTask.provider
+  const model = resolvedTask.model || TASK_DEFAULTS.chat.model
   const provider = getProvider(providerName)
-  provider.requireKey(userId)
+  provider.requireKey(userId, resolvedTask.openaiConfig)
 
   const res = await safeFetch(endpointUrl, {
     headers: {
@@ -387,6 +388,7 @@ export async function generateJsonApiTransformScript(
     model,
     maxTokens: 1600,
     userId,
+    openaiConfig: resolvedTask.openaiConfig,
     messages: [
       {
         role: 'user',

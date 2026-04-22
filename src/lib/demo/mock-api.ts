@@ -162,13 +162,20 @@ export async function demoFetcher(url: string): Promise<unknown> {
     return {
       'reading.auto_mark_read': 'on',
       'chat.provider': 'anthropic',
+      'chat.provider_instance_id': null,
       'chat.model': 'claude-haiku-4-5-20251001',
       'summary.provider': 'anthropic',
+      'summary.provider_instance_id': null,
       'summary.model': 'claude-haiku-4-5-20251001',
       'translate.provider': 'deepl',
+      'translate.provider_instance_id': null,
       'translate.model': '',
       'translate.target_lang': null,
     }
+  }
+
+  if (path === '/api/settings/custom-llm-providers') {
+    return { providers: [] }
   }
 
   if (path === '/api/settings/social-sources') {

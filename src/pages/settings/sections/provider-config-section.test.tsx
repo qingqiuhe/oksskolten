@@ -5,11 +5,13 @@ import { ProviderConfigSection } from './provider-config-section'
 
 const mockApiPost = vi.fn()
 const mockApiPatch = vi.fn()
+const mockApiDelete = vi.fn()
 
 vi.mock('../../../lib/fetcher', () => ({
   fetcher: vi.fn(),
   apiPost: (...args: unknown[]) => mockApiPost(...args),
   apiPatch: (...args: unknown[]) => mockApiPatch(...args),
+  apiDelete: (...args: unknown[]) => mockApiDelete(...args),
 }))
 
 let swrData: Record<string, unknown> = {}
@@ -25,6 +27,17 @@ function t(key: string) {
   const translations: Record<string, string> = {
     'integration.llmProviderConfig': 'LLM Provider Config',
     'integration.llmProviderConfigDesc': 'Configure LLM providers',
+    'integration.customLlmProviders': 'Custom LLM Providers',
+    'integration.customLlmProvidersDesc': 'Add explicit OpenAI-compatible providers',
+    'integration.customLlmProvidersEmpty': 'No custom LLM providers yet',
+    'integration.addCustomLlmProvider': 'Add Custom Provider',
+    'integration.customLlmProviderCreated': 'Custom provider created',
+    'integration.customLlmProviderName': 'Provider name',
+    'integration.customLlmProviderNamePlaceholder': 'e.g. OpenRouter',
+    'integration.customLlmProviderBaseUrlDesc': 'The OpenAI-compatible API endpoint for this provider',
+    'integration.customLlmProviderType': 'OpenAI-compatible',
+    'integration.customLlmProviderApiKey': 'Replace API key',
+    'integration.customLlmProviderApiKeyHint': 'Leave blank to keep the current API key',
     'integration.translateServiceConfig': 'Translate Service Config',
     'integration.translateServiceConfigDesc': 'Configure translation providers',
     'settings.translateTargetLang': 'Target language',
@@ -47,10 +60,7 @@ function t(key: string) {
     'settings.save': 'Save',
     'settings.saved': 'Saved',
     'openai.baseUrl': 'Base URL',
-    'openai.baseUrlDesc': 'Set the endpoint for an OpenAI-compatible API',
     'openai.baseUrlPlaceholder': 'https://api.openai.com/v1',
-    'openai.compatibleApiNote': 'Compatible APIs are supported',
-    'openai.baseUrlSaved': 'Base URL saved',
     'openai.apiKeySaved': 'OpenAI API key saved',
     'gemini.apiKeySaved': 'Gemini API key saved',
     'googleTranslate.apiKeySaved': 'Google Translate API key saved',
@@ -90,73 +100,103 @@ describe('ProviderConfigSection', () => {
       '/api/settings/api-keys/google-translate': { configured: false },
       '/api/settings/api-keys/deepl': { configured: false },
       '/api/settings/preferences': {
-        'openai.base_url': 'https://old.example/v1',
         'ollama.base_url': '',
         'ollama.custom_headers': '',
+      },
+      '/api/settings/custom-llm-providers': {
+        providers: [
+          {
+            id: 7,
+            name: 'OpenRouter',
+            kind: 'openai-compatible',
+            base_url: 'https://openrouter.ai/api/v1',
+            has_api_key: true,
+          },
+        ],
       },
       '/api/chat/claude-code-status': { loggedIn: false },
     }
     mockApiPost.mockResolvedValue({})
-    mockApiPatch.mockResolvedValue({
-      ...(swrData['/api/settings/preferences'] as Record<string, unknown>),
-      'openai.base_url': 'https://new.example/v1',
-      'chat.provider': 'openai',
-      'chat.model': 'gpt-4.1-mini',
-    })
+    mockApiPatch.mockResolvedValue({})
+    mockApiDelete.mockResolvedValue({ ok: true })
   })
 
-  it('switches chat to openai when saving the openai provider config', async () => {
+  it('saves the built-in OpenAI API key without patching preferences', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
 
     render(
       <ProviderConfigSection
         t={t}
         settings={{
-          chatProvider: 'anthropic',
           translateTargetLang: '',
           setTranslateTargetLang: vi.fn(),
         } as any}
       />,
     )
 
-    await user.type(screen.getByPlaceholderText('sk-...'), 'sk-new')
-    const baseUrlInput = screen.getByDisplayValue('https://old.example/v1')
-    await user.clear(baseUrlInput)
-    await user.type(baseUrlInput, 'https://new.example/v1')
+    await user.type(screen.getAllByPlaceholderText('sk-...')[0], 'sk-new')
     await user.click(screen.getAllByRole('button', { name: 'Save' })[0])
 
     await waitFor(() => {
       expect(mockApiPost).toHaveBeenCalledWith('/api/settings/api-keys/openai', { apiKey: 'sk-new' })
-      expect(mockApiPatch).toHaveBeenCalledWith('/api/settings/preferences', {
-        'openai.base_url': 'https://new.example/v1',
-        'chat.provider': 'openai',
-        'chat.model': 'gpt-4.1-mini',
-      })
+      expect(mockApiPatch).not.toHaveBeenCalledWith('/api/settings/preferences', expect.anything())
     })
   })
 
-  it('does not reset chat.model when chat provider is already openai', async () => {
+  it('creates a custom OpenAI-compatible provider', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
 
     render(
       <ProviderConfigSection
         t={t}
         settings={{
-          chatProvider: 'openai',
           translateTargetLang: '',
           setTranslateTargetLang: vi.fn(),
         } as any}
       />,
     )
 
-    await user.type(screen.getByPlaceholderText('sk-...'), 'sk-new')
+    await user.type(screen.getAllByPlaceholderText('e.g. OpenRouter')[0], 'DeepSeek')
+    await user.type(screen.getAllByPlaceholderText('https://api.openai.com/v1')[0], 'https://api.deepseek.com/v1')
+    await user.type(screen.getAllByPlaceholderText('sk-...')[1], 'sk-deepseek')
+    await user.click(screen.getByRole('button', { name: 'Add Custom Provider' }))
+
+    await waitFor(() => {
+      expect(mockApiPost).toHaveBeenCalledWith('/api/settings/custom-llm-providers', {
+        name: 'DeepSeek',
+        base_url: 'https://api.deepseek.com/v1',
+        api_key: 'sk-deepseek',
+      })
+    })
+  })
+
+  it('updates and deletes an existing custom provider', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+
+    render(
+      <ProviderConfigSection
+        t={t}
+        settings={{
+          translateTargetLang: '',
+          setTranslateTargetLang: vi.fn(),
+        } as any}
+      />,
+    )
+
+    const nameInputs = screen.getAllByDisplayValue('OpenRouter')
+    await user.clear(nameInputs[0])
+    await user.type(nameInputs[0], 'OpenRouter EU')
     await user.click(screen.getAllByRole('button', { name: 'Save' })[0])
 
     await waitFor(() => {
-      expect(mockApiPatch).toHaveBeenCalledWith('/api/settings/preferences', {
-        'openai.base_url': 'https://old.example/v1',
-        'chat.provider': 'openai',
+      expect(mockApiPatch).toHaveBeenCalledWith('/api/settings/custom-llm-providers/7', {
+        name: 'OpenRouter EU',
       })
+    })
+
+    await user.click(screen.getAllByRole('button', { name: 'Delete' })[0])
+    await waitFor(() => {
+      expect(mockApiDelete).toHaveBeenCalledWith('/api/settings/custom-llm-providers/7')
     })
   })
 })

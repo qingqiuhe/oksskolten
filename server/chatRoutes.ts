@@ -70,15 +70,14 @@ import {
   getChatMessages,
   replaceChatMessages,
   updateConversation,
-  getSetting,
   getArticleById,
 } from './db.js'
 import { runChatTurn } from './chat/adapter.js'
 import { repairStoredConversation } from './chat/history.js'
-import { TASK_DEFAULTS } from '../shared/models.js'
 import { buildSystemPrompt, appendArticleContext } from './chat/system-prompt.js'
 import { generateConversationTitle } from './chat/title-generator.js'
 import { generateSuggestions } from './chat/suggestions.js'
+import { resolveLLMTaskConfig } from './llm-task-config.js'
 import {
   getChatScopeSummary,
   normalizeChatScope,
@@ -100,7 +99,8 @@ export function registerChatApi(app: FastifyInstance): void {
       if (!body) return
 
       const userId = getRequestUserId(request)
-      const model = getSetting('chat.model', userId) || TASK_DEFAULTS.chat.model
+      const resolvedTask = resolveLLMTaskConfig('chat', userId)
+      const model = resolvedTask.model
       const requestedScope = normalizeChatScope({
         scope: body.scope as IncomingChatScope | undefined,
         article_id: body.article_id,
@@ -135,7 +135,7 @@ export function registerChatApi(app: FastifyInstance): void {
 
       // Restore and repair previous messages so both backends see a valid history.
       const dbMessages = getChatMessages(conversationId)
-      const backend = getSetting('chat.provider', userId) || TASK_DEFAULTS.chat.provider
+      const backend = resolvedTask.provider
       const repairedHistory = repairStoredConversation(dbMessages)
       if (repairedHistory.changed) {
         replaceChatMessages(
@@ -177,6 +177,7 @@ export function registerChatApi(app: FastifyInstance): void {
           system: systemPrompt,
           model,
           userId,
+          openaiConfig: resolvedTask.openaiConfig,
           timeZone: body.timeZone,
           scope,
           onEvent: (event) => {
@@ -216,7 +217,7 @@ export function registerChatApi(app: FastifyInstance): void {
             .map(b => b.text)
             .join('')
           if (assistantText) {
-            generateConversationTitle(conversationId, body.message, assistantText, backend, userId)
+            generateConversationTitle(conversationId, body.message, assistantText, backend, userId, resolvedTask.openaiConfig)
               .catch(() => {/* fallback title already set */})
           }
         }

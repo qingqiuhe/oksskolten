@@ -1,13 +1,20 @@
 import { useState, useCallback, useEffect } from 'react'
 import useSWR from 'swr'
-import { fetcher, apiPost, apiPatch } from '../../../lib/fetcher'
-import { PROVIDER_LABELS, LLM_API_PROVIDERS, TRANSLATE_SERVICE_PROVIDERS, DEFAULT_MODELS } from '../../../data/aiModels'
+import { fetcher, apiPost, apiPatch, apiDelete } from '../../../lib/fetcher'
+import { PROVIDER_LABELS, LLM_API_PROVIDERS, TRANSLATE_SERVICE_PROVIDERS } from '../../../data/aiModels'
 import { Input } from '@/components/ui/input'
 import { FormField } from '@/components/ui/form-field'
 import { ExternalLink, CircleDot, CircleCheck, CircleSlash } from 'lucide-react'
 import type { Settings } from '../../../hooks/use-settings'
 
 type TFunc = (key: any, params?: Record<string, string>) => string
+type CustomLLMProvider = {
+  id: number
+  name: string
+  kind: 'openai-compatible'
+  base_url: string
+  has_api_key: boolean
+}
 
 export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Settings }) {
   return (
@@ -17,10 +24,15 @@ export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Set
         <p className="text-xs text-muted mb-4">{t('integration.llmProviderConfigDesc')}</p>
         <div className="space-y-3">
           {LLM_API_PROVIDERS.map(provider => (
-            <ApiProviderCard key={provider} provider={provider} t={t} chatProvider={settings.chatProvider} />
+            <ApiProviderCard key={provider} provider={provider} t={t} />
           ))}
           <ClaudeCodeCard t={t} />
           <OllamaCard t={t} />
+        </div>
+        <div className="mt-5">
+          <h3 className="text-sm font-medium text-text mb-1">{t('integration.customLlmProviders')}</h3>
+          <p className="text-xs text-muted mb-3">{t('integration.customLlmProvidersDesc')}</p>
+          <CustomProviderSection t={t} />
         </div>
       </div>
       <div>
@@ -61,31 +73,16 @@ export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Set
   )
 }
 
-function ApiProviderCard({ provider, t, chatProvider }: { provider: string; t: TFunc; chatProvider?: string | null }) {
+function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
   const { data: keyStatus, mutate: mutateKeyStatus } = useSWR<{ configured: boolean }>(
     `/api/settings/api-keys/${provider}`,
     fetcher,
     { revalidateOnFocus: false },
   )
-  const { data: prefs, mutate: mutatePrefs } = useSWR<Record<string, string | null>>(
-    provider === 'openai' ? '/api/settings/preferences' : null,
-    fetcher,
-    { revalidateOnFocus: false },
-  )
 
   const [apiKeyInput, setApiKeyInput] = useState('')
-  const [baseUrlInput, setBaseUrlInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
-
-  const savedBaseUrl = (prefs?.['openai.base_url'] || '').trim()
-  const isOpenAIProvider = provider === 'openai'
-
-  useEffect(() => {
-    if (isOpenAIProvider) {
-      setBaseUrlInput(savedBaseUrl)
-    }
-  }, [isOpenAIProvider, savedBaseUrl])
 
   function showMessage(text: string, type: 'success' | 'error') {
     setMessage({ text, type })
@@ -108,36 +105,16 @@ function ApiProviderCard({ provider, t, chatProvider }: { provider: string; t: T
     : provider === 'google-translate' ? 'AIza...'
     : provider === 'deepl' ? '...'
     : 'sk-ant-...'
-  const trimmedBaseUrl = baseUrlInput.trim()
-  const hasBaseUrlChanges = isOpenAIProvider && trimmedBaseUrl !== savedBaseUrl
-  const canSave = Boolean(apiKeyInput || hasBaseUrlChanges)
+  const canSave = Boolean(apiKeyInput)
 
   async function handleSave() {
     if (saving || !canSave) return
     setSaving(true)
     try {
-      if (apiKeyInput) {
-        await apiPost(endpoint, { apiKey: apiKeyInput })
-        void mutateKeyStatus()
-      }
-      if (isOpenAIProvider && (hasBaseUrlChanges || apiKeyInput)) {
-        const patch: Record<string, string> = {
-          'openai.base_url': trimmedBaseUrl,
-          'chat.provider': 'openai',
-        }
-        if (chatProvider !== 'openai') {
-          patch['chat.model'] = DEFAULT_MODELS.openai
-        }
-        const updatedPrefs = await apiPatch('/api/settings/preferences', patch)
-        void mutatePrefs(updatedPrefs, false)
-      }
+      await apiPost(endpoint, { apiKey: apiKeyInput })
+      void mutateKeyStatus()
       setApiKeyInput('')
-      const successMessage = apiKeyInput && hasBaseUrlChanges
-        ? t('settings.saved')
-        : hasBaseUrlChanges
-          ? t('openai.baseUrlSaved')
-          : savedMsg
-      showMessage(successMessage, 'success')
+      showMessage(savedMsg, 'success')
     } catch (err: unknown) {
       showMessage(err instanceof Error ? err.message : 'Save failed', 'error')
     } finally {
@@ -208,34 +185,242 @@ function ApiProviderCard({ provider, t, chatProvider }: { provider: string; t: T
         </FormField>
       )}
 
-      {isOpenAIProvider && (
-        <FormField
-          label={t('openai.baseUrl')}
-          compact
-          hint={t('openai.baseUrlDesc')}
-        >
-          <div className="flex items-center gap-2">
-            <Input
-              type="url"
-              value={baseUrlInput}
-              onChange={e => setBaseUrlInput(e.target.value)}
-              placeholder={t('openai.baseUrlPlaceholder')}
-              className="flex-1 py-1.5"
-            />
-            {canSave && (
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-accent-text hover:opacity-90 transition-opacity disabled:opacity-50 select-none"
-              >
-                {saving ? '...' : t('settings.save')}
-              </button>
-            )}
-          </div>
-          <p className="mt-1 text-[11px] text-muted">{t('openai.compatibleApiNote')}</p>
-        </FormField>
+      {message && (
+        <p className={`text-xs ${message.type === 'error' ? 'text-error' : 'text-accent'}`}>
+          {message.text}
+        </p>
       )}
+    </div>
+  )
+}
+
+function CustomProviderSection({ t }: { t: TFunc }) {
+  const { data, mutate } = useSWR<{ providers: CustomLLMProvider[] }>(
+    '/api/settings/custom-llm-providers',
+    fetcher,
+    { revalidateOnFocus: false },
+  )
+
+  const providers = data?.providers || []
+
+  return (
+    <div className="space-y-3">
+      <CreateCustomProviderCard t={t} onCreated={() => void mutate()} />
+      {providers.map(provider => (
+        <CustomProviderCard key={provider.id} provider={provider} t={t} onChanged={() => void mutate()} />
+      ))}
+      {providers.length === 0 && (
+        <p className="text-xs text-muted">{t('integration.customLlmProvidersEmpty')}</p>
+      )}
+    </div>
+  )
+}
+
+function CreateCustomProviderCard({ t, onCreated }: { t: TFunc; onCreated: () => void }) {
+  const [name, setName] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  function showMessage(text: string, type: 'success' | 'error') {
+    setMessage({ text, type })
+    setTimeout(() => setMessage(null), 3000)
+  }
+
+  const canSave = Boolean(name.trim() && baseUrl.trim() && apiKey.trim())
+
+  async function handleCreate() {
+    if (saving || !canSave) return
+    setSaving(true)
+    try {
+      await apiPost('/api/settings/custom-llm-providers', {
+        name: name.trim(),
+        base_url: baseUrl.trim(),
+        api_key: apiKey.trim(),
+      })
+      setName('')
+      setBaseUrl('')
+      setApiKey('')
+      onCreated()
+      showMessage(t('integration.customLlmProviderCreated'), 'success')
+    } catch (err: unknown) {
+      showMessage(err instanceof Error ? err.message : 'Create failed', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="p-3 rounded-lg bg-bg-card border border-border space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full shrink-0 bg-accent" />
+        <span className="text-sm font-medium text-text select-none">{t('integration.addCustomLlmProvider')}</span>
+      </div>
+
+      <FormField label={t('integration.customLlmProviderName')} compact>
+        <Input
+          type="text"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder={t('integration.customLlmProviderNamePlaceholder')}
+          className="py-1.5"
+        />
+      </FormField>
+
+      <FormField label={t('openai.baseUrl')} compact hint={t('integration.customLlmProviderBaseUrlDesc')}>
+        <Input
+          type="url"
+          value={baseUrl}
+          onChange={e => setBaseUrl(e.target.value)}
+          placeholder={t('openai.baseUrlPlaceholder')}
+          className="py-1.5"
+        />
+      </FormField>
+
+      <FormField label={t('chat.apiKey')} compact>
+        <Input
+          type="password"
+          value={apiKey}
+          onChange={e => setApiKey(e.target.value)}
+          placeholder="sk-..."
+          className="py-1.5"
+        />
+      </FormField>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleCreate}
+          disabled={saving || !canSave}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-accent-text hover:opacity-90 transition-opacity disabled:opacity-50 select-none"
+        >
+          {saving ? '...' : t('integration.addCustomLlmProvider')}
+        </button>
+      </div>
+
+      {message && (
+        <p className={`text-xs ${message.type === 'error' ? 'text-error' : 'text-accent'}`}>
+          {message.text}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function CustomProviderCard({ provider, t, onChanged }: {
+  provider: CustomLLMProvider
+  t: TFunc
+  onChanged: () => void
+}) {
+  const [name, setName] = useState(provider.name)
+  const [baseUrl, setBaseUrl] = useState(provider.base_url)
+  const [apiKey, setApiKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  useEffect(() => {
+    setName(provider.name)
+    setBaseUrl(provider.base_url)
+    setApiKey('')
+  }, [provider.id, provider.name, provider.base_url])
+
+  function showMessage(text: string, type: 'success' | 'error') {
+    setMessage({ text, type })
+    setTimeout(() => setMessage(null), 3000)
+  }
+
+  const hasChanges = name.trim() !== provider.name || baseUrl.trim() !== provider.base_url || Boolean(apiKey.trim())
+
+  async function handleSave() {
+    if (saving || !hasChanges) return
+    setSaving(true)
+    try {
+      await apiPatch(`/api/settings/custom-llm-providers/${provider.id}`, {
+        ...(name.trim() !== provider.name ? { name: name.trim() } : {}),
+        ...(baseUrl.trim() !== provider.base_url ? { base_url: baseUrl.trim() } : {}),
+        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+      })
+      onChanged()
+      setApiKey('')
+      showMessage(t('settings.saved'), 'success')
+    } catch (err: unknown) {
+      showMessage(err instanceof Error ? err.message : 'Save failed', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (saving) return
+    setSaving(true)
+    try {
+      await apiDelete(`/api/settings/custom-llm-providers/${provider.id}`)
+      onChanged()
+    } catch (err: unknown) {
+      showMessage(err instanceof Error ? err.message : 'Delete failed', 'error')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="p-3 rounded-lg bg-bg-card border border-border space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${provider.has_api_key ? 'bg-success' : 'bg-error'}`} />
+          <span className="text-sm font-medium text-text select-none">{provider.name}</span>
+          <span className="text-xs text-muted select-none">{t('integration.customLlmProviderType')}</span>
+        </div>
+        <button
+          type="button"
+          onClick={handleDelete}
+          disabled={saving}
+          className="px-3 py-1 text-xs rounded-lg border border-border text-muted hover:text-text hover:bg-hover transition-colors disabled:opacity-50 select-none"
+        >
+          {t('chat.apiKeyDelete')}
+        </button>
+      </div>
+
+      <FormField label={t('integration.customLlmProviderName')} compact>
+        <Input
+          type="text"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder={t('integration.customLlmProviderNamePlaceholder')}
+          className="py-1.5"
+        />
+      </FormField>
+
+      <FormField label={t('openai.baseUrl')} compact>
+        <Input
+          type="url"
+          value={baseUrl}
+          onChange={e => setBaseUrl(e.target.value)}
+          placeholder={t('openai.baseUrlPlaceholder')}
+          className="py-1.5"
+        />
+      </FormField>
+
+      <FormField label={t('integration.customLlmProviderApiKey')} compact hint={t('integration.customLlmProviderApiKeyHint')}>
+        <Input
+          type="password"
+          value={apiKey}
+          onChange={e => setApiKey(e.target.value)}
+          placeholder="sk-..."
+          className="py-1.5"
+        />
+      </FormField>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || !hasChanges}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-accent-text hover:opacity-90 transition-opacity disabled:opacity-50 select-none"
+        >
+          {saving ? '...' : t('settings.save')}
+        </button>
+      </div>
 
       {message && (
         <p className={`text-xs ${message.type === 'error' ? 'text-error' : 'text-accent'}`}>

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { buildApp } from '../__tests__/helpers/buildApp.js'
-import { upsertSetting, getSetting, createFeed, createNotificationChannel, upsertFeedNotificationRule, insertArticle, markArticleSeen, getDb } from '../db.js'
+import { upsertSetting, getSetting, createFeed, createNotificationChannel, upsertFeedNotificationRule, insertArticle, markArticleSeen, getDb, createCustomLLMProvider } from '../db.js'
 import { hashSync } from 'bcryptjs'
 import type { FastifyInstance } from 'fastify'
 
@@ -296,16 +296,48 @@ describe('PATCH /api/settings/preferences — AI provider/model enums', () => {
     expect(res.json().error).toMatch(/not valid for provider/)
   })
 
-  it('accepts openai.base_url as a free-form preference', async () => {
+  it('accepts provider_instance_id when provider is openai and the custom provider exists', async () => {
+    const { userId, headers } = createAuthedUserWithId('member')
+    const provider = createCustomLLMProvider({
+      name: 'OpenRouter',
+      base_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-openrouter',
+    }, userId)
+
     const res = await app.inject({
       method: 'PATCH',
       url: '/api/settings/preferences',
-      headers: json,
-      payload: { 'openai.base_url': 'https://openrouter.ai/api/v1' },
+      headers: { ...json, ...headers },
+      payload: {
+        'chat.provider': 'openai',
+        'chat.provider_instance_id': String(provider.id),
+        'chat.model': 'deepseek-chat',
+      },
     })
     expect(res.statusCode).toBe(200)
-    expect(res.json()['openai.base_url']).toBe('https://openrouter.ai/api/v1')
-    expect(getSetting('openai.base_url')).toBe('https://openrouter.ai/api/v1')
+    expect(res.json()['chat.provider_instance_id']).toBe(String(provider.id))
+    expect(getSetting('chat.provider_instance_id')).toBe(String(provider.id))
+  })
+
+  it('rejects provider_instance_id when provider is not openai', async () => {
+    const { userId, headers } = createAuthedUserWithId('member')
+    const provider = createCustomLLMProvider({
+      name: 'OpenRouter',
+      base_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-openrouter',
+    }, userId)
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/preferences',
+      headers: { ...json, ...headers },
+      payload: {
+        'chat.provider': 'anthropic',
+        'chat.provider_instance_id': String(provider.id),
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/chat\.provider_instance_id can only be set/)
   })
 
   it('accepts all four valid provider values for chat', async () => {
@@ -1093,6 +1125,97 @@ describe('POST /api/settings/api-keys/:provider', () => {
       payload: { apiKey: 'key' },
     })
     expect(res.statusCode).toBe(400)
+  })
+})
+
+describe('custom LLM providers', () => {
+  it('creates and lists custom providers without exposing API keys', async () => {
+    const { headers } = createAuthedUserWithId('member')
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/settings/custom-llm-providers',
+      headers: { ...json, ...headers },
+      payload: {
+        name: 'OpenRouter',
+        base_url: 'https://openrouter.ai/api/v1/',
+        api_key: 'sk-openrouter',
+      },
+    })
+
+    expect(createRes.statusCode).toBe(201)
+    expect(createRes.json()).toEqual(expect.objectContaining({
+      name: 'OpenRouter',
+      kind: 'openai-compatible',
+      base_url: 'https://openrouter.ai/api/v1',
+      has_api_key: true,
+    }))
+    expect(createRes.json().api_key).toBeUndefined()
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/api/settings/custom-llm-providers',
+      headers,
+    })
+
+    expect(listRes.statusCode).toBe(200)
+    expect(listRes.json().providers).toEqual([
+      expect.objectContaining({
+        name: 'OpenRouter',
+        kind: 'openai-compatible',
+        base_url: 'https://openrouter.ai/api/v1',
+        has_api_key: true,
+      }),
+    ])
+    expect(listRes.json().providers[0].api_key).toBeUndefined()
+  })
+
+  it('updates custom provider metadata and keeps API keys write-only', async () => {
+    const { userId, headers } = createAuthedUserWithId('member')
+    const provider = createCustomLLMProvider({
+      name: 'OpenRouter',
+      base_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-openrouter',
+    }, userId)
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/custom-llm-providers/${provider.id}`,
+      headers: { ...json, ...headers },
+      payload: {
+        name: 'DeepSeek',
+        base_url: 'https://api.deepseek.com/v1',
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual(expect.objectContaining({
+      id: provider.id,
+      name: 'DeepSeek',
+      base_url: 'https://api.deepseek.com/v1',
+      has_api_key: true,
+    }))
+    expect(res.json().api_key).toBeUndefined()
+  })
+
+  it('blocks deleting a custom provider that is still assigned to a task', async () => {
+    const { userId, headers } = createAuthedUserWithId('member')
+    const provider = createCustomLLMProvider({
+      name: 'OpenRouter',
+      base_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-openrouter',
+    }, userId)
+    upsertSetting('chat.provider', 'openai', userId)
+    upsertSetting('chat.provider_instance_id', String(provider.id), userId)
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/settings/custom-llm-providers/${provider.id}`,
+      headers,
+    })
+
+    expect(res.statusCode).toBe(409)
+    expect(res.json().error).toContain('chat')
   })
 })
 

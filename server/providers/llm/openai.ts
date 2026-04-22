@@ -1,19 +1,19 @@
 import OpenAI from 'openai'
 import { getSetting } from '../../db.js'
 import type { LLMProvider, LLMMessageParams, LLMStreamResult } from './provider.js'
+import type { OpenAICompatibleConfig } from '../../llm-task-config.js'
 
 let cachedKey = ''
 let cachedBaseUrl = ''
 let cachedClient: OpenAI | null = null
 
-function getConfiguredOpenAIBaseUrl(userId?: number | null): string | undefined {
-  const baseUrl = getSetting('openai.base_url', userId)?.trim()
-  return baseUrl ? baseUrl.replace(/\/+$/, '') : undefined
+function normalizeBaseUrl(baseURL?: string): string {
+  return baseURL?.trim().replace(/\/+$/, '') || ''
 }
 
-export function getOpenAIClient(userId?: number | null): OpenAI {
-  const key = getSetting('api_key.openai', userId) || ''
-  const baseURL = getConfiguredOpenAIBaseUrl(userId) || ''
+export function getOpenAIClient(userId?: number | null, openaiConfig?: OpenAICompatibleConfig): OpenAI {
+  const key = openaiConfig?.apiKey?.trim() || getSetting('api_key.openai', userId) || ''
+  const baseURL = normalizeBaseUrl(openaiConfig?.baseURL)
   if (cachedClient && key === cachedKey && baseURL === cachedBaseUrl) return cachedClient
   cachedKey = key
   cachedBaseUrl = baseURL
@@ -27,14 +27,14 @@ export function getOpenAIClient(userId?: number | null): OpenAI {
 export const openaiProvider: LLMProvider = {
   name: 'openai',
 
-  requireKey(userId) {
-    if (!getSetting('api_key.openai', userId)) {
+  requireKey(userId, openaiConfig) {
+    if (!(openaiConfig?.apiKey?.trim() || getSetting('api_key.openai', userId))) {
       throw new Error('OPENAI_KEY_NOT_SET')
     }
   },
 
   async createMessage(params: LLMMessageParams): Promise<LLMStreamResult> {
-    const client = getOpenAIClient(params.userId)
+    const client = getOpenAIClient(params.userId, params.openaiConfig)
     const messages: OpenAI.ChatCompletionMessageParam[] = []
     if (params.systemInstruction) {
       messages.push({ role: 'system', content: params.systemInstruction })
@@ -61,7 +61,7 @@ export const openaiProvider: LLMProvider = {
   },
 
   async streamMessage(params: LLMMessageParams, onText: (delta: string) => void): Promise<LLMStreamResult> {
-    const client = getOpenAIClient(params.userId)
+    const client = getOpenAIClient(params.userId, params.openaiConfig)
     const messages: OpenAI.ChatCompletionMessageParam[] = []
     if (params.systemInstruction) {
       messages.push({ role: 'system', content: params.systemInstruction })

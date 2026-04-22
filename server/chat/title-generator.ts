@@ -1,3 +1,4 @@
+import type { OpenAICompatibleConfig } from '../llm-task-config.js'
 import { SUB_AGENT_MODELS } from '../../shared/models.js'
 import { getProvider } from '../providers/llm/index.js'
 import { updateConversation } from '../db.js'
@@ -15,6 +16,7 @@ export async function generateConversationTitle(
   assistantResponse: string,
   providerName: string,
   userId?: number | null,
+  openaiConfig?: OpenAICompatibleConfig,
 ): Promise<void> {
   const model = SUB_AGENT_MODELS[providerName]
   if (!model) return
@@ -25,6 +27,7 @@ export async function generateConversationTitle(
     model,
     maxTokens: 100,
     userId,
+    openaiConfig,
     systemInstruction: 'Summarize the conversation into a short title (15-30 characters). Output only the title — no decoration or brackets. Generate the title in the same language as the user message.',
     messages: [
       { role: 'user', content: `User: ${userMessage}\n\nAI: ${assistantResponse.slice(0, 500)}` },

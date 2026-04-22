@@ -4,6 +4,7 @@ import { googleTranslate } from '../providers/translate/google-translate.js'
 import { deeplTranslate } from '../providers/translate/deepl.js'
 import { TASK_DEFAULTS } from '../../shared/models.js'
 import { DEFAULT_LANGUAGE, languageName } from '../../shared/lang.js'
+import { resolveLLMTaskConfig, type LLMTaskName } from '../llm-task-config.js'
 
 export type AiBillingMode = 'anthropic' | 'gemini' | 'openai' | 'claude-code' | 'ollama' | 'google-translate' | 'deepl'
 
@@ -59,8 +60,7 @@ interface TranslateOptions {
 }
 
 interface AiTaskConfig {
-  providerKey: string
-  modelKey: string
+  task: LLMTaskName
   defaultModel: string
   maxTokens: number
   buildPrompt: (text: string) => string
@@ -72,14 +72,15 @@ async function runAiTask(
   onText?: (delta: string) => void,
   userId?: number | null,
 ): Promise<{ text: string } & AiTextResult> {
-  const providerName = getSetting(config.providerKey, userId) || TASK_DEFAULTS.summarize.provider
-  const model = getSetting(config.modelKey, userId) || config.defaultModel
+  const resolvedTask = resolveLLMTaskConfig(config.task, userId)
+  const providerName = resolvedTask.provider
+  const model = resolvedTask.model || config.defaultModel
   const provider = getProvider(providerName)
-  provider.requireKey(userId)
+  provider.requireKey(userId, resolvedTask.openaiConfig)
   const prompt = config.buildPrompt(fullText)
   const result = onText
     ? await provider.streamMessage(
-        { model, maxTokens: config.maxTokens, messages: [{ role: 'user', content: prompt }], userId },
+        { model, maxTokens: config.maxTokens, messages: [{ role: 'user', content: prompt }], userId, openaiConfig: resolvedTask.openaiConfig },
         onText,
       )
     : await provider.createMessage({
@@ -87,6 +88,7 @@ async function runAiTask(
         maxTokens: config.maxTokens,
         messages: [{ role: 'user', content: prompt }],
         userId,
+        openaiConfig: resolvedTask.openaiConfig,
       })
   return {
     text: result.text,
@@ -101,8 +103,7 @@ const SUMMARIZE_MAX_TOKENS = 2048
 const TRANSLATE_MAX_TOKENS = 16384
 
 const summarizeConfig: AiTaskConfig = {
-  providerKey: 'summary.provider',
-  modelKey: 'summary.model',
+  task: 'summary',
   defaultModel: TASK_DEFAULTS.summarize.model,
   maxTokens: SUMMARIZE_MAX_TOKENS,
   buildPrompt: buildSummarizePrompt,
@@ -144,7 +145,8 @@ async function runTranslateTask(
   onText?: (delta: string) => void,
   options?: TranslateOptions,
 ): Promise<{ fullTextTranslated: string } & AiTextResult> {
-  const provider = getSetting('translate.provider', options?.userId) || TASK_DEFAULTS.translate.provider
+  const resolvedTask = resolveLLMTaskConfig('translate', options?.userId)
+  const provider = resolvedTask.provider
   const targetLang = getResolvedTranslateTargetLang(options)
   if (provider === 'google-translate') {
     return runGoogleTranslate(fullText, targetLang, options?.userId)
@@ -152,13 +154,13 @@ async function runTranslateTask(
   if (provider === 'deepl') {
     return runDeepl(fullText, targetLang, options?.userId)
   }
-  const model = getSetting('translate.model', options?.userId) || TASK_DEFAULTS.translate.model
+  const model = resolvedTask.model || TASK_DEFAULTS.translate.model
   const llmProvider = getProvider(provider)
-  llmProvider.requireKey(options?.userId)
+  llmProvider.requireKey(options?.userId, resolvedTask.openaiConfig)
   const prompt = buildTranslatePrompt(fullText, targetLang)
   const r = onText
     ? await llmProvider.streamMessage(
-        { model, maxTokens: TRANSLATE_MAX_TOKENS, messages: [{ role: 'user', content: prompt }], userId: options?.userId },
+        { model, maxTokens: TRANSLATE_MAX_TOKENS, messages: [{ role: 'user', content: prompt }], userId: options?.userId, openaiConfig: resolvedTask.openaiConfig },
         onText,
       )
     : await llmProvider.createMessage({
@@ -166,6 +168,7 @@ async function runTranslateTask(
         maxTokens: TRANSLATE_MAX_TOKENS,
         messages: [{ role: 'user', content: prompt }],
         userId: options?.userId,
+        openaiConfig: resolvedTask.openaiConfig,
       })
   return {
     fullTextTranslated: r.text,

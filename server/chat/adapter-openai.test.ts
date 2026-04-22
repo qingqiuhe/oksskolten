@@ -129,7 +129,30 @@ describe('runOpenAITurn', () => {
       onEvent: vi.fn(),
     })
 
-    expect(mockGetOpenAIClient).toHaveBeenCalledWith(42)
+    expect(mockGetOpenAIClient).toHaveBeenCalledWith(42, undefined)
+  })
+
+  it('passes explicit OpenAI-compatible config to the OpenAI client lookup', async () => {
+    mockCreate.mockResolvedValue(createMockStream([
+      { choices: [{ delta: { content: 'Hello' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+    ]))
+
+    const { runOpenAITurn } = await loadModule()
+    await runOpenAITurn({
+      messages: [{ role: 'user', content: 'hi' }],
+      system: 'You are helpful.',
+      model: 'deepseek-chat',
+      openaiConfig: {
+        apiKey: 'sk-openrouter',
+        baseURL: 'https://openrouter.ai/api/v1',
+      },
+      onEvent: vi.fn(),
+    })
+
+    expect(mockGetOpenAIClient).toHaveBeenCalledWith(undefined, {
+      apiKey: 'sk-openrouter',
+      baseURL: 'https://openrouter.ai/api/v1',
+    })
   })
 
   it('handles tool use loop with streaming tool call deltas', async () => {

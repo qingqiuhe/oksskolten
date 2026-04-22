@@ -46,6 +46,14 @@ describe('openaiProvider.requireKey', () => {
     mockGetSetting.mockReturnValue('sk-test')
     expect(() => openaiProvider.requireKey()).not.toThrow()
   })
+
+  it('accepts explicit OpenAI-compatible credentials without a stored key', () => {
+    mockGetSetting.mockReturnValue(undefined)
+    expect(() => openaiProvider.requireKey(undefined, {
+      apiKey: 'sk-custom',
+      baseURL: 'https://openrouter.ai/api/v1',
+    })).not.toThrow()
+  })
 })
 
 // --- getOpenAIClient ---
@@ -76,33 +84,39 @@ describe('getOpenAIClient', () => {
     expect(c1).not.toBe(c2)
   })
 
-  it('creates new client when base URL changes', () => {
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'api_key.openai') return 'sk-test'
-      if (key === 'openai.base_url') return 'https://api.openai.com/v1'
-      return undefined
+  it('creates new client when explicit OpenAI-compatible config changes', () => {
+    const c1 = getOpenAIClient(undefined, {
+      apiKey: 'sk-test',
+      baseURL: 'https://api.openai.com/v1',
     })
-    const c1 = getOpenAIClient()
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'api_key.openai') return 'sk-test'
-      if (key === 'openai.base_url') return 'https://openrouter.ai/api/v1'
-      return undefined
+    const c2 = getOpenAIClient(undefined, {
+      apiKey: 'sk-test',
+      baseURL: 'https://openrouter.ai/api/v1',
     })
-    const c2 = getOpenAIClient()
     expect(c1).not.toBe(c2)
   })
 
-  it('passes configured base URL to the OpenAI client', () => {
+  it('passes explicit OpenAI-compatible base URL to the OpenAI client', () => {
+    const client = getOpenAIClient(undefined, {
+      apiKey: 'sk-test',
+      baseURL: 'https://openrouter.ai/api/v1/',
+    }) as { opts?: { apiKey: string; baseURL?: string } }
+    expect(client.opts).toEqual({
+      apiKey: 'sk-test',
+      baseURL: 'https://openrouter.ai/api/v1',
+    })
+  })
+
+  it('ignores legacy openai.base_url when using built-in OpenAI', () => {
     mockGetSetting.mockImplementation((key: string) => {
       if (key === 'api_key.openai') return 'sk-test'
-      if (key === 'openai.base_url') return 'https://openrouter.ai/api/v1/'
+      if (key === 'openai.base_url') return 'https://legacy.example/v1'
       return undefined
     })
 
     const client = getOpenAIClient() as { opts?: { apiKey: string; baseURL?: string } }
     expect(client.opts).toEqual({
       apiKey: 'sk-test',
-      baseURL: 'https://openrouter.ai/api/v1',
     })
   })
 })

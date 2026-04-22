@@ -6,6 +6,7 @@ import {
   insertArticle,
   createConversation,
   upsertSetting,
+  createCustomLLMProvider,
   getDb,
   getConversationById,
   getChatMessages,
@@ -459,6 +460,36 @@ describe('POST /api/chat — settings', () => {
     expect(mockRunChatTurn).toHaveBeenCalledWith('openai', expect.objectContaining({
       model: 'deepseek-chat',
       userId,
+    }))
+  })
+
+  it('passes custom OpenAI-compatible credentials into the chat turn', async () => {
+    const userId = seedUser()
+    const token = getToken()
+    const provider = createCustomLLMProvider({
+      name: 'OpenRouter',
+      base_url: 'https://openrouter.ai/api/v1/',
+      api_key: 'sk-openrouter',
+    }, userId)
+    upsertSetting('chat.provider', 'openai', userId)
+    upsertSetting('chat.provider_instance_id', String(provider.id), userId)
+    upsertSetting('chat.model', 'deepseek-chat', userId)
+    upsertSetting('openai.base_url', 'https://legacy.example/v1', userId)
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/chat',
+      headers: { ...json, authorization: `Bearer ${token}` },
+      payload: { message: 'test' },
+    })
+
+    expect(mockRunChatTurn).toHaveBeenCalledWith('openai', expect.objectContaining({
+      model: 'deepseek-chat',
+      userId,
+      openaiConfig: {
+        apiKey: 'sk-openrouter',
+        baseURL: 'https://openrouter.ai/api/v1',
+      },
     }))
   })
 })

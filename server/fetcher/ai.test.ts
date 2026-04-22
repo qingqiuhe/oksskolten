@@ -4,11 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
-const { mockGetSetting, mockCreateMessage, mockStreamMessage, mockRequireKey } = vi.hoisted(() => ({
+const { mockGetSetting, mockCreateMessage, mockStreamMessage, mockRequireKey, mockResolveLLMTaskConfig } = vi.hoisted(() => ({
   mockGetSetting: vi.fn(),
   mockCreateMessage: vi.fn(),
   mockStreamMessage: vi.fn(),
   mockRequireKey: vi.fn(),
+  mockResolveLLMTaskConfig: vi.fn(),
 }))
 
 vi.mock('../db.js', () => ({
@@ -24,6 +25,10 @@ vi.mock('../providers/llm/index.js', () => ({
   }),
 }))
 
+vi.mock('../llm-task-config.js', () => ({
+  resolveLLMTaskConfig: (...args: unknown[]) => mockResolveLLMTaskConfig(...args),
+}))
+
 import {
   detectLanguage,
   summarizeArticle,
@@ -35,6 +40,11 @@ import {
 beforeEach(() => {
   vi.clearAllMocks()
   mockGetSetting.mockReturnValue(null) // use defaults
+  mockResolveLLMTaskConfig.mockImplementation((task: string) => ({
+    provider: 'anthropic',
+    model: task === 'translate' ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001',
+    providerInstanceId: null,
+  }))
 })
 
 // ---------------------------------------------------------------------------
@@ -131,9 +141,10 @@ describe('summarizeArticle', () => {
   })
 
   it('uses custom model from settings', async () => {
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'summary.model') return 'claude-sonnet-4-6'
-      return null
+    mockResolveLLMTaskConfig.mockReturnValue({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      providerInstanceId: null,
     })
     mockCreateMessage.mockResolvedValue({ text: 'ok', inputTokens: 0, outputTokens: 0 })
     const result = await summarizeArticle('text')
@@ -212,13 +223,41 @@ describe('translateArticle', () => {
   })
 
   it('uses translate-specific settings keys', async () => {
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'translate.model') return 'gpt-4.1'
-      return null
+    mockResolveLLMTaskConfig.mockReturnValue({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      providerInstanceId: null,
     })
     mockCreateMessage.mockResolvedValue({ text: 'ok', inputTokens: 0, outputTokens: 0 })
     const result = await translateArticle('text')
     expect(result.model).toBe('gpt-4.1')
+  })
+
+  it('passes custom OpenAI-compatible credentials through to the provider', async () => {
+    mockResolveLLMTaskConfig.mockReturnValue({
+      provider: 'openai',
+      model: 'deepseek-chat',
+      providerInstanceId: 12,
+      openaiConfig: {
+        apiKey: 'sk-openrouter',
+        baseURL: 'https://openrouter.ai/api/v1',
+      },
+    })
+    mockCreateMessage.mockResolvedValue({ text: 'ok', inputTokens: 0, outputTokens: 0 })
+
+    await translateArticle('text')
+
+    expect(mockRequireKey).toHaveBeenCalledWith(undefined, {
+      apiKey: 'sk-openrouter',
+      baseURL: 'https://openrouter.ai/api/v1',
+    })
+    expect(mockCreateMessage).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'deepseek-chat',
+      openaiConfig: {
+        apiKey: 'sk-openrouter',
+        baseURL: 'https://openrouter.ai/api/v1',
+      },
+    }))
   })
 })
 

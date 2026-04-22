@@ -26,19 +26,21 @@ vi.mock('../providers/llm/anthropic.js', () => {
   }
 
   let callCount = 0
-  return {
-    anthropic: {
-      messages: {
-        stream: vi.fn().mockImplementation(() => {
-          callCount++
-          // Default: simple text response
-          return createMockStream(
-            [{ type: 'text', text: 'Hello!' }],
-            'end_turn',
-          )
-        }),
-      },
+  const anthropic = {
+    messages: {
+      stream: vi.fn().mockImplementation(() => {
+        callCount++
+        // Default: simple text response
+        return createMockStream(
+          [{ type: 'text', text: 'Hello!' }],
+          'end_turn',
+        )
+      }),
     },
+  }
+
+  return {
+    anthropic,
     // Stub for LLMProvider (needed by llm/index.ts import)
     anthropicProvider: {
       name: 'anthropic',
@@ -46,7 +48,7 @@ vi.mock('../providers/llm/anthropic.js', () => {
       createMessage: vi.fn(),
       streamMessage: vi.fn(),
     },
-    getAnthropicClient: vi.fn(),
+    getAnthropicClient: vi.fn(() => anthropic),
     // Expose helpers for test customization
     _createMockStream: createMockStream,
     _getCallCount: () => callCount,

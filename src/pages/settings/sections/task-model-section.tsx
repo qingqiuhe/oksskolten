@@ -1,15 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import useSWR from 'swr'
-import { fetcher } from '../../../lib/fetcher'
+import { fetcher, apiPatch } from '../../../lib/fetcher'
 import {
   ANTHROPIC_MODELS,
   GEMINI_MODELS,
   OPENAI_MODELS,
   DEFAULT_MODELS,
   PROVIDER_LABELS,
-  LLM_API_PROVIDERS,
   TRANSLATE_SERVICE_PROVIDERS,
-  LLM_TASK_PROVIDERS,
 } from '../../../data/aiModels'
 import type { ModelGroup } from '../../../data/aiModels'
 import { Input } from '@/components/ui/input'
@@ -18,108 +16,159 @@ import type { Settings } from '../../../hooks/use-settings'
 import type { TranslateFn } from '../../../lib/i18n'
 
 type TFunc = TranslateFn
-type MessageKey = Parameters<TFunc>[0]
+type TaskKey = 'chat' | 'summary' | 'translate'
 
-interface TaskConfig {
-  labelKey: MessageKey
-  providerValue: string
-  setProvider: (v: string) => void
-  modelValue: string
-  setModel: (v: string) => void
-  defaultModel: string
-  hasTranslateServices?: boolean
+type Prefs = Record<string, string | null>
+type CustomLLMProvider = {
+  id: number
+  name: string
+  kind: 'openai-compatible'
+  base_url: string
+  has_api_key: boolean
+}
+
+type TaskDraft = {
+  target: string
+  model: string
+}
+
+type TaskDraftState = Record<TaskKey, TaskDraft>
+
+type ProviderOption = {
+  value: string
+  label: string
+  provider: string
+  providerInstanceId: string | null
+  group: 'builtIn' | 'custom' | 'translate'
+  enabled: boolean
 }
 
 const SWR_KEY_OPTS = { revalidateOnFocus: false } as const
+const TASK_DEFAULT_PROVIDER: Record<TaskKey, string> = {
+  chat: 'anthropic',
+  summary: 'anthropic',
+  translate: 'anthropic',
+}
+const TASK_DEFAULT_MODEL: Record<TaskKey, string> = {
+  chat: DEFAULT_MODELS.anthropic,
+  summary: DEFAULT_MODELS.anthropic,
+  translate: 'claude-sonnet-4-6',
+}
 
-export function TaskModelSection({ settings, t }: { settings: Settings; t: TFunc }) {
-  // Call useSWR at top level for each provider (hooks must not be called in loops)
+export function TaskModelSection({ settings: _settings, t }: { settings: Settings; t: TFunc }) {
   const anthropicKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/anthropic`, fetcher, SWR_KEY_OPTS)
   const geminiKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/gemini`, fetcher, SWR_KEY_OPTS)
   const openaiKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/openai`, fetcher, SWR_KEY_OPTS)
   const googleTranslateKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/google-translate`, fetcher, SWR_KEY_OPTS)
   const deeplKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/deepl`, fetcher, SWR_KEY_OPTS)
-  const { data: claudeCodeStatus } = useSWR<{ loggedIn?: boolean; error?: string }>(
-    '/api/chat/claude-code-status', fetcher, SWR_KEY_OPTS,
+  const { data: claudeCodeStatus } = useSWR<{ loggedIn?: boolean }>(
+    '/api/chat/claude-code-status',
+    fetcher,
+    SWR_KEY_OPTS,
+  )
+  const { data: prefs, mutate: mutatePrefs } = useSWR<Prefs>(
+    '/api/settings/preferences',
+    fetcher,
+    SWR_KEY_OPTS,
+  )
+  const { data: customProvidersData } = useSWR<{ providers: CustomLLMProvider[] }>(
+    '/api/settings/custom-llm-providers',
+    fetcher,
+    SWR_KEY_OPTS,
   )
 
-  const llmKeyStatuses = [anthropicKey, geminiKey, openaiKey]
-  const translateKeyStatuses = [googleTranslateKey, deeplKey]
-
-  const claudeCodeReady = !!claudeCodeStatus?.loggedIn
-  const configuredKeys = useMemo(() => {
-    const map: Record<string, boolean> = {}
-    LLM_API_PROVIDERS.forEach((p, i) => { map[p] = !!llmKeyStatuses[i].data?.configured })
-    TRANSLATE_SERVICE_PROVIDERS.forEach((p, i) => { map[p] = !!translateKeyStatuses[i].data?.configured })
-    map['claude-code'] = claudeCodeReady
-    map['ollama'] = true  // Ollama requires no API key; always available
-    return map
-    // Recompute only when any key's configured status changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    anthropicKey.data?.configured, geminiKey.data?.configured, openaiKey.data?.configured,
-    googleTranslateKey.data?.configured, deeplKey.data?.configured, claudeCodeReady,
+  const customProviders = useMemo(() => customProvidersData?.providers || [], [customProvidersData])
+  const configuredKeys = useMemo(() => ({
+    anthropic: !!anthropicKey.data?.configured,
+    gemini: !!geminiKey.data?.configured,
+    openai: !!openaiKey.data?.configured,
+    'claude-code': !!claudeCodeStatus?.loggedIn,
+    ollama: true,
+    'google-translate': !!googleTranslateKey.data?.configured,
+    deepl: !!deeplKey.data?.configured,
+  }), [
+    anthropicKey.data?.configured,
+    geminiKey.data?.configured,
+    openaiKey.data?.configured,
+    claudeCodeStatus?.loggedIn,
+    googleTranslateKey.data?.configured,
+    deeplKey.data?.configured,
   ])
-  // Ollama requires no API key, so the task section is always enabled when Ollama is available as a provider.
-  // This is intentional: users should be able to configure provider/model even before starting the Ollama server.
-  const hasAnyLlmKey = LLM_API_PROVIDERS.some(p => configuredKeys[p]) || claudeCodeReady || configuredKeys['ollama']
-  const hasAnyTranslateKey = TRANSLATE_SERVICE_PROVIDERS.some(p => configuredKeys[p])
-  const hasAnyKey = hasAnyLlmKey || hasAnyTranslateKey
-  const keysLoading = llmKeyStatuses.some(s => !s.data) || translateKeyStatuses.some(s => !s.data)
 
-  const tasks: TaskConfig[] = [
-    {
-      labelKey: 'integration.task.chat',
-      providerValue: settings.chatProvider || '',
-      setProvider: (v) => {
-        settings.setChatProvider(v)
-        // Ollama models are dynamic; don't set a default (auto-selected by ModelSelect)
-        if (v !== 'ollama') settings.setChatModel(DEFAULT_MODELS[v] || DEFAULT_MODELS.anthropic)
-        else settings.setChatModel('')
-      },
-      modelValue: settings.chatModel || '',
-      setModel: settings.setChatModel,
-      defaultModel: 'claude-haiku-4-5-20251001',
-    },
-    {
-      labelKey: 'integration.task.summary',
-      providerValue: settings.summaryProvider || '',
-      setProvider: (v) => {
-        settings.setSummaryProvider(v)
-        if (v !== 'ollama') settings.setSummaryModel(DEFAULT_MODELS[v] || DEFAULT_MODELS.anthropic)
-        else settings.setSummaryModel('')
-      },
-      modelValue: settings.summaryModel || '',
-      setModel: settings.setSummaryModel,
-      defaultModel: 'claude-haiku-4-5-20251001',
-    },
-    {
-      labelKey: 'integration.task.translate',
-      providerValue: settings.translateProvider || '',
-      setProvider: (v) => {
-        settings.setTranslateProvider(v)
-        if (v !== 'ollama') settings.setTranslateModel(DEFAULT_MODELS[v] || DEFAULT_MODELS.anthropic)
-        else settings.setTranslateModel('')
-      },
-      modelValue: settings.translateModel || '',
-      setModel: settings.setTranslateModel,
-      defaultModel: 'claude-sonnet-4-6',
-      hasTranslateServices: true,
-    },
-  ]
+  const providerOptions = useMemo(() => {
+    const options: ProviderOption[] = [
+      { value: 'builtin:anthropic', label: t(PROVIDER_LABELS.anthropic), provider: 'anthropic', providerInstanceId: null, group: 'builtIn', enabled: configuredKeys.anthropic },
+      { value: 'builtin:gemini', label: t(PROVIDER_LABELS.gemini), provider: 'gemini', providerInstanceId: null, group: 'builtIn', enabled: configuredKeys.gemini },
+      { value: 'builtin:openai', label: t(PROVIDER_LABELS.openai), provider: 'openai', providerInstanceId: null, group: 'builtIn', enabled: configuredKeys.openai },
+      { value: 'builtin:claude-code', label: t(PROVIDER_LABELS['claude-code']), provider: 'claude-code', providerInstanceId: null, group: 'builtIn', enabled: configuredKeys['claude-code'] },
+      { value: 'builtin:ollama', label: t(PROVIDER_LABELS.ollama), provider: 'ollama', providerInstanceId: null, group: 'builtIn', enabled: configuredKeys.ollama },
+      ...customProviders.map((provider) => ({
+        value: `custom:${provider.id}`,
+        label: provider.name,
+        provider: 'openai',
+        providerInstanceId: String(provider.id),
+        group: 'custom' as const,
+        enabled: provider.has_api_key,
+      })),
+      { value: 'builtin:google-translate', label: t(PROVIDER_LABELS['google-translate']), provider: 'google-translate', providerInstanceId: null, group: 'translate', enabled: configuredKeys['google-translate'] },
+      { value: 'builtin:deepl', label: t(PROVIDER_LABELS.deepl), provider: 'deepl', providerInstanceId: null, group: 'translate', enabled: configuredKeys.deepl },
+    ]
+    return options
+  }, [configuredKeys, customProviders, t])
 
-  // Show brief "Saved" feedback on any task provider/model change
+  const optionMap = useMemo(() => Object.fromEntries(providerOptions.map(option => [option.value, option])), [providerOptions])
+  const savedDrafts = useMemo(() => {
+    if (!prefs) return null
+    return buildSavedDrafts(prefs, customProviders)
+  }, [prefs, customProviders])
+  const [drafts, setDrafts] = useState<TaskDraftState | null>(null)
+  const [saving, setSaving] = useState(false)
   const [showSaved, setShowSaved] = useState(false)
-  const prevValues = useRef(tasks.map(t => `${t.providerValue}:${t.modelValue}`).join('|'))
-  const currentValues = tasks.map(t => `${t.providerValue}:${t.modelValue}`).join('|')
+
   useEffect(() => {
-    if (prevValues.current !== currentValues) {
-      prevValues.current = currentValues
+    if (!savedDrafts) return
+    setDrafts(prev => {
+      if (!prev) return savedDrafts
+      const isDirty = JSON.stringify(prev) !== JSON.stringify(savedDrafts)
+      return isDirty ? prev : savedDrafts
+    })
+  }, [savedDrafts])
+
+  useEffect(() => {
+    if (!showSaved) return
+    const timer = setTimeout(() => setShowSaved(false), 1500)
+    return () => clearTimeout(timer)
+  }, [showSaved])
+
+  if (!savedDrafts || !drafts) {
+    return (
+      <section>
+        <h2 className="text-base font-semibold text-text mb-1">{t('integration.taskSettings')}</h2>
+        <p className="text-xs text-muted">{t('integration.taskSettingsDesc')}</p>
+      </section>
+    )
+  }
+
+  const isDirty = JSON.stringify(drafts) !== JSON.stringify(savedDrafts)
+  const draftValid = isDraftStateValid(drafts, optionMap)
+
+  async function handleSave() {
+    if (saving || !isDirty || !draftValid) return
+    const nextDrafts = drafts as TaskDraftState
+    setSaving(true)
+    try {
+      const updatedPrefs = await apiPatch('/api/settings/preferences', buildTaskPatch(nextDrafts, optionMap))
+      void mutatePrefs(updatedPrefs as Prefs, false)
+      setDrafts(buildSavedDrafts(updatedPrefs as Prefs, customProviders))
       setShowSaved(true)
-      const timer = setTimeout(() => setShowSaved(false), 1500)
-      return () => clearTimeout(timer)
+    } finally {
+      setSaving(false)
     }
-  }, [currentValues])
+  }
+
+  function handleCancel() {
+    setDrafts(savedDrafts)
+  }
 
   return (
     <section>
@@ -134,20 +183,184 @@ export function TaskModelSection({ settings, t }: { settings: Settings; t: TFunc
         </span>
       </div>
       <p className="text-xs text-muted mb-4">{t('integration.taskSettingsDesc')}</p>
-      <div className={`space-y-3 ${!keysLoading && !hasAnyKey ? 'opacity-50 pointer-events-none' : ''}`}>
-        {tasks.map(task => (
-          <TaskModelRow key={task.labelKey} task={task} t={t} configuredKeys={configuredKeys} hasAnyTranslateKey={hasAnyTranslateKey} />
+      <div className="space-y-3">
+        {(['chat', 'summary', 'translate'] as TaskKey[]).map(taskKey => (
+          <TaskModelRow
+            key={taskKey}
+            taskKey={taskKey}
+            draft={drafts[taskKey]}
+            options={providerOptions.filter(option => taskKey === 'translate' || option.group !== 'translate')}
+            optionMap={optionMap}
+            onChange={(nextDraft) => setDrafts(prev => prev ? { ...prev, [taskKey]: nextDraft } : prev)}
+            t={t}
+          />
         ))}
       </div>
-      {!keysLoading && !hasAnyKey && (
-        <p className="text-xs text-muted mt-2">{t('integration.taskSettingsNoKeys')}</p>
-      )}
-
+      <div className="mt-4 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || !isDirty || !draftValid}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-accent-text hover:opacity-90 transition-opacity disabled:opacity-50 select-none"
+        >
+          {saving ? '...' : t('settings.save')}
+        </button>
+        <button
+          type="button"
+          onClick={handleCancel}
+          disabled={!isDirty || saving}
+          className="px-3 py-1.5 text-xs rounded-lg border border-border text-muted hover:text-text hover:bg-hover transition-colors disabled:opacity-50 select-none"
+        >
+          {t('settings.cancel')}
+        </button>
+      </div>
     </section>
   )
 }
 
-/* ── Helpers ── */
+function buildSavedDrafts(prefs: Prefs, customProviders: CustomLLMProvider[]): TaskDraftState {
+  return {
+    chat: buildTaskDraft('chat', prefs, customProviders),
+    summary: buildTaskDraft('summary', prefs, customProviders),
+    translate: buildTaskDraft('translate', prefs, customProviders),
+  }
+}
+
+function buildTaskDraft(taskKey: TaskKey, prefs: Prefs, customProviders: CustomLLMProvider[]): TaskDraft {
+  const providerKey = `${taskKey}.provider`
+  const providerInstanceKey = `${taskKey}.provider_instance_id`
+  const modelKey = `${taskKey}.model`
+  const provider = prefs[providerKey] || TASK_DEFAULT_PROVIDER[taskKey]
+  const providerInstanceId = prefs[providerInstanceKey]
+  const model = prefs[modelKey] || TASK_DEFAULT_MODEL[taskKey]
+
+  if (provider === 'openai' && providerInstanceId && customProviders.some(item => String(item.id) === providerInstanceId)) {
+    return { target: `custom:${providerInstanceId}`, model }
+  }
+
+  return {
+    target: `builtin:${provider}`,
+    model: isTranslateService(provider) ? '' : model,
+  }
+}
+
+function buildTaskPatch(drafts: TaskDraftState, optionMap: Record<string, ProviderOption>): Record<string, string> {
+  const patch: Record<string, string> = {}
+
+  for (const taskKey of ['chat', 'summary', 'translate'] as TaskKey[]) {
+    const option = optionMap[drafts[taskKey].target]
+    if (!option) continue
+    patch[`${taskKey}.provider`] = option.provider
+    patch[`${taskKey}.provider_instance_id`] = option.providerInstanceId || ''
+    patch[`${taskKey}.model`] = isTranslateService(option.provider) ? '' : drafts[taskKey].model.trim()
+  }
+
+  return patch
+}
+
+function isDraftStateValid(drafts: TaskDraftState, optionMap: Record<string, ProviderOption>): boolean {
+  for (const taskKey of ['chat', 'summary', 'translate'] as TaskKey[]) {
+    const option = optionMap[drafts[taskKey].target]
+    if (!option || !option.enabled) return false
+    if (!isTranslateService(option.provider) && !drafts[taskKey].model.trim()) return false
+  }
+  return true
+}
+
+function TaskModelRow({
+  taskKey,
+  draft,
+  options,
+  optionMap,
+  onChange,
+  t,
+}: {
+  taskKey: TaskKey
+  draft: TaskDraft
+  options: ProviderOption[]
+  optionMap: Record<string, ProviderOption>
+  onChange: (nextDraft: TaskDraft) => void
+  t: TFunc
+}) {
+  const selectedOption = optionMap[draft.target] || options[0]
+
+  function handleProviderChange(value: string) {
+    const nextOption = optionMap[value]
+    if (!nextOption) return
+    onChange({
+      target: value,
+      model: getNextModelValue(draft.model, selectedOption, nextOption),
+    })
+  }
+
+  return (
+    <div className="p-3 rounded-lg bg-bg-card border border-border space-y-3">
+      <span className="block text-xs font-medium text-text select-none">{t(`integration.task.${taskKey}`)}</span>
+
+      <div className="space-y-1">
+        <span className="block text-[11px] text-muted select-none">{t('integration.providerTarget')}</span>
+        <Select value={draft.target} onValueChange={handleProviderChange}>
+          <SelectTrigger>
+            <SelectValue placeholder={t('integration.selectProviderFirst')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectLabel>{t('integration.builtInProviders')}</SelectLabel>
+              {options.filter(option => option.group === 'builtIn').map(option => (
+                <SelectItem key={option.value} value={option.value} disabled={!option.enabled}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+
+            {options.some(option => option.group === 'custom') && (
+              <SelectGroup>
+                <SelectLabel>{t('integration.customLlmProviders')}</SelectLabel>
+                {options.filter(option => option.group === 'custom').map(option => (
+                  <SelectItem key={option.value} value={option.value} disabled={!option.enabled}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
+
+            {options.some(option => option.group === 'translate') && (
+              <SelectGroup>
+                <SelectLabel>{t('integration.translateServiceConfig')}</SelectLabel>
+                {options.filter(option => option.group === 'translate').map(option => (
+                  <SelectItem key={option.value} value={option.value} disabled={!option.enabled}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {!isTranslateService(selectedOption?.provider || '') && (
+        <ModelSelect
+          provider={selectedOption?.provider || ''}
+          modelValue={draft.model}
+          setModel={(value) => onChange({ ...draft, model: value })}
+          t={t}
+        />
+      )}
+
+      {selectedOption?.provider === 'google-translate' && <GoogleTranslateNote t={t} />}
+      {selectedOption?.provider === 'deepl' && <DeeplNote t={t} />}
+    </div>
+  )
+}
+
+function getNextModelValue(currentModel: string, currentOption: ProviderOption | undefined, nextOption: ProviderOption): string {
+  if (isTranslateService(nextOption.provider)) return ''
+  if (nextOption.provider === 'ollama') {
+    return currentOption?.provider === 'ollama' ? currentModel : ''
+  }
+  if (currentOption?.provider === nextOption.provider && currentModel) return currentModel
+  return DEFAULT_MODELS[nextOption.provider] || DEFAULT_MODELS.anthropic
+}
 
 function getModelGroups(provider: string): ModelGroup[] {
   if (provider === 'gemini') return GEMINI_MODELS
@@ -159,100 +372,7 @@ function isTranslateService(provider: string): boolean {
   return (TRANSLATE_SERVICE_PROVIDERS as readonly string[]).includes(provider)
 }
 
-/* ── Task Model Row ── */
-
-function TaskModelRow({ task, t, configuredKeys, hasAnyTranslateKey }: { task: TaskConfig; t: TFunc; configuredKeys: Record<string, boolean>; hasAnyTranslateKey: boolean }) {
-  const hasTranslateServices = !!task.hasTranslateServices
-  const currentIsTranslateService = isTranslateService(task.providerValue)
-
-  if (!hasTranslateServices) {
-    return (
-      <div className="p-3 rounded-lg bg-bg-card border border-border space-y-2">
-        <span className="block text-xs font-medium text-text select-none">{t(task.labelKey)}</span>
-        <ProviderButtons providers={LLM_TASK_PROVIDERS} selected={task.providerValue} onSelect={task.setProvider} t={t} configuredKeys={configuredKeys} />
-        <ModelSelect provider={task.providerValue} modelValue={task.modelValue} setModel={task.setModel} t={t} />
-      </div>
-    )
-  }
-
-  return (
-    <div className="p-3 rounded-lg bg-bg-card border border-border space-y-2">
-      <span className="block text-xs font-medium text-text select-none">{t(task.labelKey)}</span>
-      <div className="flex rounded-md bg-bg-subtle p-0.5">
-        <button
-          type="button"
-          onClick={() => { if (!task.providerValue || currentIsTranslateService) task.setProvider('anthropic') }}
-          className={`flex-1 px-1.5 py-1 text-[11px] rounded transition-colors select-none ${
-            task.providerValue && !currentIsTranslateService
-              ? 'bg-accent text-accent-text font-medium shadow-sm'
-              : 'text-muted hover:text-text'
-          }`}
-        >
-          {t('integration.modeLLM')}
-        </button>
-        <button
-          type="button"
-          onClick={() => { if (hasAnyTranslateKey && (!task.providerValue || !currentIsTranslateService)) task.setProvider(TRANSLATE_SERVICE_PROVIDERS[0]) }}
-          disabled={!hasAnyTranslateKey}
-          className={`flex-1 px-1.5 py-1 text-[11px] rounded transition-colors select-none ${
-            task.providerValue && currentIsTranslateService
-              ? 'bg-accent text-accent-text font-medium shadow-sm'
-              : !hasAnyTranslateKey
-                ? 'text-muted/40 cursor-not-allowed'
-                : 'text-muted hover:text-text'
-          }`}
-        >
-          {t('integration.modeTranslateService')}
-        </button>
-      </div>
-      {currentIsTranslateService ? (
-        <>
-          <ProviderButtons providers={TRANSLATE_SERVICE_PROVIDERS} selected={task.providerValue} onSelect={task.setProvider} t={t} configuredKeys={configuredKeys} />
-          {task.providerValue === 'google-translate' && <GoogleTranslateNote t={t} />}
-          {task.providerValue === 'deepl' && <DeeplNote t={t} />}
-        </>
-      ) : (
-        <>
-          <ProviderButtons providers={LLM_TASK_PROVIDERS} selected={task.providerValue} onSelect={task.setProvider} t={t} configuredKeys={configuredKeys} />
-          <ModelSelect provider={task.providerValue} modelValue={task.modelValue} setModel={task.setModel} t={t} />
-        </>
-      )}
-    </div>
-  )
-}
-
-/* ── Shared sub-components ── */
-
-function ProviderButtons({ providers, selected, onSelect, t, configuredKeys }: { providers: readonly string[]; selected: string; onSelect: (v: string) => void; t: TFunc; configuredKeys: Record<string, boolean> }) {
-  if (providers.length === 0) return null
-  return (
-    <div className="flex rounded-md bg-bg-subtle p-0.5">
-      {providers.map(p => {
-        const isConfigured = !!configuredKeys[p]
-        return (
-          <button
-            key={p}
-            type="button"
-            onClick={() => { if (isConfigured) onSelect(p) }}
-            disabled={!isConfigured}
-            className={`flex-1 px-1.5 py-1 text-[11px] rounded transition-colors select-none ${
-              selected === p
-                ? 'bg-accent text-accent-text font-medium shadow-sm'
-                : !isConfigured
-                  ? 'text-muted/40 cursor-not-allowed'
-                  : 'text-muted hover:text-text'
-            }`}
-          >
-            {t(PROVIDER_LABELS[p])}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
 function ModelSelect({ provider, modelValue, setModel, t }: { provider: string; modelValue: string; setModel: (v: string) => void; t: TFunc }) {
-  // Ollama: fetch dynamic model list
   const { data: ollamaModels } = useSWR<{ models: Array<{ name: string; size: number; parameter_size: string }> }>(
     provider === 'ollama' ? '/api/settings/ollama/models' : null,
     fetcher,
@@ -262,7 +382,6 @@ function ModelSelect({ provider, modelValue, setModel, t }: { provider: string; 
     group => group.models.some(model => model.value === modelValue),
   )
 
-  // Auto-select first Ollama model when switching to ollama and no model is set
   useEffect(() => {
     if (provider === 'ollama' && ollamaModels?.models?.length && !modelValue) {
       setModel(ollamaModels.models[0].name)
@@ -312,21 +431,24 @@ function ModelSelect({ provider, modelValue, setModel, t }: { provider: string; 
 
   return (
     <div className="space-y-2">
-      <Select value={isCustomOpenAIModel ? undefined : (modelValue || undefined)} onValueChange={setModel}>
-        <SelectTrigger>
-          <SelectValue placeholder={t('integration.selectModel')} />
-        </SelectTrigger>
-        <SelectContent>
-          {getModelGroups(provider).map(group => (
-            <SelectGroup key={group.group}>
-              <SelectLabel>{group.group}</SelectLabel>
-              {group.models.map(m => (
-                <SelectItem key={m.value} value={m.value}>{m.label} ({m.value})</SelectItem>
-              ))}
-            </SelectGroup>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="space-y-1">
+        <span className="block text-[11px] text-muted select-none">{t('integration.modelSelection')}</span>
+        <Select value={isCustomOpenAIModel ? undefined : (modelValue || undefined)} onValueChange={setModel}>
+          <SelectTrigger>
+            <SelectValue placeholder={t('integration.selectModel')} />
+          </SelectTrigger>
+          <SelectContent>
+            {getModelGroups(provider).map(group => (
+              <SelectGroup key={group.group}>
+                <SelectLabel>{group.group}</SelectLabel>
+                {group.models.map(m => (
+                  <SelectItem key={m.value} value={m.value}>{m.label} ({m.value})</SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
       {provider === 'openai' && (
         <div className="space-y-1">
           <span className="block text-[11px] text-muted select-none">{t('openai.customModelName')}</span>

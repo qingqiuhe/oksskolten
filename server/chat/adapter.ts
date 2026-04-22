@@ -1,5 +1,6 @@
 import type { Message } from './types.js'
 import type { ChatScope } from '../../shared/types.js'
+import type { OpenAICompatibleConfig } from '../llm-task-config.js'
 import { runAnthropicTurn } from './adapter-anthropic.js'
 
 export type ChatSSEEvent =
@@ -21,6 +22,7 @@ export interface ChatTurnParams {
   system: string
   model: string
   userId?: number | null
+  openaiConfig?: OpenAICompatibleConfig
   timeZone?: string
   scope?: ChatScope
   onEvent: (event: ChatSSEEvent) => void

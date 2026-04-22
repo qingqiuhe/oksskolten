@@ -4,6 +4,12 @@ import {
   getSetting,
   upsertSetting,
   deleteSetting,
+  listCustomLLMProviders,
+  getCustomLLMProviderById,
+  createCustomLLMProvider,
+  updateCustomLLMProvider,
+  deleteCustomLLMProvider,
+  listCustomLLMProviderUsage,
   getRetentionStats,
   purgeExpiredArticles,
   getDb,
@@ -52,6 +58,24 @@ const ProfileBody = z.object({
 
 const ProviderParams = z.object({ provider: z.string() })
 const ApiKeyBody = z.object({ apiKey: z.string().optional() })
+const HttpUrlString = z.string().trim().min(1).refine((value) => {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}, { message: 'base_url must be a valid http(s) URL' })
+const CustomLLMProviderBody = z.object({
+  name: z.string().trim().min(1, 'name is required'),
+  base_url: HttpUrlString,
+  api_key: z.string().trim().min(1, 'api_key is required'),
+})
+const CustomLLMProviderPatchBody = z.object({
+  name: z.string().trim().min(1, 'name is required').optional(),
+  base_url: HttpUrlString.optional(),
+  api_key: z.string().trim().min(1, 'api_key must not be empty').optional(),
+}).refine(body => Object.keys(body).length > 0, { message: 'No fields to update' })
 const NotificationChannelBody = z.object({
   type: z.literal('feishu_webhook'),
   name: z.string().trim().min(1, 'name is required'),
@@ -106,13 +130,15 @@ const PREF_KEYS = [
   'appearance.font_family',
   'appearance.list_layout',
   'chat.provider',
+  'chat.provider_instance_id',
   'chat.model',
   'summary.provider',
+  'summary.provider_instance_id',
   'summary.model',
   'translate.provider',
+  'translate.provider_instance_id',
   'translate.model',
   'translate.target_lang',
-  'openai.base_url',
   'ollama.base_url',
   'ollama.custom_headers',
   'custom_themes',
@@ -140,13 +166,15 @@ const PREF_ALLOWED: Record<PrefKey, string[] | null> = {
   'appearance.font_family': null,
   'appearance.list_layout': ['list', 'card', 'magazine', 'compact'],
   'chat.provider': ['anthropic', 'gemini', 'openai', 'claude-code', 'ollama'],
+  'chat.provider_instance_id': null,
   'chat.model': getAllModelValues(),
   'summary.provider': ['anthropic', 'gemini', 'openai', 'claude-code', 'ollama'],
+  'summary.provider_instance_id': null,
   'summary.model': getAllModelValues(),
   'translate.provider': ['anthropic', 'gemini', 'openai', 'claude-code', 'ollama', 'google-translate', 'deepl'],
+  'translate.provider_instance_id': null,
   'translate.model': getAllModelValues(),
   'translate.target_lang': ['ja', 'en', 'zh'],
-  'openai.base_url': null,
   'ollama.base_url': null,
   'ollama.custom_headers': null,
   'custom_themes': null,
@@ -159,6 +187,12 @@ const PROVIDER_MODEL_PAIRS: Array<{ providerKey: PrefKey; modelKey: PrefKey }> =
   { providerKey: 'chat.provider', modelKey: 'chat.model' },
   { providerKey: 'summary.provider', modelKey: 'summary.model' },
   { providerKey: 'translate.provider', modelKey: 'translate.model' },
+]
+
+const PROVIDER_INSTANCE_PAIRS: Array<{ providerKey: PrefKey; providerInstanceKey: PrefKey }> = [
+  { providerKey: 'chat.provider', providerInstanceKey: 'chat.provider_instance_id' },
+  { providerKey: 'summary.provider', providerInstanceKey: 'summary.provider_instance_id' },
+  { providerKey: 'translate.provider', providerInstanceKey: 'translate.provider_instance_id' },
 ]
 
 function validateProviderModel(body: Record<string, unknown>, userId: number | null): string | null {
@@ -175,6 +209,35 @@ function validateProviderModel(body: Record<string, unknown>, userId: number | n
       return `Model ${model} is not valid for provider ${provider}`
     }
   }
+  return null
+}
+
+function validateProviderInstanceRefs(body: Record<string, unknown>, userId: number | null): string | null {
+  for (const { providerKey, providerInstanceKey } of PROVIDER_INSTANCE_PAIRS) {
+    const providerInstanceRaw = body[providerInstanceKey] !== undefined
+      ? body[providerInstanceKey]
+      : getSetting(providerInstanceKey, userId)
+    if (providerInstanceRaw === undefined || providerInstanceRaw === null || String(providerInstanceRaw).trim() === '') {
+      continue
+    }
+
+    const provider = body[providerKey] !== undefined
+      ? String(body[providerKey])
+      : getSetting(providerKey, userId)
+    if (provider !== 'openai') {
+      return `${providerInstanceKey} can only be set when ${providerKey} is openai`
+    }
+
+    const providerInstanceId = Number(providerInstanceRaw)
+    if (!Number.isInteger(providerInstanceId) || providerInstanceId <= 0) {
+      return `${providerInstanceKey} must be a positive integer`
+    }
+
+    if (!getCustomLLMProviderById(providerInstanceId, userId)) {
+      return `Custom LLM provider ${providerInstanceId} does not exist`
+    }
+  }
+
   return null
 }
 
@@ -275,6 +338,11 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
       reply.status(400).send({ error: validationError })
       return
     }
+    const providerInstanceError = validateProviderInstanceRefs(body, userId)
+    if (providerInstanceError) {
+      reply.status(400).send({ error: providerInstanceError })
+      return
+    }
 
     let updated = false
     for (const key of PREF_KEYS) {
@@ -312,6 +380,13 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
         upsertSetting(key, value, userId)
         updated = true
         continue
+      }
+      if (key === 'chat.provider_instance_id' || key === 'summary.provider_instance_id' || key === 'translate.provider_instance_id') {
+        const parsed = z.coerce.number().int().positive().safeParse(value)
+        if (!parsed.success) {
+          reply.status(400).send({ error: `${key} must be a positive integer` })
+          return
+        }
       }
       const allowed = PREF_ALLOWED[key]
       if (allowed && !allowed.includes(value)) {
@@ -354,6 +429,58 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
 
   api.patch('/api/settings/preferences', { preHandler: [requireJson] }, handlePrefsUpdate)
   api.post('/api/settings/preferences', { preHandler: [requireJson] }, handlePrefsUpdate)
+
+  // --- Custom LLM providers ---
+
+  api.get('/api/settings/custom-llm-providers', async (request, reply) => {
+    const userId = getRequestUserId(request)
+    reply.send({ providers: listCustomLLMProviders(userId) })
+  })
+
+  api.post('/api/settings/custom-llm-providers', { preHandler: [requireJson] }, async (request, reply) => {
+    const body = parseOrBadRequest(CustomLLMProviderBody, request.body, reply)
+    if (!body) return
+
+    const userId = getRequestUserId(request)
+    const provider = createCustomLLMProvider(body, userId)
+    reply.status(201).send(provider)
+  })
+
+  api.patch('/api/settings/custom-llm-providers/:id', { preHandler: [requireJson] }, async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+    const body = parseOrBadRequest(CustomLLMProviderPatchBody, request.body, reply)
+    if (!body) return
+
+    const userId = getRequestUserId(request)
+    const provider = updateCustomLLMProvider(params.id, body, userId)
+    if (!provider) {
+      reply.status(404).send({ error: 'Custom LLM provider not found' })
+      return
+    }
+
+    reply.send(provider)
+  })
+
+  api.delete('/api/settings/custom-llm-providers/:id', async (request, reply) => {
+    const params = parseOrBadRequest(NumericIdParams, request.params, reply)
+    if (!params) return
+
+    const userId = getRequestUserId(request)
+    if (!getCustomLLMProviderById(params.id, userId)) {
+      reply.status(404).send({ error: 'Custom LLM provider not found' })
+      return
+    }
+
+    const usage = listCustomLLMProviderUsage(params.id, userId)
+    if (usage.length > 0) {
+      reply.status(409).send({ error: `Custom LLM provider is still used by: ${usage.join(', ')}` })
+      return
+    }
+
+    deleteCustomLLMProvider(params.id, userId)
+    reply.send({ ok: true })
+  })
 
   // --- Notification channels ---
 
