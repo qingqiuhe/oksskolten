@@ -1,6 +1,7 @@
 import { CHAT_MAX_TOKENS } from '../../chat/tool-loop.js'
 import { toOpenAITools } from '../../chat/tools.js'
 import type { CustomLLMProviderSecret } from '../../db/custom-llm-providers.js'
+import { buildOpenAICompatibleChatCompletionsUrl, buildOpenAICompatibleHeaders, fetchOpenAICompatibleChatCompletion, type OpenAICompatibleChatRequest } from './openai-compatible.js'
 
 const TEST_TIMEOUT_MS = 15_000
 const TEST_MAX_COMPLETION_TOKENS = Math.min(CHAT_MAX_TOKENS, 32)
@@ -60,7 +61,7 @@ function responseHeadersToObject(headers: Headers, secrets: string[]): Record<st
   return redactHeaders(Object.fromEntries(entries), secrets)
 }
 
-function buildRequestBody(model: string) {
+function buildRequestBody(model: string): OpenAICompatibleChatRequest {
   return {
     model,
     max_completion_tokens: TEST_MAX_COMPLETION_TOKENS,
@@ -83,11 +84,8 @@ export async function runOpenAICompatibleDiagnostics(
   provider: CustomLLMProviderSecret,
   model: string,
 ): Promise<ProviderDiagnosticResult> {
-  const url = `${provider.base_url}/chat/completions`
-  const requestHeaders = {
-    Authorization: `Bearer ${provider.api_key}`,
-    'Content-Type': 'application/json',
-  }
+  const url = buildOpenAICompatibleChatCompletionsUrl(provider.base_url)
+  const requestHeaders = buildOpenAICompatibleHeaders(provider.api_key)
   const requestBody = buildRequestBody(model)
   const secrets = [provider.api_key]
 
@@ -101,12 +99,10 @@ export async function runOpenAICompatibleDiagnostics(
   const startedAt = Date.now()
 
   try {
-    const response = await fetch(url, {
-      method: request.method,
-      headers: requestHeaders,
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
-    })
+    const response = await fetchOpenAICompatibleChatCompletion(requestBody, {
+      apiKey: provider.api_key,
+      baseURL: provider.base_url,
+    }, TEST_TIMEOUT_MS)
     const responseBody = truncateBody(await response.text())
     const duration_ms = Date.now() - startedAt
 

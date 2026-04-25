@@ -5,6 +5,12 @@ import { getSetting } from '../db.js'
 import { toOpenAITools } from './tools.js'
 import type { ChatTurnParams, RunChatTurnResult } from './adapter.js'
 import { runToolLoop, CHAT_MAX_TOKENS } from './tool-loop.js'
+import {
+  fetchOpenAICompatibleChatCompletion,
+  isCustomOpenAICompatibleConfig,
+  iterateOpenAICompatibleStreamEvents,
+  throwIfOpenAICompatibleError,
+} from '../providers/llm/openai-compatible.js'
 
 // --- Neutral → OpenAI message conversion ---
 
@@ -92,20 +98,12 @@ export async function runOpenAITurn(params: ChatTurnParams, externalClient?: Ope
   }
 
   const { system, model } = params
-  const client = externalClient ?? getOpenAIClient(params.userId, params.openaiConfig)
   const tools = toOpenAITools()
+  const useRawCustomProvider = !externalClient && isCustomOpenAICompatibleConfig(params.openaiConfig)
+  const client = useRawCustomProvider ? null : (externalClient ?? getOpenAIClient(params.userId, params.openaiConfig))
 
   return runToolLoop(params, async (allMessages, onEvent) => {
     const openaiMessages = convertMessagesToOpenAI(allMessages, system)
-
-    const stream = await client.chat.completions.create({
-      model,
-      max_completion_tokens: CHAT_MAX_TOKENS,
-      messages: openaiMessages,
-      tools,
-      stream: true,
-      stream_options: { include_usage: true },
-    })
 
     // Accumulate streamed response
     let responseText = ''
@@ -113,8 +111,21 @@ export async function runOpenAITurn(params: ChatTurnParams, externalClient?: Ope
     let finishReason: string | null = null
     let usage = { input_tokens: 0, output_tokens: 0 }
 
-    for await (const chunk of stream) {
-      const choice = chunk.choices[0]
+    const processChunk = (chunk: {
+      choices?: Array<{
+        delta?: {
+          content?: string | null
+          tool_calls?: Array<{
+            index: number
+            id?: string
+            function?: { name?: string; arguments?: string }
+          }>
+        }
+        finish_reason?: string | null
+      }>
+      usage?: { prompt_tokens?: number; completion_tokens?: number } | null
+    }) => {
+      const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined
       if (choice) {
         const textDelta = choice.delta?.content
         if (textDelta) {
@@ -146,6 +157,48 @@ export async function runOpenAITurn(params: ChatTurnParams, externalClient?: Ope
       if (chunk.usage) {
         usage.input_tokens += chunk.usage.prompt_tokens ?? 0
         usage.output_tokens += chunk.usage.completion_tokens ?? 0
+      }
+    }
+
+    if (useRawCustomProvider) {
+      const response = await fetchOpenAICompatibleChatCompletion({
+        model,
+        max_completion_tokens: CHAT_MAX_TOKENS,
+        messages: openaiMessages,
+        tools,
+        stream: true,
+        stream_options: { include_usage: true },
+      }, params.openaiConfig)
+      await throwIfOpenAICompatibleError(response)
+      for await (const chunk of iterateOpenAICompatibleStreamEvents(response)) {
+        processChunk(chunk as {
+          choices?: Array<{
+            delta?: {
+              content?: string | null
+              tool_calls?: Array<{
+                index: number
+                id?: string
+                function?: { name?: string; arguments?: string }
+              }>
+            }
+            finish_reason?: string | null
+          }>
+          usage?: { prompt_tokens?: number; completion_tokens?: number }
+        })
+      }
+    } else {
+      const activeClient = client!
+      const stream = await activeClient.chat.completions.create({
+        model,
+        max_completion_tokens: CHAT_MAX_TOKENS,
+        messages: openaiMessages,
+        tools,
+        stream: true,
+        stream_options: { include_usage: true },
+      })
+
+      for await (const chunk of stream) {
+        processChunk(chunk)
       }
     }
 

@@ -11,6 +11,9 @@ import { hashSync } from 'bcryptjs'
 
 const mockExecuteTool = vi.fn()
 const mockGetOpenAIClient = vi.fn()
+const mockFetchOpenAICompatibleChatCompletion = vi.fn()
+const mockIterateOpenAICompatibleStreamEvents = vi.fn()
+const mockThrowIfOpenAICompatibleError = vi.fn()
 
 vi.mock('./tools.js', () => ({
   toOpenAITools: () => [{ type: 'function', function: { name: 'search_articles', description: 'Search', parameters: { type: 'object', properties: {} } } }],
@@ -46,6 +49,13 @@ vi.mock('../providers/llm/openai.js', () => ({
   },
 }))
 
+vi.mock('../providers/llm/openai-compatible.js', () => ({
+  isCustomOpenAICompatibleConfig: (config?: { baseURL?: string }) => !!config?.baseURL,
+  fetchOpenAICompatibleChatCompletion: (...args: unknown[]) => mockFetchOpenAICompatibleChatCompletion(...args),
+  iterateOpenAICompatibleStreamEvents: (...args: unknown[]) => mockIterateOpenAICompatibleStreamEvents(...args),
+  throwIfOpenAICompatibleError: (...args: unknown[]) => mockThrowIfOpenAICompatibleError(...args),
+}))
+
 vi.mock('../providers/llm/anthropic.js', () => ({
   anthropicProvider: { name: 'anthropic', requireKey: () => {}, createMessage: vi.fn(), streamMessage: vi.fn() },
   getAnthropicClient: vi.fn(),
@@ -65,6 +75,10 @@ describe('runOpenAITurn', () => {
     mockCreate.mockReset()
     mockExecuteTool.mockReset()
     mockGetOpenAIClient.mockReset()
+    mockFetchOpenAICompatibleChatCompletion.mockReset()
+    mockIterateOpenAICompatibleStreamEvents.mockReset()
+    mockThrowIfOpenAICompatibleError.mockReset()
+    mockThrowIfOpenAICompatibleError.mockResolvedValue(undefined)
   })
 
   async function loadModule() {
@@ -133,9 +147,16 @@ describe('runOpenAITurn', () => {
   })
 
   it('passes explicit OpenAI-compatible config to the OpenAI client lookup', async () => {
-    mockCreate.mockResolvedValue(createMockStream([
-      { choices: [{ delta: { content: 'Hello' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } },
-    ]))
+    mockFetchOpenAICompatibleChatCompletion.mockResolvedValue(new Response('data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }))
+    mockIterateOpenAICompatibleStreamEvents.mockImplementation(async function* () {
+      yield {
+        choices: [{ delta: { content: 'Hello' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }
+    })
 
     const { runOpenAITurn } = await loadModule()
     await runOpenAITurn({
@@ -149,10 +170,57 @@ describe('runOpenAITurn', () => {
       onEvent: vi.fn(),
     })
 
-    expect(mockGetOpenAIClient).toHaveBeenCalledWith(undefined, {
+    expect(mockFetchOpenAICompatibleChatCompletion).toHaveBeenCalled()
+    expect(mockGetOpenAIClient).not.toHaveBeenCalledWith(undefined, {
       apiKey: 'sk-openrouter',
       baseURL: 'https://openrouter.ai/api/v1',
     })
+  })
+
+  it('uses raw fetch streaming for custom OpenAI-compatible tool calls', async () => {
+    mockFetchOpenAICompatibleChatCompletion.mockResolvedValue(new Response('data: {}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }))
+    mockIterateOpenAICompatibleStreamEvents
+      .mockImplementationOnce(async function* () {
+        yield {
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: 'call_1',
+                function: { name: 'search_articles', arguments: '{"query":"test"}' },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        }
+      })
+      .mockImplementationOnce(async function* () {
+        yield {
+          choices: [{ delta: { content: 'Done' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 3, completion_tokens: 2 },
+        }
+      })
+    mockExecuteTool.mockResolvedValue('[]')
+
+    const { runOpenAITurn } = await loadModule()
+    const result = await runOpenAITurn({
+      messages: [{ role: 'user', content: 'search for test' }],
+      system: 'sys',
+      model: 'gpt-4o',
+      openaiConfig: {
+        apiKey: 'sk-openrouter',
+        baseURL: 'https://openrouter.ai/api/v1',
+      },
+      onEvent: vi.fn(),
+    })
+
+    expect(mockFetchOpenAICompatibleChatCompletion).toHaveBeenCalledTimes(2)
+    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', { query: 'test' }, { timeZone: undefined })
+    expect(result.usage).toEqual({ input_tokens: 5, output_tokens: 3 })
   })
 
   it('handles tool use loop with streaming tool call deltas', async () => {

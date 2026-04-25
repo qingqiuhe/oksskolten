@@ -4,9 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
-const { mockGetSetting, mockCreate } = vi.hoisted(() => ({
+const { mockGetSetting, mockCreate, mockFetchOpenAICompatibleChatCompletion, mockIterateOpenAICompatibleStreamEvents, mockThrowIfOpenAICompatibleError } = vi.hoisted(() => ({
   mockGetSetting: vi.fn(),
   mockCreate: vi.fn(),
+  mockFetchOpenAICompatibleChatCompletion: vi.fn(),
+  mockIterateOpenAICompatibleStreamEvents: vi.fn(),
+  mockThrowIfOpenAICompatibleError: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({
@@ -24,6 +27,13 @@ vi.mock('openai', () => ({
   },
 }))
 
+vi.mock('./openai-compatible.js', () => ({
+  isCustomOpenAICompatibleConfig: (config?: { baseURL?: string }) => !!config?.baseURL,
+  fetchOpenAICompatibleChatCompletion: (...args: unknown[]) => mockFetchOpenAICompatibleChatCompletion(...args),
+  iterateOpenAICompatibleStreamEvents: (...args: unknown[]) => mockIterateOpenAICompatibleStreamEvents(...args),
+  throwIfOpenAICompatibleError: (...args: unknown[]) => mockThrowIfOpenAICompatibleError(...args),
+}))
+
 import { openaiProvider, getOpenAIClient } from './openai.js'
 
 beforeEach(() => {
@@ -32,6 +42,7 @@ beforeEach(() => {
     if (key === 'api_key.openai') return 'sk-test'
     return undefined
   })
+  mockThrowIfOpenAICompatibleError.mockResolvedValue(undefined)
 })
 
 // --- requireKey ---
@@ -105,6 +116,29 @@ describe('getOpenAIClient', () => {
       apiKey: 'sk-test',
       baseURL: 'https://openrouter.ai/api/v1',
     })
+  })
+
+  it('does not use the SDK client when custom OpenAI-compatible config is provided', async () => {
+    mockFetchOpenAICompatibleChatCompletion.mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'ok' } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    await openaiProvider.createMessage({
+      model: 'gpt-4',
+      maxTokens: 1024,
+      messages: [{ role: 'user', content: 'Hi' }],
+      openaiConfig: {
+        apiKey: 'sk-test',
+        baseURL: 'https://provider.example/v1',
+      },
+    })
+
+    expect(mockFetchOpenAICompatibleChatCompletion).toHaveBeenCalled()
+    expect(mockCreate).not.toHaveBeenCalled()
   })
 
   it('ignores legacy openai.base_url when using built-in OpenAI', () => {
@@ -192,6 +226,30 @@ describe('openaiProvider.createMessage', () => {
 
     expect(result.text).toBe('')
   })
+
+  it('uses raw fetch for custom OpenAI-compatible requests', async () => {
+    mockFetchOpenAICompatibleChatCompletion.mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'Hello world' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    const result = await openaiProvider.createMessage({
+      model: 'gpt-4',
+      maxTokens: 1024,
+      messages: [{ role: 'user', content: 'Hi' }],
+      openaiConfig: {
+        apiKey: 'sk-custom',
+        baseURL: 'https://provider.example/v1',
+      },
+    })
+
+    expect(result.text).toBe('Hello world')
+    expect(result.inputTokens).toBe(10)
+    expect(result.outputTokens).toBe(5)
+  })
 })
 
 // --- streamMessage ---
@@ -236,5 +294,32 @@ describe('openaiProvider.streamMessage', () => {
     const call = mockCreate.mock.calls[0][0]
     expect(call.stream).toBe(true)
     expect(call.stream_options).toEqual({ include_usage: true })
+  })
+
+  it('uses raw fetch streaming for custom OpenAI-compatible requests', async () => {
+    mockFetchOpenAICompatibleChatCompletion.mockResolvedValue(new Response('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }))
+    mockIterateOpenAICompatibleStreamEvents.mockImplementation(async function* () {
+      yield { choices: [{ delta: { content: 'Hello' } }] }
+      yield { usage: { prompt_tokens: 10, completion_tokens: 5 } }
+    })
+
+    const onText = vi.fn()
+    const result = await openaiProvider.streamMessage({
+      model: 'gpt-4',
+      maxTokens: 1024,
+      messages: [{ role: 'user', content: 'Hi' }],
+      openaiConfig: {
+        apiKey: 'sk-custom',
+        baseURL: 'https://provider.example/v1',
+      },
+    }, onText)
+
+    expect(mockFetchOpenAICompatibleChatCompletion).toHaveBeenCalled()
+    expect(mockCreate).not.toHaveBeenCalled()
+    expect(onText).toHaveBeenCalledWith('Hello')
+    expect(result).toEqual({ text: 'Hello', inputTokens: 10, outputTokens: 5 })
   })
 })
