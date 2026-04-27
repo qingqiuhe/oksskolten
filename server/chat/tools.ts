@@ -114,7 +114,7 @@ const searchArticlesTool: ToolDef = {
       sort: { type: 'string', enum: ['published_at', 'score'], description: 'Sort order (default: relevance for keyword search, published_at desc otherwise)' },
     },
   },
-  execute: async (input) => {
+  execute: async (input, context) => {
     const normalized = normalizeSearchArticlesInput(input)
     const query = normalized.query as string | undefined
     const feed_id = normalized.feed_id as number | undefined
@@ -123,12 +123,16 @@ const searchArticlesTool: ToolDef = {
     const read = normalized.read as true | undefined
     const liked = normalized.liked as true | undefined
     const bookmarked = normalized.bookmarked as true | undefined
-    const article_kind = normalized.article_kind as 'original' | 'repost' | 'quote' | undefined
     const since = normalized.since as string | undefined
     const until = normalized.until as string | undefined
     const limit = clampLimit(normalized.limit as number | undefined, 20, 100)
     const sort = normalized.sort as 'published_at' | 'score' | undefined
     const scopeArticleIds = normalized.__scope_article_ids as number[] | undefined
+    const normalizedArticleKind = normalized.article_kind as 'original' | 'repost' | 'quote' | undefined
+    const scopedSourceArticleKind = context?.scope?.type === 'list' ? context.scope.source_filters?.article_kind : undefined
+    const article_kind = scopeArticleIds && normalizedArticleKind === 'original' && scopedSourceArticleKind !== 'original'
+      ? undefined
+      : normalizedArticleKind
 
     let results: ArticleListItem[]
 

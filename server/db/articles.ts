@@ -1520,11 +1520,11 @@ export function searchArticles(opts: {
     return []
   }
   if (opts.since) {
-    conditions.push('a.published_at >= @since')
+    conditions.push('COALESCE(a.published_at, a.fetched_at) >= @since')
     params.since = opts.since
   }
   if (opts.until) {
-    conditions.push('a.published_at <= @until')
+    conditions.push('COALESCE(a.published_at, a.fetched_at) <= @until')
     params.until = opts.until
   }
 

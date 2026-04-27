@@ -8,6 +8,7 @@ import {
   recordArticleRead,
   createCategory,
   updateArticleContent,
+  getDb,
 } from '../db.js'
 
 // Mock fetcher AI calls
@@ -192,16 +193,18 @@ describe('search_articles', () => {
     const feed = seedFeed()
     const seenId = seedArticle(feed.id, {
       url: 'https://example.com/seen',
-      title: 'Seen original',
-      article_kind: 'original',
-      published_at: '2026-04-27T08:00:00Z',
+      title: 'Seen article',
+      article_kind: null,
+      published_at: null,
     })
     const unreadId = seedArticle(feed.id, {
       url: 'https://example.com/unread',
-      title: 'Unread original',
-      article_kind: 'original',
-      published_at: '2026-04-27T09:00:00Z',
+      title: 'Unread article',
+      article_kind: null,
+      published_at: null,
     })
+    getDb().prepare('UPDATE articles SET fetched_at = ? WHERE id = ?').run('2026-04-27T08:00:00Z', seenId)
+    getDb().prepare('UPDATE articles SET fetched_at = ? WHERE id = ?').run('2026-04-27T09:00:00Z', unreadId)
     markArticleSeen(seenId, true)
 
     const payload = {
