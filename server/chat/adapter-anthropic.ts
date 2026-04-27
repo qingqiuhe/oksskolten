@@ -36,12 +36,20 @@ export async function runAnthropicTurn(params: ChatTurnParams): Promise<RunChatT
     throw new Error('ANTHROPIC_KEY_NOT_SET')
   }
 
-  const { system, model } = params
+  const { system, model, debugCollector } = params
   const client = getAnthropicClient(params.userId)
   const tools = toAnthropicTools()
 
   return runToolLoop(params, async (allMessages, onEvent) => {
     const apiMessages = toAnthropicMessages(allMessages)
+    debugCollector?.setProviderRequest({
+      transport: 'anthropic-sdk',
+      model,
+      max_tokens: CHAT_MAX_TOKENS,
+      system,
+      tools,
+      messages: apiMessages,
+    })
     const stream = client.messages.stream({
       model,
       max_tokens: CHAT_MAX_TOKENS,
@@ -62,6 +70,12 @@ export async function runAnthropicTurn(params: ChatTurnParams): Promise<RunChatT
 
     const finalMessage = await stream.finalMessage()
     const content = toNeutralContent(finalMessage.content)
+    debugCollector?.setProviderResponse({
+      stop_reason: finalMessage.stop_reason,
+      content: finalMessage.content,
+      normalized_content: content,
+      usage: finalMessage.usage,
+    })
 
     // Only include tool_use blocks when stop_reason indicates tool execution
     if (finalMessage.stop_reason !== 'tool_use') {

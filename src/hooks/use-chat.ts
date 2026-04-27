@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 import { fetcher, streamPostChat, type ChatSSEEvent } from '../lib/fetcher'
-import type { ChatScope } from '../../shared/types'
+import type { ChatDebugTrace, ChatScope } from '../../shared/types'
 
 export interface ChatUsage {
   input_tokens: number
@@ -13,6 +13,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
   usage?: ChatUsage
+  debugTrace?: ChatDebugTrace
 }
 
 interface ToolStatus {
@@ -85,6 +86,18 @@ export function useChat(scope?: ChatScope) {
               break
             case 'tool_use_end':
               setActiveTool(null)
+              break
+            case 'debug_trace':
+              setMessages(prev => {
+                const updated = [...prev]
+                for (let i = updated.length - 1; i >= 0; i--) {
+                  if (updated[i]?.role === 'assistant') {
+                    updated[i] = { ...updated[i], debugTrace: event.trace }
+                    break
+                  }
+                }
+                return updated
+              })
               break
             case 'error':
               setThinking(false)

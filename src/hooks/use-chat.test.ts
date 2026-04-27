@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useChat } from './use-chat'
 import { buildArticleScope } from '../lib/chat-scope'
+import type { ChatDebugTrace } from '../../shared/types'
 
 // Capture the onEvent callback from streamPostChat so we can simulate events
 let capturedOnEvent: ((event: any) => void) | null = null
@@ -161,6 +162,43 @@ describe('useChat', () => {
     await act(async () => { streamResolve!() })
   })
 
+  it('attaches debug trace to the latest assistant message', async () => {
+    const { result } = renderHook(() => useChat())
+    const trace: ChatDebugTrace = {
+      meta: {
+        provider: 'anthropic',
+        model: 'claude-haiku-4-5-20251001',
+        started_at: '2026-04-27T00:00:00.000Z',
+        elapsed_ms: 321,
+        scope: null,
+        scope_summary: null,
+      },
+      system: 'system prompt',
+      input: { messages: [{ role: 'user', content: 'hello' }] },
+      provider_request: { model: 'claude-haiku-4-5-20251001' },
+      tool_rounds: [],
+      provider_response: { stop_reason: 'end_turn' },
+      output: {
+        text: 'Hello back',
+        usage: { input_tokens: 12, output_tokens: 8 },
+      },
+    }
+
+    await act(async () => {
+      result.current.sendMessage('hi')
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      capturedOnEvent!({ type: 'text_delta', text: 'Hello back' })
+      capturedOnEvent!({ type: 'debug_trace', trace })
+    })
+
+    expect(result.current.messages[1].debugTrace).toEqual(trace)
+
+    await act(async () => { streamResolve!() })
+  })
+
   it('handles stream rejection and removes empty assistant message', async () => {
     const { result } = renderHook(() => useChat())
 
@@ -225,6 +263,7 @@ describe('useChat', () => {
       { role: 'user', text: 'question' },
       { role: 'assistant', text: 'answer' },
     ])
+    expect(result.current.messages[1].debugTrace).toBeUndefined()
   })
 
   it('loadConversation skips tool_result/tool_use blocks', async () => {

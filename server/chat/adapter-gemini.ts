@@ -83,12 +83,21 @@ export async function runGeminiTurn(params: ChatTurnParams): Promise<RunChatTurn
     throw new Error('GEMINI_KEY_NOT_SET')
   }
 
-  const { system, model } = params
+  const { system, model, debugCollector } = params
   const ai = getGeminiClient(params.userId)
   const tools = toGeminiTools()
 
   return runToolLoop(params, async (allMessages, onEvent) => {
     const geminiContents = convertMessagesToGemini(allMessages)
+    debugCollector?.setProviderRequest({
+      transport: 'gemini-sdk',
+      model,
+      contents: geminiContents,
+      config: {
+        systemInstruction: system,
+        tools,
+      },
+    })
 
     const stream = await ai.models.generateContentStream({
       model,
@@ -103,8 +112,14 @@ export async function runGeminiTurn(params: ChatTurnParams): Promise<RunChatTurn
     let fullText = ''
     const functionCalls: Array<{ id: string; name: string; args: Record<string, unknown> }> = []
     let usage = { input_tokens: 0, output_tokens: 0 }
+    const responseParts: unknown[] = []
 
     for await (const chunk of stream) {
+      responseParts.push({
+        text: chunk.text ?? '',
+        candidates: chunk.candidates?.map(candidate => candidate.content?.parts ?? []),
+        usageMetadata: chunk.usageMetadata ?? null,
+      })
       const textDelta = chunk.text ?? ''
       if (textDelta) {
         fullText += textDelta
@@ -145,6 +160,13 @@ export async function runGeminiTurn(params: ChatTurnParams): Promise<RunChatTurn
         input: fc.args,
       })
     }
+
+    debugCollector?.setProviderResponse({
+      text: fullText,
+      function_calls: functionCalls,
+      usage,
+      response_parts: responseParts,
+    })
 
     return { content, usage }
   })

@@ -1,4 +1,5 @@
 import { getAuthToken, logoutClient } from './auth'
+import type { ChatDebugTrace } from '../../shared/types'
 
 export class ApiError extends Error {
   status: number
@@ -58,11 +59,12 @@ export async function parseSSEStream<T>(
 }
 
 export interface ChatSSEEvent {
-  type: 'conversation_id' | 'text_delta' | 'thinking_start' | 'thinking_end' | 'tool_use_start' | 'tool_use_end' | 'done' | 'error'
+  type: 'conversation_id' | 'text_delta' | 'thinking_start' | 'thinking_end' | 'tool_use_start' | 'tool_use_end' | 'debug_trace' | 'done' | 'error'
   conversation_id?: string
   text?: string
   name?: string
   tool_use_id?: string
+  trace?: ChatDebugTrace
   usage?: { input_tokens: number; output_tokens: number }
   elapsed_ms?: number
   model?: string

@@ -1,7 +1,8 @@
 import type { Message } from './types.js'
-import type { ChatScope } from '../../shared/types.js'
+import type { ChatDebugTrace, ChatScope } from '../../shared/types.js'
 import type { OpenAICompatibleConfig } from '../llm-task-config.js'
 import { runAnthropicTurn } from './adapter-anthropic.js'
+import type { ChatDebugCollector } from './debug.js'
 
 export type ChatSSEEvent =
   | { type: 'text_delta'; text: string }
@@ -9,6 +10,7 @@ export type ChatSSEEvent =
   | { type: 'thinking_end' }
   | { type: 'tool_use_start'; name: string; tool_use_id: string }
   | { type: 'tool_use_end'; name: string; tool_use_id: string }
+  | { type: 'debug_trace'; trace: ChatDebugTrace }
   | { type: 'done'; usage: { input_tokens: number; output_tokens: number }; elapsed_ms?: number; model?: string }
   | { type: 'error'; error: string }
 
@@ -25,6 +27,7 @@ export interface ChatTurnParams {
   openaiConfig?: OpenAICompatibleConfig
   timeZone?: string
   scope?: ChatScope
+  debugCollector?: ChatDebugCollector
   onEvent: (event: ChatSSEEvent) => void
 }
 

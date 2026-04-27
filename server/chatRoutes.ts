@@ -86,6 +86,7 @@ import {
   serializeChatScope,
   type IncomingChatScope,
 } from './chat/scope.js'
+import { createChatDebugCollector } from './chat/debug.js'
 
 const CONVERSATION_TITLE_MAX_LENGTH = 50
 
@@ -162,6 +163,17 @@ export function registerChatApi(app: FastifyInstance): void {
       if (scope.type === 'article') {
         systemPrompt = appendArticleContext(systemPrompt, scope.article_id)
       }
+      const debugScopeArticle = scope.type === 'article'
+        ? getArticleById(scope.article_id, userId) as ArticleDetail | undefined
+        : undefined
+      const debugCollector = createChatDebugCollector({
+        provider: backend,
+        model,
+        system: systemPrompt,
+        messages: normalizedMessages,
+        scope,
+        scopeSummary: getChatScopeSummary(scope, debugScopeArticle),
+      })
 
       // SSE response
       const sse = startSSE(reply)
@@ -180,6 +192,7 @@ export function registerChatApi(app: FastifyInstance): void {
           openaiConfig: resolvedTask.openaiConfig,
           timeZone: body.timeZone,
           scope,
+          debugCollector,
           onEvent: (event) => {
             if (event.type === 'done') {
               sse.send({ ...event, elapsed_ms: Date.now() - startTime, model })
@@ -187,6 +200,20 @@ export function registerChatApi(app: FastifyInstance): void {
               sse.send(event as Record<string, unknown>)
             }
           },
+        })
+        const assistantText = result.allMessages
+          .filter(m => m.role === 'assistant')
+          .flatMap(m => Array.isArray(m.content) ? m.content : [])
+          .filter((b): b is TextBlock => typeof b === 'object' && 'type' in b && b.type === 'text')
+          .map(b => b.text)
+          .join('')
+        sse.send({
+          type: 'debug_trace',
+          trace: debugCollector.finalize({
+            elapsed_ms: Date.now() - startTime,
+            text: assistantText,
+            usage: result.usage,
+          }),
         })
 
         // Save all new messages from the turn (after the user message we already saved)
@@ -222,6 +249,14 @@ export function registerChatApi(app: FastifyInstance): void {
           }
         }
       } catch (err) {
+        sse.send({
+          type: 'debug_trace',
+          trace: debugCollector.finalize({
+            elapsed_ms: Date.now() - startTime,
+            text: '',
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        })
         deleteChatMessage(insertedUserMessage.id)
         const errorMsg = err instanceof Error ? err.message : String(err)
         sse.send({ type: 'error', error: errorMsg })

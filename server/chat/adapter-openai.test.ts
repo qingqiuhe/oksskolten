@@ -4,6 +4,7 @@ import type { ContentBlock, ToolResultBlock } from './types.js'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { getDb, upsertSetting } from '../db.js'
 import { hashSync } from 'bcryptjs'
+import { createChatDebugCollector } from './debug.js'
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -124,6 +125,34 @@ describe('runOpenAITurn', () => {
     expect(events.find(e => e.type === 'done')).toBeDefined()
     expect(result.usage.input_tokens).toBe(10)
     expect(result.usage.output_tokens).toBe(5)
+  })
+
+  it('captures provider request and response in debug trace', async () => {
+    upsertSetting('api_key.openai', 'test-key')
+
+    mockCreate.mockResolvedValue(createMockStream([
+      { choices: [{ delta: { content: 'Hello' }, finish_reason: 'stop' }], usage: { prompt_tokens: 4, completion_tokens: 2 } },
+    ]))
+
+    const debugCollector = createChatDebugCollector({
+      provider: 'openai',
+      model: 'gpt-4o',
+      system: 'You are helpful.',
+      messages: [{ role: 'user', content: 'hi' }],
+      scopeSummary: null,
+    })
+    const { runOpenAITurn } = await loadModule()
+    await runOpenAITurn({
+      messages: [{ role: 'user', content: 'hi' }],
+      system: 'You are helpful.',
+      model: 'gpt-4o',
+      debugCollector,
+      onEvent: vi.fn(),
+    })
+
+    const trace = debugCollector.getTrace()
+    expect((trace.provider_request as { transport?: string }).transport).toBe('openai-sdk')
+    expect((trace.provider_response as { finish_reason?: string }).finish_reason).toBe('stop')
   })
 
   it('passes userId to the OpenAI client lookup', async () => {

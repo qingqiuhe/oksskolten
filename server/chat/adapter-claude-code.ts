@@ -51,7 +51,7 @@ function buildPrompt(messages: Message[]): string {
  * Does NOT use --session-id/--resume — DB is the single source of truth.
  */
 export async function runClaudeCodeTurn(params: ChatTurnParams): Promise<RunChatTurnResult> {
-  const { messages, system, model, onEvent, scope } = params
+  const { messages, system, model, onEvent, scope, debugCollector } = params
 
   // Create tool log temp file for MCP server to write to
   const toolLogPath = path.join(os.tmpdir(), `oksskolten-tool-log-${Date.now()}.jsonl`)
@@ -88,6 +88,24 @@ export async function runClaudeCodeTurn(params: ChatTurnParams): Promise<RunChat
     '--dangerously-skip-permissions',
     '--disallowedTools', 'Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Agent',
   ]
+
+  debugCollector?.setProviderRequest({
+    transport: 'claude-code-cli',
+    model,
+    args,
+    prompt,
+    system_prompt: system,
+    mcp_servers: {
+      oksskolten: {
+        command: process.execPath,
+        args: [tsxCliPath, mcpServerPath],
+        env: {
+          TOOL_LOG_PATH: toolLogPath,
+          ...(scope ? { CHAT_SCOPE_JSON: JSON.stringify(scope) } : {}),
+        },
+      },
+    },
+  })
 
   return new Promise<RunChatTurnResult>((resolve, reject) => {
     if (!fs.existsSync(tsxCliPath)) {
@@ -212,6 +230,13 @@ export async function runClaudeCodeTurn(params: ChatTurnParams): Promise<RunChat
 
       // Read tool log to reconstruct structured messages
       const toolLogs = readToolLog(toolLogPath)
+      debugCollector?.setProviderResponse({
+        exit_code: code,
+        stderr: stderrText || null,
+        tool_logs: toolLogs,
+        accumulated_text: accumulatedText,
+        usage: totalUsage,
+      })
 
       // Build allMessages for DB storage
       const allMessages = buildAllMessages(messages, accumulatedText, toolLogs)

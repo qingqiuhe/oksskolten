@@ -5,10 +5,12 @@ import { SanitizedHTML } from '../ui/sanitized-html'
 import type { ChatMessage } from '../../hooks/use-chat'
 import { getModelLabel, getModelPricing } from '../../../shared/models'
 import { articleUrlToPath } from '../../lib/url'
+import { ChatDebugPanel } from './chat-debug-panel'
 
 interface ChatMessageBubbleProps {
   message: ChatMessage
   streaming?: boolean
+  debugEnabled?: boolean
 }
 
 /**
@@ -33,7 +35,7 @@ function formatChatUsage(usage: NonNullable<ChatMessage['usage']>): string {
   return `${modelLabel} · ${elapsed}s · ${usage.input_tokens.toLocaleString()} in · ${usage.output_tokens.toLocaleString()} out · ~$${cost.toFixed(4)}`
 }
 
-export function ChatMessageBubble({ message, streaming }: ChatMessageBubbleProps) {
+export function ChatMessageBubble({ message, streaming, debugEnabled = false }: ChatMessageBubbleProps) {
   const html = useMemo(() => {
     if (!message.text) return ''
     return sanitizeHtml(renderMarkdown(message.text, [rewriteLinksToAppPaths]))
@@ -64,6 +66,9 @@ export function ChatMessageBubble({ message, streaming }: ChatMessageBubbleProps
           <p className="text-[11px] text-muted mt-1 select-none">
             {formatChatUsage(message.usage)}
           </p>
+        )}
+        {debugEnabled && message.debugTrace && !streaming && (
+          <ChatDebugPanel trace={message.debugTrace} />
         )}
     </div>
   )

@@ -19,7 +19,7 @@ export async function runToolLoop(
   params: ChatTurnParams,
   callProvider: ProviderCallFn,
 ): Promise<RunChatTurnResult> {
-  const { messages, onEvent, timeZone, scope } = params
+  const { messages, onEvent, timeZone, scope, debugCollector } = params
   const allMessages = [...messages]
   let totalUsage = { input_tokens: 0, output_tokens: 0 }
 
@@ -42,14 +42,31 @@ export async function runToolLoop(
 
     const settled = await Promise.allSettled(
       toolUseBlocks.map(async (toolUse) => {
+        const startedAt = Date.now()
         try {
           const r = await executeTool(toolUse.name, toolUse.input, { timeZone, scope })
+          debugCollector?.recordToolRound({
+            tool_use_id: toolUse.id,
+            name: toolUse.name,
+            input: toolUse.input,
+            result: r,
+            duration_ms: Date.now() - startedAt,
+          })
           return { type: 'tool_result' as const, tool_use_id: toolUse.id, content: r }
         } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          debugCollector?.recordToolRound({
+            tool_use_id: toolUse.id,
+            name: toolUse.name,
+            input: toolUse.input,
+            error: message,
+            is_error: true,
+            duration_ms: Date.now() - startedAt,
+          })
           return {
             type: 'tool_result' as const,
             tool_use_id: toolUse.id,
-            content: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
+            content: JSON.stringify({ error: message }),
             is_error: true as const,
           }
         } finally {

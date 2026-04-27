@@ -14,6 +14,7 @@ import { ChatMessages } from './chat-messages'
 import { ChatPromptSuggestion } from './chat-prompt-suggestion'
 import { ChatLinkedArticle } from './chat-linked-article'
 import { ChatScopeBadge } from './chat-scope-badge'
+import { useChatDebugMode } from '../../hooks/use-chat-debug-mode'
 import type { ChatScope, ScopeSummary } from '../../../shared/types'
 
 interface ToolStatus {
@@ -57,6 +58,8 @@ interface Conversation {
 export function ChatPanel({ variant, chatState: externalChatState, scope, scopeSummary, scopeControl, conversationId: initialConversationId, onConversationCreated, onClose }: ChatPanelProps) {
   const { t } = useI18n()
   const articleId = scope?.type === 'article' ? scope.article_id : undefined
+  const { chatDebugMode, setChatDebugMode } = useChatDebugMode()
+  const debugEnabled = chatDebugMode === 'on'
 
   // Use external chat state if provided, otherwise create internal one
   const internalChatState = useChat(scope)
@@ -186,6 +189,7 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
         thinking={thinking}
         activeTool={activeTool}
         error={error}
+        debugEnabled={debugEnabled}
         endRef={messagesEndRef}
         showEndMarker={!isInline}
       />
@@ -203,6 +207,20 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
   )
 
   const inlineScopeMeta = scopeControl ?? <ChatScopeBadge summary={scopeSummary} />
+  const debugToggle = (
+    <button
+      type="button"
+      onClick={() => setChatDebugMode(debugEnabled ? 'off' : 'on')}
+      className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+        debugEnabled
+          ? 'border-accent bg-accent/10 text-accent'
+          : 'border-border bg-bg-subtle text-muted hover:text-text'
+      }`}
+      aria-pressed={debugEnabled}
+    >
+      {t('chat.debug.toggle')}
+    </button>
+  )
 
   // Expanded overlay (inline variant only) — rendered via portal
   if (isInline && expanded) {
@@ -215,12 +233,14 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
           <div className="bg-bg-card rounded-xl border border-border w-full max-w-3xl h-full max-h-[90vh] flex flex-col animate-[fade-in_150ms_ease] pointer-events-auto">
             {/* header */}
             <div className="flex items-center justify-between px-4 py-2 border-b border-border select-none" style={{ paddingTop: 'var(--safe-area-inset-top)' }}>
-              <div className="min-w-0">
-                <span className="text-sm font-medium text-text">{t('chat.title')}</span>
-                <div className="mt-1">
-                  {inlineScopeMeta}
-                </div>
+            <div className="min-w-0">
+              <span className="text-sm font-medium text-text">{t('chat.title')}</span>
+              <div className="mt-1">
+                {inlineScopeMeta}
               </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {debugToggle}
               <IconButton
                 onClick={() => setExpanded(false)}
                 className="p-1 w-auto h-auto hover:bg-hover"
@@ -229,6 +249,7 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
                 <Minimize2 className="w-4 h-4" />
               </IconButton>
             </div>
+          </div>
             {/* messages */}
             <div ref={messagesContainerRef} className="flex-1 overflow-y-auto overscroll-contain px-4 py-3 space-y-3">
               {messagesContent}
@@ -277,7 +298,8 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
               {inlineScopeMeta}
             </div>
           </div>
-          <div className="flex items-center gap-0.5">
+          <div className="flex items-center gap-2">
+            {debugToggle}
             <IconButton
               onClick={() => setExpanded(true)}
               className="p-1 w-auto h-auto hover:bg-hover"
@@ -320,10 +342,20 @@ export function ChatPanel({ variant, chatState: externalChatState, scope, scopeS
   // Full variant (HomePage / ChatPage)
   return (
     <div className="flex flex-col h-full">
+      <div className="border-b border-border">
+        <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-2">
+          <div className="min-w-0">
+            <span className="text-sm font-medium text-text">{t('chat.title')}</span>
+            <div className="mt-1">
+              <ChatScopeBadge summary={scopeSummary} />
+            </div>
+          </div>
+          {debugToggle}
+        </div>
+      </div>
       {/* Messages */}
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto overscroll-contain">
         <div className="max-w-2xl mx-auto px-4 py-4 space-y-3">
-          <ChatScopeBadge summary={scopeSummary} />
           {linkedArticle && (
             <ChatLinkedArticle
               title={linkedArticle.title}

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { ChatMessageBubble } from './chat-message-bubble'
 import type { ChatMessage } from '../../hooks/use-chat'
+import type { ChatDebugTrace } from '../../../shared/types'
 
 describe('ChatMessageBubble', () => {
   it('renders user message as plain text bubble', () => {
@@ -72,5 +73,35 @@ describe('ChatMessageBubble', () => {
     const link = document.querySelector('.prose a') as HTMLAnchorElement
     expect(link).toBeTruthy()
     expect(link.getAttribute('href')).toContain('/example.com/article')
+  })
+
+  it('renders debug panel only when enabled', () => {
+    const trace: ChatDebugTrace = {
+      meta: {
+        provider: 'openai',
+        model: 'gpt-4.1-mini',
+        started_at: '2026-04-27T00:00:00.000Z',
+        elapsed_ms: 123,
+        scope: null,
+        scope_summary: null,
+      },
+      system: 'system prompt',
+      input: { messages: [{ role: 'user', content: 'question' }] },
+      provider_request: { model: 'gpt-4.1-mini' },
+      tool_rounds: [],
+      provider_response: { finish_reason: 'stop' },
+      output: { text: 'answer' },
+    }
+    const message: ChatMessage = {
+      role: 'assistant',
+      text: 'Response',
+      debugTrace: trace,
+    }
+
+    const { rerender } = render(<ChatMessageBubble message={message} />)
+    expect(screen.queryByText('Debug Trace')).toBeNull()
+
+    rerender(<ChatMessageBubble message={message} debugEnabled />)
+    expect(screen.getByText('Debug Trace')).toBeTruthy()
   })
 })

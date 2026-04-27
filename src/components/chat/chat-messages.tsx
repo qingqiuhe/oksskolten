@@ -16,11 +16,12 @@ interface ChatMessagesProps {
   thinking: boolean
   activeTool: ToolStatus | null
   error: string | null
+  debugEnabled?: boolean
   endRef?: RefObject<HTMLDivElement | null>
   showEndMarker?: boolean
 }
 
-export function ChatMessages({ messages, streaming, thinking, activeTool, error, endRef, showEndMarker }: ChatMessagesProps) {
+export function ChatMessages({ messages, streaming, thinking, activeTool, error, debugEnabled = false, endRef, showEndMarker }: ChatMessagesProps) {
   const { t, tError, isKeyNotSetError } = useI18n()
 
   return (
@@ -30,6 +31,7 @@ export function ChatMessages({ messages, streaming, thinking, activeTool, error,
           key={i}
           message={msg}
           streaming={streaming && i === messages.length - 1 && msg.role === 'assistant'}
+          debugEnabled={debugEnabled}
         />
       ))}
 

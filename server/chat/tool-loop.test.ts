@@ -10,6 +10,7 @@ vi.mock('./tools.js', () => ({
 
 import { runToolLoop } from './tool-loop.js'
 import { executeTool } from './tools.js'
+import { createChatDebugCollector } from './debug.js'
 
 function makeProvider(rounds: Array<{ content: ContentBlock[]; usage?: { input_tokens: number; output_tokens: number } }>): ProviderCallFn {
   let callIdx = 0
@@ -161,5 +162,34 @@ describe('runToolLoop', () => {
     // Order should match original tool_use order, not completion order
     expect(toolResults[0].tool_use_id).toBe('id_a')
     expect(toolResults[1].tool_use_id).toBe('id_b')
+  })
+
+  it('records tool debug trace entries', async () => {
+    vi.mocked(executeTool).mockResolvedValue(JSON.stringify({ ok: true }))
+    const debugCollector = createChatDebugCollector({
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+      system: 'sys',
+      messages: [{ role: 'user', content: 'test' }],
+      scopeSummary: null,
+    })
+    const provider = makeProvider([
+      {
+        content: [
+          { type: 'tool_use', id: 'tool_1', name: 'get_feeds', input: { limit: 1 } },
+        ],
+      },
+      { content: [{ type: 'text', text: 'Done' }] },
+    ])
+
+    await runToolLoop(
+      { messages: [{ role: 'user', content: 'test' }], system: '', model: '', debugCollector, onEvent: () => {} },
+      provider,
+    )
+
+    expect(debugCollector.getTrace().tool_rounds).toHaveLength(1)
+    expect(debugCollector.getTrace().tool_rounds[0].name).toBe('get_feeds')
+    expect(debugCollector.getTrace().tool_rounds[0].input).toEqual({ limit: 1 })
+    expect(debugCollector.getTrace().tool_rounds[0].result).toContain('"ok":true')
   })
 })

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ChatSSEEvent } from './adapter.js'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { upsertSetting } from '../db.js'
+import { createChatDebugCollector } from './debug.js'
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -94,6 +95,34 @@ describe('runGeminiTurn', () => {
     expect(events.find(e => e.type === 'done')).toBeDefined()
     expect(result.usage.input_tokens).toBe(10)
     expect(result.usage.output_tokens).toBe(5)
+  })
+
+  it('captures provider request and response in debug trace', async () => {
+    upsertSetting('api_key.gemini', 'test-key')
+
+    mockGenerateContentStream.mockResolvedValue(createMockStream([
+      { text: 'Hello', candidates: null, usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 2 } },
+    ]))
+
+    const debugCollector = createChatDebugCollector({
+      provider: 'gemini',
+      model: 'gemini-2.0-flash',
+      system: 'You are helpful.',
+      messages: [{ role: 'user', content: 'hi' }],
+      scopeSummary: null,
+    })
+    const { runGeminiTurn } = await loadModule()
+    await runGeminiTurn({
+      messages: [{ role: 'user', content: 'hi' }],
+      system: 'You are helpful.',
+      model: 'gemini-2.0-flash',
+      debugCollector,
+      onEvent: vi.fn(),
+    })
+
+    const trace = debugCollector.getTrace()
+    expect((trace.provider_request as { transport?: string }).transport).toBe('gemini-sdk')
+    expect((trace.provider_response as { text?: string }).text).toBe('Hello')
   })
 
   it('handles tool use loop', async () => {

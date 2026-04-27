@@ -197,6 +197,47 @@ export interface ScopeSummary {
   count_scoped?: number
 }
 
+export interface ChatDebugMessage {
+  role: 'user' | 'assistant'
+  content: unknown
+}
+
+export interface ChatDebugToolRound {
+  tool_use_id: string
+  name: string
+  input: unknown
+  result?: unknown
+  error?: string | null
+  is_error?: boolean
+  duration_ms: number
+}
+
+export interface ChatDebugTrace {
+  meta: {
+    provider: string
+    model: string
+    started_at: string
+    elapsed_ms: number
+    scope: ChatScope | null
+    scope_summary: ScopeSummary | null
+  }
+  system: string
+  input: {
+    messages: ChatDebugMessage[]
+  }
+  provider_request: unknown | null
+  tool_rounds: ChatDebugToolRound[]
+  provider_response: unknown | null
+  output: {
+    text: string
+    usage?: {
+      input_tokens: number
+      output_tokens: number
+    }
+    error?: string | null
+  }
+}
+
 export interface NotificationChannel {
   id: number
   user_id: number | null

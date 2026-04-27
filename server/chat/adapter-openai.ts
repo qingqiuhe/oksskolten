@@ -97,19 +97,33 @@ export async function runOpenAITurn(params: ChatTurnParams, externalClient?: Ope
     throw new Error('OPENAI_KEY_NOT_SET')
   }
 
-  const { system, model } = params
+  const { system, model, debugCollector } = params
   const tools = toOpenAITools()
   const useRawCustomProvider = !externalClient && isCustomOpenAICompatibleConfig(params.openaiConfig)
   const client = useRawCustomProvider ? null : (externalClient ?? getOpenAIClient(params.userId, params.openaiConfig))
 
   return runToolLoop(params, async (allMessages, onEvent) => {
     const openaiMessages = convertMessagesToOpenAI(allMessages, system)
+    const requestPayload = {
+      model,
+      max_completion_tokens: CHAT_MAX_TOKENS,
+      messages: openaiMessages,
+      tools,
+      stream: true,
+      stream_options: { include_usage: true },
+    }
+
+    debugCollector?.setProviderRequest({
+      transport: useRawCustomProvider ? 'openai-compatible-fetch' : 'openai-sdk',
+      ...requestPayload,
+    }, [params.openaiConfig?.apiKey ?? ''])
 
     // Accumulate streamed response
     let responseText = ''
     const toolCallAccum: Map<number, { id: string; name: string; arguments: string }> = new Map()
     let finishReason: string | null = null
     let usage = { input_tokens: 0, output_tokens: 0 }
+    const responseEvents: unknown[] = []
 
     const processChunk = (chunk: {
       choices?: Array<{
@@ -125,6 +139,7 @@ export async function runOpenAITurn(params: ChatTurnParams, externalClient?: Ope
       }>
       usage?: { prompt_tokens?: number; completion_tokens?: number } | null
     }) => {
+      responseEvents.push(chunk)
       const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined
       if (choice) {
         const textDelta = choice.delta?.content
@@ -203,6 +218,13 @@ export async function runOpenAITurn(params: ChatTurnParams, externalClient?: Ope
     }
 
     const toolCalls = [...toolCallAccum.values()]
+    debugCollector?.setProviderResponse({
+      finish_reason: finishReason,
+      text: responseText || null,
+      tool_calls: toolCalls,
+      usage,
+      response_events: responseEvents,
+    }, [params.openaiConfig?.apiKey ?? ''])
 
     // Only include tool_use blocks when finish_reason indicates tool execution
     if (finishReason !== 'tool_calls') {
