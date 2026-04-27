@@ -1583,11 +1583,16 @@ export function deleteArticle(id: number, userId?: number | null): boolean {
 export function getReadingStats(opts?: {
   since?: string
   until?: string
+  article_ids?: number[]
   userId?: number | null
 }): { total: number; read: number; unread: number; by_feed: { feed_id: number; feed_name: string; total: number; read: number; unread: number }[] } {
   const conditions: string[] = []
   const params: Record<string, unknown> = {}
   const scopedUserId = resolveUserId(opts?.userId)
+
+  if (opts?.article_ids && opts.article_ids.length === 0) {
+    return { total: 0, read: 0, unread: 0, by_feed: [] }
+  }
 
   if (scopedUserId != null) {
     conditions.push('a.user_id = @user_id')
@@ -1601,6 +1606,11 @@ export function getReadingStats(opts?: {
   if (opts?.until) {
     conditions.push('a.published_at <= @until')
     params.until = opts.until
+  }
+  if (opts?.article_ids?.length) {
+    const placeholders = opts.article_ids.map((_, i) => `@article_id_${i}`).join(', ')
+    conditions.push(`a.id IN (${placeholders})`)
+    opts.article_ids.forEach((id, i) => { params[`article_id_${i}`] = id })
   }
 
   const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''

@@ -21,7 +21,7 @@ import { getSetting } from '../db/settings.js'
 import { DEFAULT_LANGUAGE } from '../../shared/lang.js'
 import { articleUrlToPath } from '../../shared/url.js'
 import type { ChatScope } from '../../shared/types.js'
-import { applyScopeToArticleSearch, assertArticleInScope } from './scope.js'
+import { applyScopeToArticleSearch, applyScopeToReadingStats, assertArticleInScope } from './scope.js'
 
 /** Convert a UTC datetime string from SQLite to a local-time ISO-like string */
 function toLocalTime(utc: string | null, timeZone?: string): string | null {
@@ -34,6 +34,48 @@ function toLocalTime(utc: string | null, timeZone?: string): string | null {
 function clampLimit(value: number | undefined, fallback: number, max: number): number {
   if (value == null || !Number.isFinite(value)) return fallback
   return Math.max(1, Math.min(Math.floor(value), max))
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  if (!Number.isInteger(value) || Number(value) <= 0) return undefined
+  return Number(value)
+}
+
+function normalizeOptInBoolean(value: unknown): true | undefined {
+  return value === true ? true : undefined
+}
+
+function normalizeNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function normalizeIsoLikeDateString(value: unknown): string | undefined {
+  const normalized = normalizeNonEmptyString(value)
+  if (!normalized) return undefined
+  return Number.isNaN(Date.parse(normalized)) ? undefined : normalized
+}
+
+function normalizeSearchArticlesInput(input: Record<string, unknown>): Record<string, unknown> {
+  const article_kind = input.article_kind
+  const sort = input.sort
+
+  return {
+    ...(normalizeNonEmptyString(input.query) ? { query: normalizeNonEmptyString(input.query) } : {}),
+    ...(normalizePositiveInteger(input.feed_id) ? { feed_id: normalizePositiveInteger(input.feed_id) } : {}),
+    ...(normalizePositiveInteger(input.category_id) ? { category_id: normalizePositiveInteger(input.category_id) } : {}),
+    ...(normalizeOptInBoolean(input.unread) ? { unread: true } : {}),
+    ...(normalizeOptInBoolean(input.read) ? { read: true } : {}),
+    ...(normalizeOptInBoolean(input.liked) ? { liked: true } : {}),
+    ...(normalizeOptInBoolean(input.bookmarked) ? { bookmarked: true } : {}),
+    ...(article_kind === 'original' || article_kind === 'repost' || article_kind === 'quote' ? { article_kind } : {}),
+    ...(normalizeIsoLikeDateString(input.since) ? { since: normalizeIsoLikeDateString(input.since) } : {}),
+    ...(normalizeIsoLikeDateString(input.until) ? { until: normalizeIsoLikeDateString(input.until) } : {}),
+    ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
+    ...(sort === 'published_at' || sort === 'score' ? { sort } : {}),
+    ...(Array.isArray(input.__scope_article_ids) ? { __scope_article_ids: input.__scope_article_ids } : {}),
+  }
 }
 
 // --- Neutral tool definition (MCP / Anthropic compatible) ---
@@ -73,19 +115,20 @@ const searchArticlesTool: ToolDef = {
     },
   },
   execute: async (input) => {
-    const query = input.query as string | undefined
-    const feed_id = input.feed_id as number | undefined
-    const category_id = input.category_id as number | undefined
-    const unread = input.unread as boolean | undefined
-    const read = input.read as boolean | undefined
-    const liked = input.liked as boolean | undefined
-    const bookmarked = input.bookmarked as boolean | undefined
-    const article_kind = input.article_kind as 'original' | 'repost' | 'quote' | undefined
-    const since = input.since as string | undefined
-    const until = input.until as string | undefined
-    const limit = clampLimit(input.limit as number | undefined, 20, 100)
-    const sort = input.sort as 'published_at' | 'score' | undefined
-    const scopeArticleIds = input.__scope_article_ids as number[] | undefined
+    const normalized = normalizeSearchArticlesInput(input)
+    const query = normalized.query as string | undefined
+    const feed_id = normalized.feed_id as number | undefined
+    const category_id = normalized.category_id as number | undefined
+    const unread = normalized.unread as true | undefined
+    const read = normalized.read as true | undefined
+    const liked = normalized.liked as true | undefined
+    const bookmarked = normalized.bookmarked as true | undefined
+    const article_kind = normalized.article_kind as 'original' | 'repost' | 'quote' | undefined
+    const since = normalized.since as string | undefined
+    const until = normalized.until as string | undefined
+    const limit = clampLimit(normalized.limit as number | undefined, 20, 100)
+    const sort = normalized.sort as 'published_at' | 'score' | undefined
+    const scopeArticleIds = normalized.__scope_article_ids as number[] | undefined
 
     let results: ArticleListItem[]
 
@@ -208,6 +251,7 @@ const getReadingStatsTool: ToolDef = {
     const stats = getReadingStats({
       since: input.since as string | undefined,
       until: input.until as string | undefined,
+      article_ids: input.__scope_article_ids as number[] | undefined,
     })
     return JSON.stringify(stats)
   },
@@ -608,6 +652,8 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
   }
   const effectiveInput = name === 'search_articles'
     ? applyScopeToArticleSearch(input, context?.scope)
-    : input
+    : name === 'get_reading_stats'
+      ? applyScopeToReadingStats(input, context?.scope)
+      : input
   return tool.execute(effectiveInput, context)
 }

@@ -58,7 +58,10 @@ The user is chatting about a specific article list snapshot.
 
 All article searches and article actions are restricted to this list snapshot.
 If a tool reports that an article is outside the current scope, explain the current scope and suggest switching to global chat if the user wants to go broader.
-When answering questions like "what's in this list?" or "compare the articles here", stay within this list snapshot.`
+When answering questions like "what's in this list?" or "compare the articles here", stay within this list snapshot.
+For scoped summary requests such as "总结近一天内容" or "summarize this list", start with search_articles inside the current scope.
+Do not invent optional filters like feed_id, category_id, unread, read, liked, or bookmarked unless the user explicitly asked for them.
+Use get_reading_stats only as a scoped supplement, not as a global overview for this list-scoped chat.`
 }
 
 export function appendArticleContext(systemPrompt: string, articleId: number): string {

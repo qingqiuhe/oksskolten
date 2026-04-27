@@ -199,10 +199,18 @@ export function assertArticleInScope(articleId: number, scope?: ChatScope): void
   }
 }
 
-export function applyScopeToArticleSearch<T extends Record<string, unknown>>(input: T, scope?: ChatScope): T & { __scope_article_ids?: number[] } {
+function applyListScopeArticleIds<T extends Record<string, unknown>>(input: T, scope?: ChatScope): T & { __scope_article_ids?: number[] } {
   if (!scope || scope.type !== 'list') return input as T & { __scope_article_ids?: number[] }
   return {
     ...input,
     __scope_article_ids: scope.article_ids,
   }
+}
+
+export function applyScopeToArticleSearch<T extends Record<string, unknown>>(input: T, scope?: ChatScope): T & { __scope_article_ids?: number[] } {
+  return applyListScopeArticleIds(input, scope)
+}
+
+export function applyScopeToReadingStats<T extends Record<string, unknown>>(input: T, scope?: ChatScope): T & { __scope_article_ids?: number[] } {
+  return applyListScopeArticleIds(input, scope)
 }

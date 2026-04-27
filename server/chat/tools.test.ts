@@ -187,6 +187,83 @@ describe('search_articles', () => {
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe(inScopeId)
   })
+
+  it('ignores model-fabricated false and zero defaults in scoped summary searches', async () => {
+    const feed = seedFeed()
+    const seenId = seedArticle(feed.id, {
+      url: 'https://example.com/seen',
+      title: 'Seen original',
+      article_kind: 'original',
+      published_at: '2026-04-27T08:00:00Z',
+    })
+    const unreadId = seedArticle(feed.id, {
+      url: 'https://example.com/unread',
+      title: 'Unread original',
+      article_kind: 'original',
+      published_at: '2026-04-27T09:00:00Z',
+    })
+    markArticleSeen(seenId, true)
+
+    const payload = {
+      article_kind: 'original',
+      bookmarked: false,
+      category_id: 0,
+      feed_id: 0,
+      liked: false,
+      limit: 20,
+      query: '',
+      read: false,
+      since: '2026-04-26T00:00:00Z',
+      sort: 'score',
+      unread: false,
+      until: '2026-04-27T23:59:59Z',
+    }
+
+    const result = JSON.parse(await executeTool('search_articles', payload, {
+      scope: {
+        type: 'list',
+        mode: 'loaded_list',
+        label: 'Recent day',
+        count_total: 2,
+        count_scoped: 2,
+        article_ids: [seenId, unreadId],
+      },
+    }))
+
+    expect(result).toHaveLength(2)
+    expect(result.map((article: { id: number }) => article.id).sort((a: number, b: number) => a - b)).toEqual([seenId, unreadId].sort((a, b) => a - b))
+  })
+
+  it('keeps positive liked and bookmarked filters when explicitly requested', async () => {
+    const feed = seedFeed()
+    const likedId = seedArticle(feed.id, {
+      url: 'https://example.com/liked',
+      title: 'Liked article',
+      published_at: '2026-04-27T08:00:00Z',
+    })
+    const bookmarkedId = seedArticle(feed.id, {
+      url: 'https://example.com/bookmarked',
+      title: 'Bookmarked article',
+      published_at: '2026-04-27T09:00:00Z',
+    })
+    const plainId = seedArticle(feed.id, {
+      url: 'https://example.com/plain',
+      title: 'Plain article',
+      published_at: '2026-04-27T10:00:00Z',
+    })
+    const { markArticleLiked, markArticleBookmarked } = await import('../db.js')
+    markArticleLiked(likedId, true)
+    markArticleBookmarked(bookmarkedId, true)
+
+    const likedResult = JSON.parse(await executeTool('search_articles', { liked: true }))
+    expect(likedResult).toHaveLength(1)
+    expect(likedResult[0].id).toBe(likedId)
+
+    const bookmarkedResult = JSON.parse(await executeTool('search_articles', { bookmarked: true }))
+    expect(bookmarkedResult).toHaveLength(1)
+    expect(bookmarkedResult[0].id).toBe(bookmarkedId)
+    expect(bookmarkedResult[0].id).not.toBe(plainId)
+  })
 })
 
 describe('get_article', () => {
@@ -262,6 +339,36 @@ describe('get_reading_stats', () => {
     expect(result.read).toBe(1)
     expect(result.unread).toBe(1)
     expect(result.by_feed).toHaveLength(1)
+  })
+
+  it('restricts reading statistics to the current list scope snapshot', async () => {
+    const feedA = seedFeed({ name: 'Feed A', url: 'https://a.example.com' })
+    const feedB = seedFeed({ name: 'Feed B', url: 'https://b.example.com' })
+    const scopedReadId = seedArticle(feedA.id, { url: 'https://example.com/scoped-read', published_at: '2026-04-27T08:00:00Z' })
+    const scopedUnreadId = seedArticle(feedA.id, { url: 'https://example.com/scoped-unread', published_at: '2026-04-27T09:00:00Z' })
+    const outOfScopeId = seedArticle(feedB.id, { url: 'https://example.com/out-of-scope', published_at: '2026-04-27T10:00:00Z' })
+    markArticleSeen(scopedReadId, true)
+    markArticleSeen(outOfScopeId, true)
+
+    const result = JSON.parse(await executeTool('get_reading_stats', {
+      since: '2026-04-26T00:00:00Z',
+      until: '2026-04-27T23:59:59Z',
+    }, {
+      scope: {
+        type: 'list',
+        mode: 'loaded_list',
+        label: 'Current list',
+        count_total: 2,
+        count_scoped: 2,
+        article_ids: [scopedReadId, scopedUnreadId],
+      },
+    }))
+
+    expect(result.total).toBe(2)
+    expect(result.read).toBe(1)
+    expect(result.unread).toBe(1)
+    expect(result.by_feed).toHaveLength(1)
+    expect(result.by_feed[0].feed_id).toBe(feedA.id)
   })
 })
 
