@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import {
@@ -51,6 +52,7 @@ import {
   MIN_NOTIFICATION_MAX_BODY_CHARS,
   MIN_NOTIFICATION_MAX_TITLE_CHARS,
 } from '../../shared/notification-message.js'
+import { dataPath } from '../paths.js'
 
 const ProfileBody = z.object({
   account_name: z.string().optional(),
@@ -274,6 +276,19 @@ function assertCanManageNotificationTask(actorRole: UserRole, targetRole: UserRo
     return 'Forbidden'
   }
   return null
+}
+
+function getFileSizeOrZero(filePath: string): number {
+  try {
+    return fs.statSync(filePath).size
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0
+    throw err
+  }
+}
+
+function getRssDatabaseBytes(): number {
+  return getFileSizeOrZero(dataPath('rss.db')) + getFileSizeOrZero(dataPath('rss.db-wal'))
 }
 
 export async function settingsRoutes(api: FastifyInstance): Promise<void> {
@@ -1040,13 +1055,14 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
   }
 
   api.get('/api/settings/retention/stats', async (_request, reply) => {
+    const databaseBytes = getRssDatabaseBytes()
     const days = getRetentionDays()
     if (!days) {
-      reply.send({ readDays: 0, unreadDays: 0, readEligible: 0, unreadEligible: 0 })
+      reply.send({ readDays: 0, unreadDays: 0, readEligible: 0, unreadEligible: 0, databaseBytes })
       return
     }
     const stats = getRetentionStats(days.readDays, days.unreadDays)
-    reply.send({ readDays: days.readDays, unreadDays: days.unreadDays, ...stats })
+    reply.send({ readDays: days.readDays, unreadDays: days.unreadDays, ...stats, databaseBytes })
   })
 
   api.post('/api/settings/retention/purge', async (_request, reply) => {

@@ -11,6 +11,7 @@ interface RetentionStats {
   unreadDays: number
   readEligible: number
   unreadEligible: number
+  databaseBytes: number
 }
 
 interface Preferences {
@@ -21,6 +22,25 @@ interface Preferences {
 
 const DEFAULT_READ_DAYS = 90
 const DEFAULT_UNREAD_DAYS = 180
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unitIndex = 0
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  const rounded = value >= 10 || unitIndex === 0
+    ? Math.round(value)
+    : Math.round(value * 10) / 10
+
+  return `${rounded} ${units[unitIndex]}`
+}
 
 export function RetentionSection() {
   const { t } = useI18n()
@@ -38,7 +58,7 @@ export function RetentionSection() {
   useEffect(() => { setLocalUnreadDays(String(serverUnreadDays)) }, [serverUnreadDays])
 
   const { data: stats, mutate: mutateStats } = useSWR<RetentionStats>(
-    enabled ? '/api/settings/retention/stats' : null,
+    '/api/settings/retention/stats',
     fetcher,
     { refreshInterval: 0 },
   )
@@ -113,6 +133,11 @@ export function RetentionSection() {
     <section>
       <h2 className="text-base font-semibold text-text mb-1">{t('settings.articlePurge')}</h2>
       <p className="text-xs text-muted mb-4">{t('settings.articlePurgeDesc')}</p>
+      {stats && (
+        <div className="mb-4 text-xs text-muted">
+          {t('settings.retentionDatabaseSize').replace('{size}', formatBytes(stats.databaseBytes))}
+        </div>
+      )}
 
       <div>
         <p className="text-sm text-text mb-1">{t('settings.retentionEnabled')}</p>

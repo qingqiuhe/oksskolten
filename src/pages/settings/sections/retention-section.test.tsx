@@ -36,8 +36,15 @@ function setPrefs(prefs: Record<string, string | null>) {
   swrData['/api/settings/preferences'] = prefs
 }
 
-function setStats(stats: { readEligible: number; unreadEligible: number; readDays: number; unreadDays: number }) {
-  swrData['/api/settings/retention/stats'] = stats
+function setStats(stats: Partial<{ readEligible: number; unreadEligible: number; readDays: number; unreadDays: number; databaseBytes: number }> = {}) {
+  swrData['/api/settings/retention/stats'] = {
+    readEligible: 0,
+    unreadEligible: 0,
+    readDays: 0,
+    unreadDays: 0,
+    databaseBytes: 0,
+    ...stats,
+  }
 }
 
 describe('RetentionSection', () => {
@@ -45,6 +52,7 @@ describe('RetentionSection', () => {
 
   it('renders with OFF selected by default', () => {
     setPrefs({ 'retention.enabled': null, 'retention.read_days': null, 'retention.unread_days': null })
+    setStats({ databaseBytes: 1024 })
     render(<RetentionSection />)
 
     const offRadio = screen.getByLabelText('OFF') as HTMLInputElement
@@ -53,6 +61,7 @@ describe('RetentionSection', () => {
 
   it('does not show day inputs when disabled', () => {
     setPrefs({ 'retention.enabled': 'off', 'retention.read_days': null, 'retention.unread_days': null })
+    setStats({ databaseBytes: 1024 })
     render(<RetentionSection />)
 
     expect(screen.queryByDisplayValue('90')).toBeNull()
@@ -197,5 +206,21 @@ describe('RetentionSection', () => {
     render(<RetentionSection />)
 
     expect(screen.getByText(/Bookmarked and liked articles are never deleted/)).toBeTruthy()
+  })
+
+  it('shows rss database size when disabled', () => {
+    setPrefs({ 'retention.enabled': 'off', 'retention.read_days': null, 'retention.unread_days': null })
+    setStats({ databaseBytes: 1536 })
+    render(<RetentionSection />)
+
+    expect(screen.getByText('Current RSS storage: 1.5 KB')).toBeTruthy()
+  })
+
+  it('shows rss database size when enabled', () => {
+    setPrefs({ 'retention.enabled': 'on', 'retention.read_days': '90', 'retention.unread_days': '180' })
+    setStats({ readEligible: 5, unreadEligible: 3, readDays: 90, unreadDays: 180, databaseBytes: 5 * 1024 * 1024 })
+    render(<RetentionSection />)
+
+    expect(screen.getByText('Current RSS storage: 5 MB')).toBeTruthy()
   })
 })

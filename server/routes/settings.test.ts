@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import fs from 'node:fs'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { buildApp } from '../__tests__/helpers/buildApp.js'
 import { upsertSetting, getSetting, createFeed, createNotificationChannel, upsertFeedNotificationRule, insertArticle, markArticleSeen, getDb, createCustomLLMProvider } from '../db.js'
@@ -1323,14 +1324,34 @@ function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
 }
 
+function mockRssDatabaseSizes({ dbBytes, walBytes }: { dbBytes: number; walBytes?: number }) {
+  const original = fs.statSync
+  return vi.spyOn(fs, 'statSync').mockImplementation(((filePath: fs.PathLike, options?: fs.StatOptions) => {
+    const path = String(filePath)
+    if (path.endsWith('rss.db')) return { size: dbBytes } as fs.Stats
+    if (path.endsWith('rss.db-wal')) {
+      if (walBytes === undefined) {
+        const err = new Error('ENOENT') as NodeJS.ErrnoException
+        err.code = 'ENOENT'
+        throw err
+      }
+      return { size: walBytes } as fs.Stats
+    }
+    return original(filePath, options as fs.StatOptions & { bigint?: false })
+  }) as typeof fs.statSync)
+}
+
 describe('GET /api/settings/retention/stats', () => {
   it('returns zeros when retention is not configured', async () => {
+    const statSyncSpy = mockRssDatabaseSizes({ dbBytes: 1024 })
     const res = await app.inject({ method: 'GET', url: '/api/settings/retention/stats' })
+    statSyncSpy.mockRestore()
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ readDays: 0, unreadDays: 0, readEligible: 0, unreadEligible: 0 })
+    expect(res.json()).toEqual({ readDays: 0, unreadDays: 0, readEligible: 0, unreadEligible: 0, databaseBytes: 1024 })
   })
 
   it('returns eligible counts when configured', async () => {
+    const statSyncSpy = mockRssDatabaseSizes({ dbBytes: 2048, walBytes: 512 })
     const feed = createFeed({ name: 'F', url: 'https://f.com' })
     const id = insertArticle({ feed_id: feed.id, title: 'Old', url: 'https://f.com/1', published_at: '2025-01-01T00:00:00Z' })
     markArticleSeen(id, true)
@@ -1341,9 +1362,21 @@ describe('GET /api/settings/retention/stats', () => {
     upsertSetting('retention.unread_days', '180')
 
     const res = await app.inject({ method: 'GET', url: '/api/settings/retention/stats' })
+    statSyncSpy.mockRestore()
     expect(res.statusCode).toBe(200)
     expect(res.json().readEligible).toBe(1)
     expect(res.json().readDays).toBe(90)
+    expect(res.json().databaseBytes).toBe(2560)
+  })
+
+  it('counts rss.db and rss.db-wal together', async () => {
+    const statSyncSpy = mockRssDatabaseSizes({ dbBytes: 4096, walBytes: 1024 })
+
+    const res = await app.inject({ method: 'GET', url: '/api/settings/retention/stats' })
+    statSyncSpy.mockRestore()
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().databaseBytes).toBe(5120)
   })
 })
 

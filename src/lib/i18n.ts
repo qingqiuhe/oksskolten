@@ -630,6 +630,7 @@ const dict = {
   'settings.retentionPurgeNow': { ja: '今すぐクリーンアップ', en: 'Clean up now' },
   'settings.retentionPurgeConfirm': { ja: '{count} 件の記事を削除します。この操作は元に戻せません。よろしいですか？', en: 'This will delete {count} articles. This cannot be undone. Continue?' },
   'settings.retentionPurgeResult': { ja: '{count} 件の記事を削除しました', en: 'Deleted {count} articles' },
+  'settings.retentionDatabaseSize': { ja: '現在の RSS データ使用量: {size}', en: 'Current RSS storage: {size}' },
   'settings.retentionEligible': { ja: '既読: {read} 件 ／ 未読: {unread} 件が対象', en: '{read} read / {unread} unread articles eligible' },
   'settings.retentionPurging': { ja: 'クリーンアップ中...', en: 'Cleaning up...' },
 
@@ -1640,6 +1641,7 @@ const zhOverrides: Partial<Record<MessageKey, string>> = {
   'settings.retentionPurgeNow': '立即清理',
   'settings.retentionPurgeConfirm': '将删除 {count} 篇文章。此操作无法撤销。确定继续吗？',
   'settings.retentionPurgeResult': '已删除 {count} 篇文章',
+  'settings.retentionDatabaseSize': '当前 RSS 数据占用：{size}',
   'settings.retentionEligible': '符合条件：已读 {read} 篇 / 未读 {unread} 篇',
   'settings.retentionPurging': '清理中…',
   'category.add': '添加分类',
