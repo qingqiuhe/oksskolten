@@ -1,6 +1,5 @@
 import { type RefObject } from 'react'
 import { Link } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
 import { ChatMessageBubble } from './chat-message-bubble'
 import { useI18n } from '../../lib/i18n'
 import type { ChatMessage } from '../../hooks/use-chat'
@@ -36,16 +35,24 @@ export function ChatMessages({ messages, streaming, thinking, activeTool, error,
       ))}
 
       {activeTool && (
-        <div className="flex items-center gap-2 text-muted text-xs py-1 select-none">
-          <Loader2 className="w-3 h-3 animate-spin" />
-          {t('chat.toolRunning', { name: activeTool.name })}
+        <div className="flex flex-col gap-1.5 py-2 select-none animate-[fade-in_200ms_ease]">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+            <span className="text-xs text-accent font-medium">
+              {t('chat.toolRunning', { name: activeTool.name })}
+            </span>
+          </div>
+          <div className="w-36 chat-thinking-bar" />
         </div>
       )}
 
       {thinking && !activeTool && (
-        <div className="flex items-center gap-2 text-muted text-xs py-1 select-none">
-          <Loader2 className="w-3 h-3 animate-spin" />
-          {t('chat.thinking')}
+        <div className="flex flex-col gap-1.5 py-2 select-none animate-[fade-in_200ms_ease]">
+          <div className="flex items-center gap-2">
+            <div className="w-3.5 h-3.5 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+            <span className="text-xs text-muted">{t('chat.thinking')}</span>
+          </div>
+          <div className="w-24 chat-thinking-bar" />
         </div>
       )}
 

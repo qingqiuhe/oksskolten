@@ -56,10 +56,10 @@ export function ChatMessageBubble({ message, streaming, debugEnabled = false }: 
         {html ? (
           <SanitizedHTML html={html} className="chat-markdown text-sm" />
         ) : streaming ? (
-          <div className="flex items-center gap-1.5 text-muted text-sm py-2">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-muted animate-pulse" />
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-muted animate-pulse [animation-delay:0.2s]" />
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-muted animate-pulse [animation-delay:0.4s]" />
+          <div className="flex items-center gap-1.5 py-2">
+            <span className="chat-typing-dot" />
+            <span className="chat-typing-dot" />
+            <span className="chat-typing-dot" />
           </div>
         ) : null}
         {message.usage && !streaming && (

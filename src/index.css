@@ -127,6 +127,41 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Chat typing indicator — bouncing dots with accent gradient */
+@keyframes chat-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.chat-typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: chat-bounce 1.4s ease-in-out infinite;
+}
+.chat-typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.chat-typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* Chat thinking / tool-running indicator */
+@keyframes chat-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.chat-thinking-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-accent) 20%, transparent) 0%,
+    var(--color-accent) 50%,
+    color-mix(in srgb, var(--color-accent) 20%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: chat-shimmer 1.8s ease-in-out infinite;
+}
+
 /* Article font customization */
 .prose {
   font-family: var(--font-article);
