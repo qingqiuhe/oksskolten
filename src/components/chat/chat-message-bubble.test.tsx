@@ -25,7 +25,7 @@ describe('ChatMessageBubble', () => {
   it('renders streaming dots when text is empty and streaming', () => {
     const message: ChatMessage = { role: 'assistant', text: '' }
     render(<ChatMessageBubble message={message} streaming />)
-    const dots = document.querySelectorAll('.animate-pulse')
+    const dots = document.querySelectorAll('.chat-typing-dot')
     expect(dots.length).toBe(3)
   })
 
@@ -33,7 +33,7 @@ describe('ChatMessageBubble', () => {
     const message: ChatMessage = { role: 'assistant', text: '' }
     const { container } = render(<ChatMessageBubble message={message} />)
     expect(container.querySelector('.chat-markdown')).toBeNull()
-    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
+    expect(container.querySelectorAll('.chat-typing-dot').length).toBe(0)
   })
 
   it('renders usage info for assistant message', () => {
