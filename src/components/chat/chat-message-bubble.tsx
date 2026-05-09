@@ -54,7 +54,7 @@ export function ChatMessageBubble({ message, streaming, debugEnabled = false }: 
   return (
     <div className="pb-4">
         {html ? (
-          <SanitizedHTML html={html} className="prose prose-sm text-sm" />
+          <SanitizedHTML html={html} className="chat-markdown text-sm" />
         ) : streaming ? (
           <div className="flex items-center gap-1.5 text-muted text-sm py-2">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-muted animate-pulse" />

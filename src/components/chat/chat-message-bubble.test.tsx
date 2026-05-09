@@ -17,9 +17,9 @@ describe('ChatMessageBubble', () => {
   it('renders assistant message as HTML', () => {
     const message: ChatMessage = { role: 'assistant', text: 'This is **bold**' }
     render(<ChatMessageBubble message={message} />)
-    const prose = document.querySelector('.prose')!
-    expect(prose.innerHTML).toContain('<strong>')
-    expect(prose.innerHTML).toContain('bold')
+    const chatMarkdown = document.querySelector('.chat-markdown')!
+    expect(chatMarkdown.innerHTML).toContain('<strong>')
+    expect(chatMarkdown.innerHTML).toContain('bold')
   })
 
   it('renders streaming dots when text is empty and streaming', () => {
@@ -32,7 +32,7 @@ describe('ChatMessageBubble', () => {
   it('renders nothing for empty assistant text when not streaming', () => {
     const message: ChatMessage = { role: 'assistant', text: '' }
     const { container } = render(<ChatMessageBubble message={message} />)
-    expect(container.querySelector('.prose')).toBeNull()
+    expect(container.querySelector('.chat-markdown')).toBeNull()
     expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
   })
 
@@ -70,7 +70,7 @@ describe('ChatMessageBubble', () => {
       text: 'Check [this](https://example.com/article)',
     }
     render(<ChatMessageBubble message={message} />)
-    const link = document.querySelector('.prose a') as HTMLAnchorElement
+    const link = document.querySelector('.chat-markdown a') as HTMLAnchorElement
     expect(link).toBeTruthy()
     expect(link.getAttribute('href')).toContain('/example.com/article')
   })

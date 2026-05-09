@@ -134,6 +134,12 @@ body {
   word-break: break-word;
 }
 
+.chat-markdown {
+  color: var(--color-text);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
 .social-content {
   font-family: var(--font-article);
   overflow-wrap: break-word;
@@ -171,9 +177,38 @@ body {
   margin: 1.5em 0 0.5em;
 }
 
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  color: var(--color-text);
+  font-weight: 600;
+  line-height: 1.45;
+  margin: 1.1em 0 0.45em;
+}
+
+.chat-markdown h1,
+.chat-markdown h2 {
+  font-size: 1.05rem;
+}
+
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: 0.96rem;
+}
+
 .prose p {
   margin-bottom: 1.25em;
   line-height: 1.8;
+}
+
+.chat-markdown p {
+  margin-bottom: 0.85em;
+  line-height: 1.7;
 }
 
 .social-content p {
@@ -184,6 +219,21 @@ body {
   color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.chat-markdown a {
+  color: color-mix(in srgb, var(--color-text) 84%, var(--color-muted));
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-muted) 55%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: color 120ms ease, text-decoration-color 120ms ease;
+}
+
+.chat-markdown a:hover,
+.chat-markdown a:focus-visible {
+  color: var(--color-accent);
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
 }
 
 .social-content a {
@@ -310,7 +360,25 @@ body {
   line-height: 1.6;
 }
 
+.chat-markdown pre {
+  background: color-mix(in srgb, var(--color-bg-subtle) 85%, var(--color-bg-card));
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  border-radius: 10px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 1em 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .prose pre code:not(.hljs) {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+
+.chat-markdown pre code:not(.hljs) {
   background: none;
   padding: 0;
   border-radius: 0;
@@ -322,10 +390,23 @@ body {
   padding: 0;
 }
 
+.chat-markdown pre:has(code.hljs) {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
 .prose pre code.hljs {
   border-radius: 6px;
   padding: 16px;
   font-size: 14px;
+  line-height: 1.6;
+}
+
+.chat-markdown pre code.hljs {
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 13px;
   line-height: 1.6;
 }
 
@@ -338,11 +419,27 @@ body {
   padding: 2px 5px;
 }
 
+.chat-markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875em;
+  color: var(--color-code);
+  background: color-mix(in srgb, var(--color-bg-subtle) 88%, var(--color-bg-card));
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
 .prose blockquote {
   border-left: 3px solid var(--color-border);
   padding-left: 1em;
   color: var(--color-muted);
   margin: 1.5em 0;
+}
+
+.chat-markdown blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--color-border) 85%, transparent);
+  padding-left: 0.9em;
+  color: var(--color-muted);
+  margin: 1em 0;
 }
 
 .prose table {
@@ -353,8 +450,23 @@ body {
   margin: 1.5em 0;
 }
 
+.chat-markdown table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-spacing: 0;
+  margin: 1em 0;
+}
+
 .prose th,
 .prose td {
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.chat-markdown th,
+.chat-markdown td {
   padding: 8px 12px;
   text-align: left;
 }
@@ -365,13 +477,28 @@ body {
   border-bottom: 2px solid var(--color-border);
 }
 
+.chat-markdown th {
+  font-weight: 600;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--color-border);
+}
+
 .prose td {
   border-bottom: 1px solid var(--color-border);
+}
+
+.chat-markdown td {
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
 }
 
 @media (max-width: 640px) {
   .prose th,
   .prose td {
+    min-width: 10em;
+  }
+
+  .chat-markdown th,
+  .chat-markdown td {
     min-width: 10em;
   }
 }
@@ -382,9 +509,21 @@ body {
   margin: 2em 0;
 }
 
+.chat-markdown hr {
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  margin: 1.25em 0;
+}
+
 .prose ul, .prose ol {
   margin: 1.25em 0;
   padding-left: 1.5em;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0.85em 0;
+  padding-left: 1.4em;
 }
 
 .prose li {
@@ -392,10 +531,23 @@ body {
   line-height: 1.8;
 }
 
+.chat-markdown li {
+  margin-bottom: 0.35em;
+  line-height: 1.7;
+}
+
 .prose ul li {
   list-style-type: disc;
 }
 
+.chat-markdown ul li {
+  list-style-type: disc;
+}
+
 .prose ol li {
+  list-style-type: decimal;
+}
+
+.chat-markdown ol li {
   list-style-type: decimal;
 }
