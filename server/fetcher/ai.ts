@@ -122,15 +122,16 @@ export async function streamSummarizeArticle(
   return { summary: r.text, inputTokens: r.inputTokens, outputTokens: r.outputTokens, billingMode: r.billingMode, model: r.model }
 }
 
-export async function translateArticle(fullText: string): Promise<{ fullTextTranslated: string } & AiTextResult> {
-  return runTranslateTask(fullText)
+export async function translateArticle(fullText: string, userId?: number | null): Promise<{ fullTextTranslated: string } & AiTextResult> {
+  return runTranslateTask(fullText, undefined, { userId })
 }
 
 export async function streamTranslateArticle(
   fullText: string,
   onText: (delta: string) => void,
+  userId?: number | null,
 ): Promise<{ fullTextTranslated: string } & AiTextResult> {
-  return runTranslateTask(fullText, onText)
+  return runTranslateTask(fullText, onText, { userId })
 }
 
 function getResolvedTranslateTargetLang(options?: TranslateOptions): string {
@@ -158,24 +159,32 @@ async function runTranslateTask(
   const llmProvider = getProvider(provider)
   llmProvider.requireKey(options?.userId, resolvedTask.openaiConfig)
   const prompt = buildTranslatePrompt(fullText, targetLang)
-  const r = onText
-    ? await llmProvider.streamMessage(
-        { model, maxTokens: TRANSLATE_MAX_TOKENS, messages: [{ role: 'user', content: prompt }], userId: options?.userId, openaiConfig: resolvedTask.openaiConfig },
-        onText,
-      )
-    : await llmProvider.createMessage({
-        model,
-        maxTokens: TRANSLATE_MAX_TOKENS,
-        messages: [{ role: 'user', content: prompt }],
-        userId: options?.userId,
-        openaiConfig: resolvedTask.openaiConfig,
-      })
-  return {
-    fullTextTranslated: r.text,
-    inputTokens: r.inputTokens,
-    outputTokens: r.outputTokens,
-    billingMode: provider as AiBillingMode,
-    model,
+  try {
+    const r = onText
+      ? await llmProvider.streamMessage(
+          { model, maxTokens: TRANSLATE_MAX_TOKENS, messages: [{ role: 'user', content: prompt }], userId: options?.userId, openaiConfig: resolvedTask.openaiConfig },
+          onText,
+        )
+      : await llmProvider.createMessage({
+          model,
+          maxTokens: TRANSLATE_MAX_TOKENS,
+          messages: [{ role: 'user', content: prompt }],
+          userId: options?.userId,
+          openaiConfig: resolvedTask.openaiConfig,
+        })
+    return {
+      fullTextTranslated: r.text,
+      inputTokens: r.inputTokens,
+      outputTokens: r.outputTokens,
+      billingMode: provider as AiBillingMode,
+      model,
+    }
+  } catch (err) {
+    // Enrich error with provider context for debugging
+    const baseUrl = resolvedTask.openaiConfig?.baseURL
+    const suffix = baseUrl ? ` [provider: ${baseUrl}]` : ` [provider: ${provider}]`
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(message + suffix)
   }
 }
 

@@ -572,11 +572,11 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
         getCached: (article) => article.translated_lang === userLang ? article.full_text_translated : null,
         validate: (article) => article.lang === userLang ? `Article is already in ${userLang}` : null,
         streamFn: async (fullText, onDelta) => {
-          const r = await streamTranslateArticle(fullText, onDelta)
+          const r = await streamTranslateArticle(fullText, onDelta, userId)
           return { text: r.fullTextTranslated, ...r }
         },
         nonStreamFn: async (fullText) => {
-          const r = await translateArticle(fullText)
+          const r = await translateArticle(fullText, userId)
           return { text: r.fullTextTranslated, ...r }
         },
         applyResult: (articleId, text, userId) => {
