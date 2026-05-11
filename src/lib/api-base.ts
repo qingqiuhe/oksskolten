@@ -23,7 +23,8 @@ export async function handleResponseError(res: Response, url: string): Promise<n
     throw new ApiError('Unauthorized', 401, {})
   }
   const data = await res.json().catch(() => ({}))
-  throw new ApiError(data.error || res.statusText, res.status, data)
+  const message = data.detail ? `${data.error || res.statusText}: ${data.detail}` : (data.error || res.statusText)
+  throw new ApiError(message, res.status, data)
 }
 
 /** Parse an SSE stream, calling onLine for each parsed JSON payload. */

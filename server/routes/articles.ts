@@ -200,11 +200,12 @@ function createAiHandler(config: AiHandlerConfig) {
       request.log.error(err, config.errorMessage)
       const errorCode = extractKnownErrorCode(err)
       const errorMsg = errorCode ?? config.errorCode
+      const detail = !errorCode && err instanceof Error ? err.message : undefined
       if (reply.raw.headersSent) {
-        reply.raw.write(`data: ${JSON.stringify({ type: 'error', error: errorMsg })}\n\n`)
+        reply.raw.write(`data: ${JSON.stringify({ type: 'error', error: errorMsg, ...(detail ? { detail } : {}) })}\n\n`)
         reply.raw.end()
       } else {
-        reply.status(500).send({ error: errorMsg })
+        reply.status(500).send({ error: errorMsg, ...(detail ? { detail } : {}) })
       }
     }
   }

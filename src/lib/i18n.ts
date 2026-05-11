@@ -2086,8 +2086,22 @@ export function useI18n() {
   }
   const tError = (message: string): string => {
     const i18nKey = errorCodeMap[message]
-    return i18nKey ? t(i18nKey) : message
+    if (i18nKey) return t(i18nKey)
+    // Handle "ERROR_CODE: detail" format from API responses
+    const colonIdx = message.indexOf(': ')
+    if (colonIdx > 0) {
+      const code = message.slice(0, colonIdx)
+      const detail = message.slice(colonIdx + 2)
+      const codeKey = errorCodeMap[code]
+      if (codeKey) return `${t(codeKey)} (${detail})`
+    }
+    return message
   }
-  const isKeyNotSetError = (message: string): boolean => message in errorCodeMap
+  const isKeyNotSetError = (message: string): boolean => {
+    if (message in errorCodeMap) return true
+    const colonIdx = message.indexOf(': ')
+    if (colonIdx > 0) return message.slice(0, colonIdx) in errorCodeMap
+    return false
+  }
   return { t, tError, isKeyNotSetError, locale, setLocale } as const
 }

@@ -49,14 +49,16 @@ export async function streamPost(
   }
 
   // SSE streaming response
-  type StreamPayload = { type: string; text?: string; error?: string; usage?: typeof usage }
+  type StreamPayload = { type: string; text?: string; error?: string; detail?: string; usage?: typeof usage }
   let usage: { input_tokens: number; output_tokens: number; billing_mode?: 'anthropic' | 'gemini' | 'openai' | 'claude-code' | 'google-translate'; model?: string; monthly_chars?: number } = { input_tokens: 0, output_tokens: 0 }
 
   await parseSSEStream<StreamPayload>(res, (payload) => {
     if (payload.type === 'delta') {
       onDelta(payload.text as string)
     } else if (payload.type === 'error') {
-      throw new ApiError((payload.error as string) || 'Unknown error', 0, {})
+      const code = (payload.error as string) || 'Unknown error'
+      const detail = payload.detail as string | undefined
+      throw new ApiError(detail ? `${code}: ${detail}` : code, 0, {})
     } else if (payload.type === 'done') {
       usage = payload.usage as typeof usage
     }
