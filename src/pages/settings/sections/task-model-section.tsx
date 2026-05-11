@@ -122,17 +122,18 @@ export function TaskModelSection({ settings: _settings, t }: { settings: Setting
     return buildSavedDrafts(prefs, customProviders)
   }, [prefs, customProviders])
   const [drafts, setDrafts] = useState<TaskDraftState | null>(null)
+  const [userEdited, setUserEdited] = useState(false)
   const [saving, setSaving] = useState(false)
   const [showSaved, setShowSaved] = useState(false)
 
   useEffect(() => {
     if (!savedDrafts) return
     setDrafts(prev => {
-      if (!prev) return savedDrafts
+      if (!prev || !userEdited) return savedDrafts
       const isDirty = JSON.stringify(prev) !== JSON.stringify(savedDrafts)
       return isDirty ? prev : savedDrafts
     })
-  }, [savedDrafts])
+  }, [savedDrafts, userEdited])
 
   useEffect(() => {
     if (!showSaved) return
@@ -160,6 +161,7 @@ export function TaskModelSection({ settings: _settings, t }: { settings: Setting
       const updatedPrefs = await apiPatch('/api/settings/preferences', buildTaskPatch(nextDrafts, optionMap))
       void mutatePrefs(updatedPrefs as Prefs, false)
       setDrafts(buildSavedDrafts(updatedPrefs as Prefs, customProviders))
+      setUserEdited(false)
       setShowSaved(true)
     } finally {
       setSaving(false)
@@ -168,6 +170,7 @@ export function TaskModelSection({ settings: _settings, t }: { settings: Setting
 
   function handleCancel() {
     setDrafts(savedDrafts)
+    setUserEdited(false)
   }
 
   return (
@@ -191,7 +194,10 @@ export function TaskModelSection({ settings: _settings, t }: { settings: Setting
             draft={drafts[taskKey]}
             options={providerOptions.filter(option => taskKey === 'translate' || option.group !== 'translate')}
             optionMap={optionMap}
-            onChange={(nextDraft) => setDrafts(prev => prev ? { ...prev, [taskKey]: nextDraft } : prev)}
+            onChange={(nextDraft) => {
+              setUserEdited(true)
+              setDrafts(prev => prev ? { ...prev, [taskKey]: nextDraft } : prev)
+            }}
             t={t}
           />
         ))}
