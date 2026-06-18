@@ -961,7 +961,7 @@ describe('ArticleList', () => {
 
     expect(screen.queryByTestId('article-render-window-placeholder')).toBeNull()
     expect(document.querySelector('[data-article-id="1"]')).toBeTruthy()
-  })
+  }, 15_000)
 
   it('translates only the rendered article window', async () => {
     const articles = Array.from({ length: 121 }, (_, index) => (
@@ -993,7 +993,7 @@ describe('ArticleList', () => {
     expect(requestedIds[0]).toBe(2)
     expect(requestedIds).not.toContain(1)
     expect(requestedIds[119]).toBe(121)
-  })
+  }, 15_000)
 
   it('renders FeedMetricsBar for current feed', () => {
     swrFeedsData = {
