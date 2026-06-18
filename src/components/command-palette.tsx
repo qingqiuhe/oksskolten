@@ -41,23 +41,34 @@ interface CommandPaletteProps {
   onOpenChange: (open: boolean) => void
   onOpenSearch: () => void
   onOpenAddFeed: () => void
-}
-
-export function CommandPalette({ open, onOpenChange, onOpenSearch, onOpenAddFeed }: CommandPaletteProps) {
-  const navigate = useNavigate()
-  const { t } = useI18n()
-  const { settings } = useAppLayout()
-
-  const { data: feedsData } = useSWR<{
+  feedsData?: {
     feeds: FeedWithCounts[]
     bookmark_count: number
     like_count: number
     clip_feed_id: number | null
-  }>('/api/feeds', fetcher)
-
-  const { data: categoriesData } = useSWR<{
+  }
+  categoriesData?: {
     categories: Category[]
-  }>('/api/categories', fetcher)
+  }
+}
+
+export function CommandPalette({ open, onOpenChange, onOpenSearch, onOpenAddFeed, feedsData: sharedFeedsData, categoriesData: sharedCategoriesData }: CommandPaletteProps) {
+  const navigate = useNavigate()
+  const { t } = useI18n()
+  const { settings } = useAppLayout()
+
+  const { data: internalFeedsData } = useSWR<{
+    feeds: FeedWithCounts[]
+    bookmark_count: number
+    like_count: number
+    clip_feed_id: number | null
+  }>(sharedFeedsData ? null : (open ? '/api/feeds' : null), fetcher)
+
+  const { data: internalCategoriesData } = useSWR<{
+    categories: Category[]
+  }>(sharedCategoriesData ? null : (open ? '/api/categories' : null), fetcher)
+  const feedsData = sharedFeedsData ?? internalFeedsData
+  const categoriesData = sharedCategoriesData ?? internalCategoriesData
 
   const [search, setSearch] = useState('')
 

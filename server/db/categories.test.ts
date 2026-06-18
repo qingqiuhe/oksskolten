@@ -1,5 +1,24 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
+
+const {
+  mockAddDocuments,
+  mockUpdateDocuments,
+} = vi.hoisted(() => ({
+  mockAddDocuments: vi.fn(() => Promise.resolve({})),
+  mockUpdateDocuments: vi.fn(() => Promise.resolve({})),
+}))
+
+vi.mock('../search/client.js', () => ({
+  ARTICLES_INDEX: 'articles',
+  getSearchClient: () => ({
+    index: () => ({
+      addDocuments: mockAddDocuments,
+      updateDocuments: mockUpdateDocuments,
+    }),
+  }),
+}))
+
 import {
   getCategories,
   getCategoryById,
@@ -10,10 +29,13 @@ import {
   createFeed,
   insertArticle,
   getArticles,
+  getDb,
 } from '../db.js'
 
 beforeEach(() => {
   setupTestDb()
+  mockAddDocuments.mockClear()
+  mockUpdateDocuments.mockClear()
 })
 
 function seedArticle(feedId: number, overrides: Partial<Parameters<typeof insertArticle>[0]> = {}) {
@@ -89,6 +111,22 @@ describe('createCategory', () => {
     expect(cat.id).toBeGreaterThan(0)
     expect(cat.name).toBe('Test')
   })
+
+  it('returns the inserted category without a follow-up row query', () => {
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const cat = createCategory('Returning Category')
+
+    expect(cat.name).toBe('Returning Category')
+    expect(preparedSql.some(sql => sql.includes('INSERT INTO categories') && sql.includes('RETURNING *'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT * FROM categories WHERE id = ?'))).toBe(false)
+  })
 })
 
 // --- updateCategory ---
@@ -118,6 +156,23 @@ describe('updateCategory', () => {
     expect(updated!.name).toBe('Renamed')
     expect(updated!.sort_order).toBe(10)
     expect(updated!.collapsed).toBe(1)
+  })
+
+  it('returns updated category without preselecting or rereading the row', () => {
+    const cat = createCategory('Old')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const updated = updateCategory(cat.id, { name: 'New' })
+
+    expect(updated?.name).toBe('New')
+    expect(preparedSql.some(sql => sql.includes('UPDATE categories SET') && sql.includes('RETURNING *'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT * FROM categories WHERE id = ?'))).toBe(false)
   })
 
   it('returns unchanged category when no fields provided', () => {
@@ -187,5 +242,33 @@ describe('markAllSeenByCategory', () => {
     // cat2 articles should still be unseen
     const { articles } = getArticles({ categoryId: cat2.id, unread: true, limit: 100, offset: 0 })
     expect(articles).toHaveLength(1)
+  })
+
+  it('syncs only actually changed category article ids', () => {
+    const cat1 = createCategory('Cat1')
+    const cat2 = createCategory('Cat2')
+    const feed1 = createFeed({ name: 'Feed1', url: 'https://category-sync-a.com', category_id: cat1.id })
+    const feed2 = createFeed({ name: 'Feed2', url: 'https://category-sync-b.com', category_id: cat2.id })
+    const id1 = seedArticle(feed1.id, { url: 'https://category-sync-a.com/1' })
+    const id2 = seedArticle(feed1.id, { url: 'https://category-sync-a.com/2' })
+    const id3 = seedArticle(feed1.id, { url: 'https://category-sync-a.com/3' })
+    seedArticle(feed2.id, { url: 'https://category-sync-b.com/1' })
+    markAllSeenByCategory(cat1.id)
+    mockUpdateDocuments.mockClear()
+    getDb().prepare('UPDATE articles SET seen_at = NULL WHERE id IN (?, ?)').run(id1, id3)
+    mockUpdateDocuments.mockClear()
+
+    const result = markAllSeenByCategory(cat1.id)
+
+    expect(result.updated).toBe(2)
+    expect(mockUpdateDocuments).toHaveBeenCalledTimes(1)
+    const calls = mockUpdateDocuments.mock.calls as unknown[][]
+    const docs = calls[0][0] as { id: number; is_unread: boolean }[]
+    expect(docs).toHaveLength(2)
+    expect(docs.map(doc => doc.id).sort((left, right) => left - right)).toEqual([id1, id3])
+    expect(docs.every(doc => doc.is_unread === false)).toBe(true)
+    expect(getArticles({ categoryId: cat2.id, unread: true, limit: 100, offset: 0 }).articles).toHaveLength(1)
+    const alreadySeen = getDb().prepare('SELECT seen_at FROM articles WHERE id = ?').get(id2) as { seen_at: string | null }
+    expect(alreadySeen.seen_at).not.toBeNull()
   })
 })

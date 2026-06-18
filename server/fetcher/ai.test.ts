@@ -4,16 +4,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
-const { mockGetSetting, mockCreateMessage, mockStreamMessage, mockRequireKey, mockResolveLLMTaskConfig } = vi.hoisted(() => ({
+const { mockGetSetting, mockGetSettings, mockCreateMessage, mockStreamMessage, mockRequireKey, mockResolveLLMTaskConfig, mockGoogleTranslate, mockDeeplTranslate } = vi.hoisted(() => ({
   mockGetSetting: vi.fn(),
+  mockGetSettings: vi.fn(),
   mockCreateMessage: vi.fn(),
   mockStreamMessage: vi.fn(),
   mockRequireKey: vi.fn(),
   mockResolveLLMTaskConfig: vi.fn(),
+  mockGoogleTranslate: vi.fn(),
+  mockDeeplTranslate: vi.fn(),
 }))
 
 vi.mock('../db.js', () => ({
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
+  getSettings: (...args: unknown[]) => mockGetSettings(...args),
 }))
 
 vi.mock('../providers/llm/index.js', () => ({
@@ -29,22 +33,45 @@ vi.mock('../llm-task-config.js', () => ({
   resolveLLMTaskConfig: (...args: unknown[]) => mockResolveLLMTaskConfig(...args),
 }))
 
+vi.mock('../providers/translate/google-translate.js', () => ({
+  googleTranslate: (...args: unknown[]) => mockGoogleTranslate(...args),
+}))
+
+vi.mock('../providers/translate/deepl.js', () => ({
+  deeplTranslate: (...args: unknown[]) => mockDeeplTranslate(...args),
+}))
+
 import {
   detectLanguage,
   summarizeArticle,
   streamSummarizeArticle,
   translateArticle,
   streamTranslateArticle,
+  createTextTranslator,
 } from './ai.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
   mockGetSetting.mockReturnValue(null) // use defaults
+  mockGetSettings.mockImplementation((keys: readonly string[]) => Object.fromEntries(
+    keys.map(key => [key, mockGetSetting(key)]),
+  ))
   mockResolveLLMTaskConfig.mockImplementation((task: string) => ({
     provider: 'anthropic',
     model: task === 'translate' ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001',
     providerInstanceId: null,
   }))
+  mockRequireKey.mockReturnValue('checked-api-key')
+  mockGoogleTranslate.mockResolvedValue({
+    translatedText: 'Google translated text',
+    characters: 23,
+    monthlyChars: 1234,
+  })
+  mockDeeplTranslate.mockResolvedValue({
+    translatedText: 'DeepL translated text',
+    characters: 21,
+    monthlyChars: 2345,
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -117,6 +144,14 @@ describe('summarizeArticle', () => {
     expect(mockRequireKey).toHaveBeenCalled()
   })
 
+  it('passes the checked API key to the provider request', async () => {
+    mockCreateMessage.mockResolvedValue({ text: 'ok', inputTokens: 0, outputTokens: 0 })
+
+    await summarizeArticle('text')
+
+    expect(mockCreateMessage.mock.calls[0][0].apiKey).toBe('checked-api-key')
+  })
+
   it('uses createMessage (non-streaming)', async () => {
     mockCreateMessage.mockResolvedValue({ text: 'ok', inputTokens: 0, outputTokens: 0 })
     await summarizeArticle('text')
@@ -178,6 +213,7 @@ describe('streamSummarizeArticle', () => {
     expect(result.summary).toBe('streamed summary')
     expect(mockStreamMessage).toHaveBeenCalled()
     expect(mockCreateMessage).not.toHaveBeenCalled()
+    expect(mockStreamMessage.mock.calls[0][0].apiKey).toBe('checked-api-key')
 
     // Verify onText was passed through
     const onText = mockStreamMessage.mock.calls[0][1]
@@ -212,6 +248,17 @@ describe('translateArticle', () => {
     const params = mockCreateMessage.mock.calls[0][0]
     expect(params.messages[0].content).toContain('Content to translate')
     expect(params.messages[0].content).toContain('Translate the following article into English')
+  })
+
+  it('resolves translate target language with one batched settings read', async () => {
+    mockGetSetting.mockImplementation((key: string) => key === 'general.language' ? 'zh' : undefined)
+    mockCreateMessage.mockResolvedValue({ text: 'ok', inputTokens: 0, outputTokens: 0 })
+
+    await translateArticle('Content to translate')
+
+    expect(mockGetSettings).toHaveBeenCalledWith(['translate.target_lang', 'general.language'], undefined)
+    expect(mockGetSetting).toHaveBeenCalledTimes(2)
+    expect(mockCreateMessage.mock.calls[0][0].messages[0].content).toContain('Chinese')
   })
 
   it('sets maxTokens to 16384 for translate', async () => {
@@ -259,6 +306,46 @@ describe('translateArticle', () => {
       },
     }))
   })
+
+  it('reads Google Translate target language and API key in one batch', async () => {
+    mockResolveLLMTaskConfig.mockReturnValue({
+      provider: 'google-translate',
+      model: 'google-translate-v2',
+      providerInstanceId: null,
+    })
+    mockGetSettings.mockReturnValue({
+      'general.language': 'zh',
+      'api_key.google_translate': 'google-key',
+    })
+
+    const result = await translateArticle('Content to translate')
+
+    expect(result.fullTextTranslated).toBe('Google translated text')
+    expect(result.billingMode).toBe('google-translate')
+    expect(mockGetSettings).toHaveBeenCalledWith(['translate.target_lang', 'general.language', 'api_key.google_translate'], undefined)
+    expect(mockGetSetting).not.toHaveBeenCalledWith('api_key.google_translate', undefined)
+    expect(mockGoogleTranslate).toHaveBeenCalledWith('Content to translate', 'zh', undefined, 'google-key')
+  })
+
+  it('reads DeepL target language and API key in one batch', async () => {
+    mockResolveLLMTaskConfig.mockReturnValue({
+      provider: 'deepl',
+      model: 'deepl-v2',
+      providerInstanceId: null,
+    })
+    mockGetSettings.mockReturnValue({
+      'translate.target_lang': 'ja',
+      'api_key.deepl': 'deepl-key:fx',
+    })
+
+    const result = await translateArticle('Content to translate')
+
+    expect(result.fullTextTranslated).toBe('DeepL translated text')
+    expect(result.billingMode).toBe('deepl')
+    expect(mockGetSettings).toHaveBeenCalledWith(['translate.target_lang', 'general.language', 'api_key.deepl'], undefined)
+    expect(mockGetSetting).not.toHaveBeenCalledWith('api_key.deepl', undefined)
+    expect(mockDeeplTranslate).toHaveBeenCalledWith('Content to translate', 'ja', undefined, 'deepl-key:fx')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -274,5 +361,53 @@ describe('streamTranslateArticle', () => {
     expect(result.fullTextTranslated).toBe('ストリーム翻訳')
     expect(mockStreamMessage).toHaveBeenCalled()
     expect(mockCreateMessage).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createTextTranslator
+// ---------------------------------------------------------------------------
+describe('createTextTranslator', () => {
+  it('reuses resolved Google Translate API key across multiple texts', async () => {
+    mockResolveLLMTaskConfig.mockReturnValue({
+      provider: 'google-translate',
+      model: 'google-translate-v2',
+      providerInstanceId: null,
+    })
+    mockGetSettings.mockReturnValue({
+      'api_key.google_translate': 'google-key',
+    })
+
+    const translate = createTextTranslator('zh', 7)
+    const first = await translate('First title')
+    const second = await translate('Second title')
+
+    expect(first.fullTextTranslated).toBe('Google translated text')
+    expect(second.fullTextTranslated).toBe('Google translated text')
+    expect(mockResolveLLMTaskConfig).toHaveBeenCalledTimes(1)
+    expect(mockGetSettings).toHaveBeenCalledTimes(1)
+    expect(mockGetSettings).toHaveBeenCalledWith(['api_key.google_translate'], 7)
+    expect(mockGetSetting).not.toHaveBeenCalledWith('api_key.google_translate', 7)
+    expect(mockGoogleTranslate).toHaveBeenCalledTimes(2)
+    expect(mockGoogleTranslate).toHaveBeenNthCalledWith(1, 'First title', 'zh', 7, 'google-key')
+    expect(mockGoogleTranslate).toHaveBeenNthCalledWith(2, 'Second title', 'zh', 7, 'google-key')
+  })
+
+  it('reuses resolved LLM provider key across multiple texts', async () => {
+    mockCreateMessage
+      .mockResolvedValueOnce({ text: 'First translated', inputTokens: 1, outputTokens: 1 })
+      .mockResolvedValueOnce({ text: 'Second translated', inputTokens: 1, outputTokens: 1 })
+
+    const translate = createTextTranslator('ja', 9)
+    const first = await translate('First title')
+    const second = await translate('Second title')
+
+    expect(first.fullTextTranslated).toBe('First translated')
+    expect(second.fullTextTranslated).toBe('Second translated')
+    expect(mockResolveLLMTaskConfig).toHaveBeenCalledTimes(1)
+    expect(mockRequireKey).toHaveBeenCalledTimes(1)
+    expect(mockCreateMessage).toHaveBeenCalledTimes(2)
+    expect(mockCreateMessage.mock.calls[0][0]).toEqual(expect.objectContaining({ userId: 9, apiKey: 'checked-api-key' }))
+    expect(mockCreateMessage.mock.calls[1][0]).toEqual(expect.objectContaining({ userId: 9, apiKey: 'checked-api-key' }))
   })
 })

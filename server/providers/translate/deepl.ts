@@ -1,4 +1,4 @@
-import { getSetting, upsertSetting } from '../../db.js'
+import { getSetting, getSettings, upsertSetting } from '../../db.js'
 import { translateWithProtection } from './markdown-protect.js'
 
 const FREE_TIER_CHARS = 500_000
@@ -6,6 +6,7 @@ const FREE_TIER_CHARS = 500_000
 const API_URL_FREE = 'https://api-free.deepl.com/v2/translate'
 const API_URL_PRO = 'https://api.deepl.com/v2/translate'
 const MAX_CHARS_PER_REQUEST = 50_000
+const USAGE_SETTING_KEYS = ['deepl.usage_month', 'deepl.usage_chars'] as const
 
 export function requireDeeplKey(userId?: number | null): string {
   const key = getSetting('api_key.deepl', userId)
@@ -26,8 +27,8 @@ export async function deeplTranslate(
   text: string,
   targetLang: string,
   userId?: number | null,
+  apiKey = requireDeeplKey(userId),
 ): Promise<{ translatedText: string; characters: number; monthlyChars: number }> {
-  const apiKey = requireDeeplKey(userId)
   const apiUrl = getApiUrl(apiKey)
 
   const { translated, characters } = await translateWithProtection(
@@ -69,8 +70,9 @@ export async function deeplTranslate(
 /** Track cumulative monthly character usage. Resets when month changes. */
 function addMonthlyUsage(chars: number, userId?: number | null): number {
   const currentMonth = new Date().toISOString().slice(0, 7)
-  const storedMonth = getSetting('deepl.usage_month', userId) || ''
-  const storedChars = Number(getSetting('deepl.usage_chars', userId) || '0')
+  const usage = getSettings(USAGE_SETTING_KEYS, userId)
+  const storedMonth = usage['deepl.usage_month'] || ''
+  const storedChars = Number(usage['deepl.usage_chars'] || '0')
 
   let total: number
   if (storedMonth === currentMonth) {
@@ -86,9 +88,10 @@ function addMonthlyUsage(chars: number, userId?: number | null): number {
 /** Get current monthly usage and free tier status */
 export function getDeeplMonthlyUsage(): { monthlyChars: number; freeTierRemaining: number } {
   const currentMonth = new Date().toISOString().slice(0, 7)
-  const storedMonth = getSetting('deepl.usage_month') || ''
+  const usage = getSettings(USAGE_SETTING_KEYS)
+  const storedMonth = usage['deepl.usage_month'] || ''
   const monthlyChars = storedMonth === currentMonth
-    ? Number(getSetting('deepl.usage_chars') || '0')
+    ? Number(usage['deepl.usage_chars'] || '0')
     : 0
   return { monthlyChars, freeTierRemaining: Math.max(0, FREE_TIER_CHARS - monthlyChars) }
 }

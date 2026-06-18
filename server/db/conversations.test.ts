@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import {
   createFeed,
@@ -11,6 +11,7 @@ import {
   deleteChatMessage,
   insertChatMessage,
   getChatMessages,
+  replaceChatMessages,
   searchArticles,
   getReadingStats,
   markArticleSeen,
@@ -52,6 +53,22 @@ describe('Conversations', () => {
     const found = getConversationById('conv-1')
     expect(found).toBeDefined()
     expect(found!.title).toBe('Test Chat')
+  })
+
+  it('returns created conversation without a follow-up row query', () => {
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const conv = createConversation({ id: 'conv-returning', title: 'Returning Chat' })
+
+    expect(conv.title).toBe('Returning Chat')
+    expect(preparedSql.some(sql => sql.includes('INSERT INTO conversations') && sql.includes('RETURNING *'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT * FROM conversations WHERE id = ?'))).toBe(false)
   })
 
   it('createConversation with article_id', () => {
@@ -150,6 +167,23 @@ describe('Conversations', () => {
     expect(updated!.updated_at).toBeDefined()
   })
 
+  it('returns updated conversation without preselecting or rereading the row', () => {
+    createConversation({ id: 'conv-update-returning', title: 'Old Title' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const updated = updateConversation('conv-update-returning', { title: 'New Title' })
+
+    expect(updated?.title).toBe('New Title')
+    expect(preparedSql.some(sql => sql.includes('UPDATE conversations SET') && sql.includes('RETURNING *'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT * FROM conversations WHERE id = ?'))).toBe(false)
+  })
+
   it('updateConversation returns undefined for non-existent', () => {
     expect(updateConversation('nonexistent', { title: 'X' })).toBeUndefined()
   })
@@ -211,6 +245,27 @@ describe('ChatMessages', () => {
     expect(messages[0].id).toBeLessThan(messages[1].id)
   })
 
+  it('returns inserted chat message without a follow-up row query', () => {
+    createConversation({ id: 'conv-returning-message' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const msg = insertChatMessage({
+      conversation_id: 'conv-returning-message',
+      role: 'user',
+      content: JSON.stringify([{ type: 'text', text: 'Hello' }]),
+    })
+
+    expect(msg.role).toBe('user')
+    expect(preparedSql.some(sql => sql.includes('INSERT INTO chat_messages') && sql.includes('RETURNING *'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT * FROM chat_messages WHERE id = ?'))).toBe(false)
+  })
+
   it('getChatMessages returns empty array for no messages', () => {
     createConversation({ id: 'conv-1' })
     expect(getChatMessages('conv-1')).toHaveLength(0)
@@ -226,6 +281,27 @@ describe('ChatMessages', () => {
 
     expect(deleteChatMessage(msg.id)).toBe(true)
     expect(getChatMessages('conv-1')).toHaveLength(0)
+  })
+
+  it('deletes chat message with returning conversation_id instead of a preselect', () => {
+    createConversation({ id: 'conv-delete-returning' })
+    const msg = insertChatMessage({
+      conversation_id: 'conv-delete-returning',
+      role: 'user',
+      content: JSON.stringify([{ type: 'text', text: 'Hello' }]),
+    })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    expect(deleteChatMessage(msg.id)).toBe(true)
+
+    expect(preparedSql.some(sql => sql.includes('DELETE FROM chat_messages') && sql.includes('RETURNING conversation_id'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT conversation_id FROM chat_messages WHERE id = ?'))).toBe(false)
   })
 
   it('insertChatMessage updates conversation updated_at', () => {
@@ -288,6 +364,25 @@ describe('ChatMessages', () => {
     expect(apiMessages[2].role).toBe('user')
     expect(apiMessages[2].content[0].type).toBe('tool_result')
     expect(apiMessages[3].role).toBe('assistant')
+  })
+
+  it('prepares replaceChatMessages insert statement once per replacement', () => {
+    createConversation({ id: 'conv-replace-prepare' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    replaceChatMessages('conv-replace-prepare', Array.from({ length: 5 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: JSON.stringify([{ type: 'text', text: `message ${index}` }]),
+    })))
+
+    expect(getChatMessages('conv-replace-prepare')).toHaveLength(5)
+    expect(preparedSql.filter(sql => sql.includes('INSERT INTO chat_messages'))).toHaveLength(1)
   })
 })
 

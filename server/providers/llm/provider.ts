@@ -6,6 +6,7 @@ export interface LLMMessageParams {
   messages: Array<{ role: string; content: string }>
   systemInstruction?: string
   userId?: number | null
+  apiKey?: string
   openaiConfig?: OpenAICompatibleConfig
 }
 
@@ -17,7 +18,7 @@ export interface LLMStreamResult {
 
 export interface LLMProvider {
   name: string
-  requireKey(userId?: number | null, openaiConfig?: OpenAICompatibleConfig): void
+  requireKey(userId?: number | null, openaiConfig?: OpenAICompatibleConfig): string | undefined
   createMessage(params: LLMMessageParams): Promise<LLMStreamResult>
   streamMessage(params: LLMMessageParams, onText: (delta: string) => void): Promise<LLMStreamResult>
 }

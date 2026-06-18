@@ -87,6 +87,24 @@ describe('getRetentionStats', () => {
     expect(stats.unreadEligible).toBe(1)
   })
 
+  it('counts read and unread eligible articles in one mixed result', () => {
+    const feed = seedFeed()
+    const oldRead = seedArticle(feed.id, { url: 'https://example.com/mixed-old-read' })
+    const freshRead = seedArticle(feed.id, { url: 'https://example.com/mixed-fresh-read' })
+    const oldUnread = seedArticle(feed.id, { url: 'https://example.com/mixed-old-unread' })
+    const freshUnread = seedArticle(feed.id, { url: 'https://example.com/mixed-fresh-unread' })
+
+    markArticleSeen(oldRead, true)
+    setSeenAt(oldRead, daysAgo(100))
+    markArticleSeen(freshRead, true)
+    setSeenAt(freshRead, daysAgo(10))
+    setFetchedAt(oldUnread, daysAgo(200))
+    setFetchedAt(freshUnread, daysAgo(10))
+
+    const stats = getRetentionStats(90, 180)
+    expect(stats).toEqual({ readEligible: 1, unreadEligible: 1 })
+  })
+
   it('excludes bookmarked articles', () => {
     const feed = seedFeed()
     const id = seedArticle(feed.id, { url: 'https://example.com/bookmarked' })
@@ -148,6 +166,25 @@ describe('purgeExpiredArticles', () => {
 
     const { purged } = purgeExpiredArticles(90, 180)
     expect(purged).toBe(1)
+  })
+
+  it('purges old read and unread articles from the same candidate scan', () => {
+    const feed = seedFeed()
+    const oldRead = seedArticle(feed.id, { url: 'https://example.com/purge-mixed-read' })
+    const oldUnread = seedArticle(feed.id, { url: 'https://example.com/purge-mixed-unread' })
+    const freshUnread = seedArticle(feed.id, { url: 'https://example.com/purge-mixed-fresh' })
+
+    markArticleSeen(oldRead, true)
+    setSeenAt(oldRead, daysAgo(100))
+    setFetchedAt(oldUnread, daysAgo(200))
+    setFetchedAt(freshUnread, daysAgo(10))
+
+    const { purged } = purgeExpiredArticles(90, 180)
+
+    expect(purged).toBe(2)
+    expect(getArticleById(oldRead)).toBeUndefined()
+    expect(getArticleById(oldUnread)).toBeUndefined()
+    expect(getArticleById(freshUnread)).toBeDefined()
   })
 
   it('nullifies content columns on purge', () => {

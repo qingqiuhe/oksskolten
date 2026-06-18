@@ -21,8 +21,26 @@ function hashKey(key: string): string {
   return createHash('sha256').update(key).digest('hex')
 }
 
+const LAST_USED_AT_UPDATE_INTERVAL_MS = 60_000
+const lastUsedAtWriteCache = new Map<string, number>()
+
+export function clearApiKeyUsageWriteCacheForTests(): void {
+  lastUsedAtWriteCache.clear()
+}
+
 function resolveUserId(userId?: number | null): number | null {
   return userId ?? getCurrentUserId()
+}
+
+function updateLastUsedAt(id: number, keyHash: string): void {
+  const now = Date.now()
+  const lastWriteAt = lastUsedAtWriteCache.get(keyHash)
+  if (lastWriteAt != null && now - lastWriteAt < LAST_USED_AT_UPDATE_INTERVAL_MS) return
+
+  getDb()
+    .prepare("UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?")
+    .run(id)
+  lastUsedAtWriteCache.set(keyHash, now)
 }
 
 export function createApiKey(name: string, scopes: string = 'read', userId?: number | null): ApiKeyCreated {
@@ -109,10 +127,7 @@ export function validateApiKey(key: string): {
   if (!row) return null
   if (row.user_id != null && row.status !== 'active') return null
 
-  // Update last_used_at (fire-and-forget)
-  getDb()
-    .prepare("UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?")
-    .run(row.id)
+  updateLastUsedAt(row.id, keyHash)
 
   return {
     id: row.id,

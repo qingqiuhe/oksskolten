@@ -154,6 +154,7 @@ export const claudeCodeProvider: LLMProvider = {
 
   requireKey() {
     // no-op: CLI authentication
+    return undefined
   },
 
   async createMessage(params: LLMMessageParams): Promise<LLMStreamResult> {

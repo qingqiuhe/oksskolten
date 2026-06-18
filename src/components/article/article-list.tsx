@@ -28,7 +28,8 @@ import { ListChatFab } from '../chat/list-chat-fab'
 import { useKeyboardNavigationContext } from '../../contexts/keyboard-navigation-context'
 import { useKeyboardNavigation } from '../../hooks/use-keyboard-navigation'
 import { apiDelete, apiPatch, apiPost } from '../../lib/fetcher'
-import type { ArticleListItem, FeedWithCounts, HighValueArticle, HighValueResponse, InboxSummary } from '../../../shared/types'
+import { applyFeedsCachePatch, type FeedsCacheData, type FeedsCachePatch } from '../../lib/feeds-cache'
+import type { ArticleListItem, HighValueArticle, HighValueResponse, InboxSummary } from '../../../shared/types'
 import type { LayoutName } from '../../data/layouts'
 import { isXFeedSource, type ArticleKind, type FeedViewType } from '../../../shared/article-kind'
 import { InboxHeader, type InboxSort, type InboxViewFilter } from './inbox-header'
@@ -46,9 +47,12 @@ interface ArticlesResponse {
 }
 
 const PAGE_SIZE = 20
+const ARTICLE_RENDER_WINDOW_SIZE = 120
+const ARTICLE_RENDER_WINDOW_STEP = 60
 const INBOX_SORT_STORAGE_KEY = 'oksskolten.inbox.sort'
 const INBOX_GROUP_STORAGE_KEY = 'oksskolten.inbox.group'
 const TITLE_TRANSLATE_BATCH_SIZE = 50
+const FEED_FETCH_CONCURRENCY = 4
 type TranslateTitlesStatus = 'idle' | 'loading' | 'active' | 'error'
 
 /** How often (ms) to flush the batch of read article IDs to the server */
@@ -111,6 +115,27 @@ function dayGroupMeta(article: ArticleListItem, t: ReturnType<typeof useI18n>['t
   }
 }
 
+async function mapLimited<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = []
+  let nextIndex = 0
+  const workerCount = Math.min(concurrency, items.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= items.length) return
+      results[index] = await worker(items[index])
+    }
+  }))
+
+  return results
+}
+
 export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(function ArticleList({ listLabel }, ref) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -125,7 +150,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const isClips = location.pathname === '/clips'
   const isCollectionView = isBookmarks || isLikes || isHistory || isClips
 
-  const { data: feedsData } = useSWR<{ feeds: FeedWithCounts[] }>('/api/feeds', fetcher)
+  const { data: feedsData } = useSWR<FeedsCacheData>('/api/feeds', fetcher)
   const feedId = feedIdParam ? Number(feedIdParam) : (isClips && clipFeedId ? clipFeedId : undefined)
   const currentFeed = feedId && feedsData ? feedsData.feeds.find(f => f.id === feedId) : undefined
   const categoryId = categoryIdParam ? Number(categoryIdParam) : undefined
@@ -155,6 +180,13 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const effectiveTranslateTargetLang = settings.translateTargetLang || locale
   const { progress, startFeedFetch } = useFetchProgressContext()
   const { mutate: globalMutate } = useSWRConfig()
+  const updateFeedsCache = useCallback((patch: FeedsCachePatch) => {
+    void globalMutate(
+      '/api/feeds',
+      (current: FeedsCacheData | undefined) => applyFeedsCachePatch(current, patch),
+      { revalidate: false },
+    )
+  }, [globalMutate])
   const effectiveInboxViewFilter: FeedViewType | undefined = isInbox && inboxViewFilter !== 'all' ? inboxViewFilter : undefined
   const { data: inboxSummary, mutate: mutateInboxSummary } = useSWR<InboxSummary>(isInbox ? '/api/inbox/summary' : null, fetcher)
   const { data: highValueData, mutate: mutateHighValue } = useSWR<HighValueResponse>(
@@ -204,6 +236,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   }), [revalidateList])
 
   const articles = useMemo(() => data ? data.flatMap(page => page.articles) : [], [data])
+  const [renderWindowExtra, setRenderWindowExtra] = useState(0)
   const [translateTitlesEnabled, setTranslateTitlesEnabled] = useState(false)
   const [translateTitlesStatus, setTranslateTitlesStatus] = useState<TranslateTitlesStatus>('idle')
   const [translatedTitles, setTranslatedTitles] = useState<Record<number, string>>({})
@@ -219,6 +252,14 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const hiddenByFloor = data?.[0]?.total_without_floor != null
     ? data[0].total_without_floor - (data[0].total ?? 0)
     : 0
+  const renderedArticleLimit = ARTICLE_RENDER_WINDOW_SIZE + renderWindowExtra
+  const hiddenLoadedArticleCount = Math.max(0, articles.length - renderedArticleLimit)
+  const renderedArticles = useMemo(() => (
+    hiddenLoadedArticleCount > 0
+      ? articles.slice(hiddenLoadedArticleCount)
+      : articles
+  ), [articles, hiddenLoadedArticleCount])
+  const allArticleIds = useMemo(() => articles.map(article => article.id), [articles])
   const { enqueueUndoSeen, undoSeen, dismissUndoSeen } = useUndoSeen()
 
   useEffect(() => {
@@ -241,7 +282,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const { focusedItemId, setFocusedItemId } = useKeyboardNavigationContext()
   const isKeyboardNavEnabled = keyboardNavigation === 'on' && !isGridLayout
 
-  const articleIds = useMemo(() => articles.map(a => String(a.id)), [articles])
+  const keyboardArticleIds = useMemo(() => renderedArticles.map(a => String(a.id)), [renderedArticles])
 
   const articleMap = useMemo(() => {
     const map = new Map<string, ArticleListItem>()
@@ -254,7 +295,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const escapeDebounceRef = useRef(false)
 
   useKeyboardNavigation({
-    items: articleIds,
+    items: keyboardArticleIds,
     focusedItemId,
     onFocusChange: (id) => {
       setFocusedItemId(id)
@@ -293,7 +334,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       )
       apiPatch(`/api/articles/${article.id}/bookmark`, { bookmarked: next })
         .then(() => {
-          void globalMutate((key: string) => typeof key === 'string' && key.startsWith('/api/feeds'))
+          updateFeedsCache({ bookmarkDelta: next ? 1 : -1 })
         })
         .catch(() => {
           // Roll back on failure
@@ -364,17 +405,32 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   const observerRef = useRef<IntersectionObserver | null>(null)
   const batchQueue = useRef(new Set<number>())
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const seenFeedCachePatchedIdsRef = useRef(new Set<number>())
 
   const flushBatch = useCallback(() => {
     if (batchQueue.current.size === 0) return
     const ids = [...batchQueue.current]
     batchQueue.current.clear()
+    const unreadDeltasByFeed = new Map<number, number>()
+    const patchedIds: number[] = []
+    for (const id of ids) {
+      if (seenFeedCachePatchedIdsRef.current.has(id)) continue
+      const article = articleMap.get(String(id))
+      if (!article || article.seen_at != null) continue
+      unreadDeltasByFeed.set(article.feed_id, (unreadDeltasByFeed.get(article.feed_id) ?? 0) - 1)
+      patchedIds.push(id)
+    }
     markSeenOnServer(ids)
-      .then(() => globalMutate(
-        (key: string) => typeof key === 'string' && key.startsWith('/api/feeds'),
-      ))
+      .then(() => {
+        if (unreadDeltasByFeed.size > 0) {
+          updateFeedsCache({
+            feedDeltas: [...unreadDeltasByFeed].map(([feedId, unreadDelta]) => ({ feedId, unreadDelta })),
+          })
+          for (const id of patchedIds) seenFeedCachePatchedIdsRef.current.add(id)
+        }
+      })
       .catch(() => {})
-  }, [globalMutate])
+  }, [articleMap, updateFeedsCache])
 
   const scheduleFlush = useCallback(() => {
     if (flushTimerRef.current) return
@@ -476,6 +532,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     setAutoReadIds(new Set())
     setNoFloor(false)
     setShowReadArticles(false)
+    setRenderWindowExtra(0)
     setArticleKindFilter('all')
     setFocusedItemId(null)
     setTranslateTitlesEnabled(false)
@@ -487,8 +544,12 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   }, [feedId, categoryId, setFocusedItemId])
 
   useEffect(() => {
-    if (!translateTitlesEnabled || articles.length === 0 || translateTitlesInFlightRef.current) return
-    const pending = articles
+    setRenderWindowExtra(0)
+  }, [articleKindFilter, bookmarkedOnly, effectiveInboxViewFilter, inboxSort, likedOnly, noFloor, readOnly, unreadOnly])
+
+  useEffect(() => {
+    if (!translateTitlesEnabled || renderedArticles.length === 0 || translateTitlesInFlightRef.current) return
+    const pending = renderedArticles
       .filter(article =>
         article.lang !== effectiveTranslateTargetLang &&
         translatedTitles[article.id] == null &&
@@ -510,7 +571,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         const payload = (res as { translated_titles?: Record<number, string> } | undefined)?.translated_titles ?? {}
         setTranslatedTitles(prev => ({ ...prev, ...payload }))
         if (translateTitlesEnabledRef.current) {
-          const remaining = articles
+          const remaining = renderedArticles
             .filter(article =>
               article.lang !== effectiveTranslateTargetLang &&
               ({ ...translatedTitles, ...payload } as Record<number, string>)[article.id] == null &&
@@ -535,7 +596,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         translateTitlesInFlightRef.current = false
         for (const id of pending) translatingTitleIdsRef.current.delete(id)
       })
-  }, [translateTitlesEnabled, articles, effectiveTranslateTargetLang, translatedTitles, translateTitlesStatus, t])
+  }, [translateTitlesEnabled, renderedArticles, effectiveTranslateTargetLang, translatedTitles, translateTitlesStatus, t])
 
   const articleKindOptions: Array<{ value: ArticleKind | 'all'; label: string }> = [
     { value: 'all', label: t('articleKind.all') },
@@ -613,8 +674,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     void mutate()
     void mutateHighValue()
     void mutateInboxSummary()
-    void globalMutate((key: string) => typeof key === 'string' && key.startsWith('/api/feeds'))
-  }, [globalMutate, mutate, mutateHighValue, mutateInboxSummary])
+  }, [mutate, mutateHighValue, mutateInboxSummary])
 
   const showUndoToast = useCallback((undoId: number) => {
     toast(t('inbox.undoSeenToast'), {
@@ -636,12 +696,17 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     mutateArticleInPages(article.id, current => ({ ...current, seen_at: nextSeenAt }))
     apiPatch(`/api/articles/${article.id}/seen`, { seen: !article.seen_at })
       .then(() => {
+        if (nextSeenAt == null) seenFeedCachePatchedIdsRef.current.delete(article.id)
+        else seenFeedCachePatchedIdsRef.current.add(article.id)
+        updateFeedsCache({
+          feedDeltas: [{ feedId: article.feed_id, unreadDelta: nextSeenAt == null ? 1 : -1 }],
+        })
         refreshListMeta()
       })
       .catch(() => {
         void mutate()
       })
-  }, [mutate, mutateArticleInPages, refreshListMeta])
+  }, [mutate, mutateArticleInPages, refreshListMeta, updateFeedsCache])
 
   const handleMarkSeenWithUndo = useCallback((article: ArticleListItem) => {
     if (article.seen_at != null) return
@@ -659,6 +724,11 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         batchQueue.current.delete(article.id)
         mutateArticleInPages(article.id, current => ({ ...current, seen_at: null }))
         await apiDelete(`/api/articles/${article.id}/seen`)
+        if (seenFeedCachePatchedIdsRef.current.delete(article.id)) {
+          updateFeedsCache({
+            feedDeltas: [{ feedId: article.feed_id, unreadDelta: 1 }],
+          })
+        }
         refreshListMeta()
       },
     })
@@ -666,13 +736,17 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
 
     apiPatch(`/api/articles/${article.id}/seen`, { seen: true })
       .then(() => {
+        seenFeedCachePatchedIdsRef.current.add(article.id)
+        updateFeedsCache({
+          feedDeltas: [{ feedId: article.feed_id, unreadDelta: -1 }],
+        })
         refreshListMeta()
       })
       .catch(() => {
         dismissUndoSeen(undoId)
         void mutate()
       })
-  }, [dismissUndoSeen, enqueueUndoSeen, mutate, mutateArticleInPages, refreshListMeta, showUndoToast])
+  }, [dismissUndoSeen, enqueueUndoSeen, mutate, mutateArticleInPages, refreshListMeta, showUndoToast, updateFeedsCache])
 
   // Mark an article as read: instant UI update + queue for server batch
   const markRead = useCallback((articleId: number) => {
@@ -699,12 +773,17 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
           batchQueue.current.delete(articleId)
           mutateArticleInPages(articleId, current => ({ ...current, seen_at: null }))
           await apiDelete(`/api/articles/${articleId}/seen`)
+          if (seenFeedCachePatchedIdsRef.current.delete(articleId)) {
+            updateFeedsCache({
+              feedDeltas: [{ feedId: article.feed_id, unreadDelta: 1 }],
+            })
+          }
           refreshListMeta()
         },
       })
       showUndoToast(undoId)
     }
-  }, [articleMap, enqueueUndoSeen, mutateArticleInPages, refreshListMeta, scheduleFlush, showUndoToast])
+  }, [articleMap, enqueueUndoSeen, mutateArticleInPages, refreshListMeta, scheduleFlush, showUndoToast, updateFeedsCache])
 
   // Stable ref so the observer callback always sees the latest markRead
   const markReadRef = useRef(markRead)
@@ -715,29 +794,29 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     mutateArticleInPages(article.id, current => ({ ...current, bookmarked_at: nextBookmarkedAt }))
     apiPatch(`/api/articles/${article.id}/bookmark`, { bookmarked: !article.bookmarked_at })
       .then(() => {
-        refreshListMeta()
+        updateFeedsCache({ bookmarkDelta: nextBookmarkedAt == null ? -1 : 1 })
       })
       .catch(() => {
         void mutate()
       })
-  }, [mutate, mutateArticleInPages, refreshListMeta])
+  }, [mutate, mutateArticleInPages, updateFeedsCache])
 
   const handleToggleLike = useCallback((article: ArticleListItem) => {
     const nextLikedAt = article.liked_at ? null : new Date().toISOString()
     mutateArticleInPages(article.id, current => ({ ...current, liked_at: nextLikedAt }))
     apiPatch(`/api/articles/${article.id}/like`, { liked: !article.liked_at })
       .then(() => {
-        refreshListMeta()
+        updateFeedsCache({ likeDelta: nextLikedAt == null ? -1 : 1 })
       })
       .catch(() => {
         void mutate()
       })
-  }, [mutate, mutateArticleInPages, refreshListMeta])
+  }, [mutate, mutateArticleInPages, updateFeedsCache])
 
   const handleFetchAllInboxFeeds = useCallback(async () => {
     const activeFeeds = (feedsData?.feeds ?? []).filter(feed => feed.type !== 'clip' && !feed.disabled)
     if (activeFeeds.length === 0) return
-    const results = await Promise.all(activeFeeds.map(feed => startFeedFetch(feed.id)))
+    const results = await mapLimited(activeFeeds, FEED_FETCH_CONCURRENCY, feed => startFeedFetch(feed.id))
     const totalNew = results.reduce((sum, result) => sum + (result.totalNew ?? 0), 0)
     if (results.some(result => result.error)) {
       toast.error(t('toast.fetchError', { name: t('feeds.inbox') }))
@@ -818,9 +897,9 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
   }, [articleOpenMode, displayConfig, handleMarkSeenWithUndo, handleToggleBookmark, handleToggleLike, handleToggleSeen, isTouchDevice, layout, navigate, t, translateTitlesEnabled, translatedTitles])
 
   const inboxChatTrigger = (
-    <ListChatFab
+      <ListChatFab
       listLabel={listLabel}
-      articleIds={articles.map(article => article.id)}
+      articleIds={allArticleIds}
       sourceFilters={sourceFilters}
       hideDefaultTrigger
       openSignal={inboxChatOpenSignal}
@@ -937,11 +1016,11 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
             }
             setTranslateTitlesEnabled(true)
             translateTitlesEnabledRef.current = true
-            if (articles.length === 0) {
+            if (renderedArticles.length === 0) {
               setTranslateTitlesStatus('idle')
               return
             }
-            const pending = articles.some(article =>
+            const pending = renderedArticles.some(article =>
               article.lang !== effectiveTranslateTargetLang &&
               translatedTitles[article.id] == null &&
               !translatingTitleIdsRef.current.has(article.id),
@@ -1088,7 +1167,27 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       )}
 
       <div className={isGridLayout ? 'grid grid-cols-1 md:grid-cols-2 gap-4 px-4 md:px-6' : ''}>
-        {articles.map((article, index) => {
+        {hiddenLoadedArticleCount > 0 && (
+          <div
+            data-testid="article-render-window-placeholder"
+            className={`${isGridLayout ? 'col-span-full' : ''} px-4 md:px-6 py-3 text-center`}
+          >
+            <button
+              type="button"
+              className="rounded-full border border-border bg-bg px-3 py-1.5 text-xs text-muted transition hover:bg-hover hover:text-text"
+              onClick={() => {
+                setRenderWindowExtra(prev => Math.min(
+                  Math.max(0, articles.length - ARTICLE_RENDER_WINDOW_SIZE),
+                  prev + ARTICLE_RENDER_WINDOW_STEP,
+                ))
+              }}
+            >
+              {t('articles.showEarlierLoaded', { count: String(hiddenLoadedArticleCount) })}
+            </button>
+          </div>
+        )}
+        {renderedArticles.map((article, relativeIndex) => {
+          const index = hiddenLoadedArticleCount + relativeIndex
           const isAutoRead = autoReadIds.has(article.id)
           const effectiveArticle = isAutoRead
             ? { ...article, seen_at: article.seen_at ?? new Date().toISOString() }
@@ -1113,7 +1212,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
           const isKbFocused = focusedItemId === String(article.id)
           return (
             <Fragment key={article.id}>
-              {inboxGroupInfo?.shouldRenderAtIndex(index) && (
+              {(relativeIndex === 0 || inboxGroupInfo?.shouldRenderAtIndex(index)) && inboxGroupInfo && (
                 <InboxGroupHeader
                   title={inboxGroupInfo.titleForArticle(article)}
                   unreadCount={inboxGroupInfo.unreadCountForIndex(index)}
@@ -1215,7 +1314,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       {articles.length > 0 && !isInbox && (
         <ListChatFab
           listLabel={listLabel}
-          articleIds={articles.map(article => article.id)}
+          articleIds={allArticleIds}
           sourceFilters={sourceFilters}
         />
       )}

@@ -4,6 +4,7 @@ import { Construction, ExternalLink } from 'lucide-react'
 import useSWR from 'swr'
 import { useI18n, APP_NAME } from '../lib/i18n'
 import { PasswordSettings } from '../components/settings/password-settings'
+import type { SecuritySharedData } from '../components/settings/password-settings'
 import { PasskeySettings } from '../components/settings/passkey-settings'
 import { GitHubOAuthSettings } from '../components/settings/github-oauth-settings'
 import { ApiTokenSettings } from '../components/settings/api-token-settings'
@@ -27,7 +28,11 @@ export function SettingsPage() {
   const { t } = useI18n()
   const navigate = useNavigate()
   const settingsChunkVersion = '2026-03-29-2'
-  const { data: me } = useSWR<{ role?: 'owner' | 'admin' | 'member' }>('/api/me', fetcher)
+  const { data: me, mutate: mutateMe } = useSWR<{ id?: number; email?: string; role?: 'owner' | 'admin' | 'member' }>('/api/me', fetcher)
+  const { data: authMethods, mutate: mutateAuthMethods } = useSWR<NonNullable<SecuritySharedData['methods']>>(
+    tab === 'security' ? '/api/auth/methods' : null,
+    fetcher,
+  )
   const tabs = me?.role === 'owner' || me?.role === 'admin'
     ? [...BASE_TABS, 'members']
     : BASE_TABS
@@ -83,7 +88,7 @@ export function SettingsPage() {
           )}
 
           {tab === 'data' && (
-            <DataTab />
+            <DataTab sharedData={{ me }} />
           )}
 
           {tab === 'plugins' && (
@@ -101,16 +106,27 @@ export function SettingsPage() {
           )}
 
           {tab === 'notifications' && (
-            <NotificationsTab />
+            <NotificationsTab me={me?.id ? { id: me.id, role: me.role } : undefined} />
           )}
 
           {tab === 'security' && (
             <>
-              <PasswordSettings />
+              <PasswordSettings sharedData={{
+                methods: authMethods,
+                mutateMethods: mutateAuthMethods,
+                me: me?.email ? { email: me.email } : undefined,
+                mutateMe,
+              }} />
               <Separator />
-              <PasskeySettings />
+              <PasskeySettings sharedData={{
+                methods: authMethods,
+                mutateMethods: mutateAuthMethods,
+              }} />
               <Separator />
-              <GitHubOAuthSettings />
+              <GitHubOAuthSettings sharedData={{
+                methods: authMethods,
+                mutateMethods: mutateAuthMethods,
+              }} />
               <Separator />
               <ApiTokenSettings />
             </>

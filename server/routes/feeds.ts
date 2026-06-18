@@ -16,16 +16,14 @@ import {
   deleteFeed,
   bulkMoveFeedsToCategory,
   markAllSeenByFeed,
-  getBookmarkCount,
-  getLikeCount,
-  getClipFeed,
+  getArticleCollectionCounts,
   getFeedMetrics,
   getCategories,
   createCategory,
   getFeedNotificationRule,
   upsertFeedNotificationRule,
   deleteFeedNotificationRule,
-  listNotificationChannels,
+  listNotificationChannelsByIds,
 } from '../db.js'
 import { requireJson, getRequestUserId, requireRoles } from '../auth.js'
 import { fetchSingleFeed, discoverRssUrl } from '../fetcher.js'
@@ -143,15 +141,18 @@ function toPublicFeed<T extends object>(feed: T): T {
   return copy
 }
 
+function isVisibleClipFeed<T extends { type?: string }>(feed: T, userId: number | null): boolean {
+  return feed.type === 'clip' && (userId != null || (feed as T & { user_id?: number | null }).user_id == null)
+}
+
 export async function feedRoutes(api: FastifyInstance): Promise<void> {
   api.get('/api/feeds', async (request, reply) => {
     const userId = getRequestUserId(request)
     const feeds = getFeeds(userId)
-    const bookmark_count = getBookmarkCount(userId)
-    const like_count = getLikeCount(userId)
-    const clipFeed = getClipFeed(userId)
+    const { bookmarkCount, likeCount } = getArticleCollectionCounts(userId)
+    const clipFeed = feeds.find(feed => isVisibleClipFeed(feed, userId))
     const clip_feed_id = clipFeed?.id ?? null
-    reply.send({ feeds: feeds.map(toPublicFeed), bookmark_count, like_count, clip_feed_id })
+    reply.send({ feeds: feeds.map(toPublicFeed), bookmark_count: bookmarkCount, like_count: likeCount, clip_feed_id })
   })
 
   api.get('/api/discover-title', async (request, reply) => {
@@ -555,12 +556,6 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
         return
       }
 
-      const availableChannels = new Map(
-        listNotificationChannels(userId)
-          .filter(channel => channel.enabled === 1)
-          .map(channel => [channel.id, channel]),
-      )
-
       if (body.enabled && body.channel_ids.length === 0) {
         reply.status(400).send({ error: 'channel_ids must not be empty when notifications are enabled' })
         return
@@ -570,6 +565,11 @@ export async function feedRoutes(api: FastifyInstance): Promise<void> {
         return
       }
 
+      const availableChannels = new Map(
+        listNotificationChannelsByIds(body.channel_ids, userId)
+          .filter(channel => channel.enabled === 1)
+          .map(channel => [channel.id, channel]),
+      )
       for (const channelId of body.channel_ids) {
         if (!availableChannels.has(channelId)) {
           reply.status(400).send({ error: `Invalid notification channel: ${channelId}` })

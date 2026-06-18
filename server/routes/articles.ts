@@ -29,20 +29,21 @@ import type { MeiliArticleDoc } from '../search/client.js'
 import { buildMeiliFilter, meiliSearch } from '../search/client.js'
 import { isSearchReady, syncArticleToSearch } from '../search/sync.js'
 import { requireJson, getRequestUserId } from '../auth.js'
-import { summarizeArticle, translateArticle, streamSummarizeArticle, streamTranslateArticle, translateText, fetchArticleContent } from '../fetcher.js'
+import { summarizeArticle, translateArticle, streamSummarizeArticle, streamTranslateArticle, createTextTranslator, fetchArticleContent } from '../fetcher.js'
 import type { AiTextResult } from '../fetcher.js'
-import { archiveArticleImages, isImageArchivingEnabled, deleteArticleImages } from '../fetcher/article-images.js'
-import { getSetting } from '../db/settings.js'
+import { archiveArticleImages, getArticleImageSettings, isImageArchivingEnabled, deleteArticleImages } from '../fetcher/article-images.js'
+import { getSettings } from '../db/settings.js'
 import { DEFAULT_LANGUAGE } from '../../shared/lang.js'
 import type { ArticleKind, FeedViewType } from '../../shared/article-kind.js'
 import { buildNotificationPreview } from '../notifications/article-preview.js'
 import path from 'node:path'
 import fs from 'node:fs'
-import { dataPath } from '../paths.js'
+import { getArticleImageStoragePath } from '../article-image-storage-path.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 
 function getTranslateTargetLang(userId: number | null): string {
-  return getSetting('translate.target_lang', userId) || getSetting('general.language', userId) || DEFAULT_LANGUAGE
+  const settings = getSettings(['translate.target_lang', 'general.language'], userId)
+  return settings['translate.target_lang'] || settings['general.language'] || DEFAULT_LANGUAGE
 }
 
 const DEFAULT_ARTICLE_LIMIT = 20
@@ -50,6 +51,65 @@ const MAX_ARTICLE_LIMIT = 100
 const MAX_CHECK_URLS = 200
 const MAX_BATCH_SEEN = 100
 const MAX_SEARCH_LIMIT = 50
+const TITLE_TRANSLATE_CONCURRENCY = 4
+const TITLE_TRANSLATE_CACHE_MAX = 500
+const titleTranslateCache = new Map<string, Promise<string>>()
+
+function titleTranslateCacheKey(userId: number | null, targetLang: string, title: string): string {
+  return `${userId ?? 'local'}\0${targetLang}\0${title}`
+}
+
+async function translateTitleCached(
+  title: string,
+  targetLang: string,
+  userId: number | null,
+  translateTitle: (title: string) => Promise<{ fullTextTranslated: string }>,
+): Promise<string> {
+  const key = titleTranslateCacheKey(userId, targetLang, title)
+  const cached = titleTranslateCache.get(key)
+  if (cached) {
+    titleTranslateCache.delete(key)
+    titleTranslateCache.set(key, cached)
+    return cached
+  }
+
+  const translated = translateTitle(title)
+    .then(result => result.fullTextTranslated.trim() || title)
+  titleTranslateCache.set(key, translated)
+
+  if (titleTranslateCache.size > TITLE_TRANSLATE_CACHE_MAX) {
+    const oldestKey = titleTranslateCache.keys().next().value
+    if (oldestKey != null) titleTranslateCache.delete(oldestKey)
+  }
+
+  translated.catch(() => {
+    if (titleTranslateCache.get(key) === translated) titleTranslateCache.delete(key)
+  })
+
+  return translated
+}
+
+/** @internal Test-only helper. */
+export function _clearTitleTranslateCacheForTests(): void {
+  titleTranslateCache.clear()
+}
+
+async function runLimited<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0
+  const workerCount = Math.min(concurrency, items.length)
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= items.length) return
+      await worker(items[index])
+    }
+  }))
+}
 
 // Coerce to number, treating NaN as undefined to preserve existing behavior
 const coerceOptionalNumber = z.preprocess(
@@ -258,15 +318,62 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const userId = getRequestUserId(request)
     const isClipFeed = feedId != null && getClipFeed(userId)?.id === feedId
     const smartFloor = !noFloor && !isClipFeed && !unread && !bookmarked && !liked && !read
-    const { articles, total, totalWithoutFloor } = getArticles({ feedId, categoryId, feedViewType, articleKind, unread, bookmarked, liked, read, sort, excludeIds, limit, offset, smartFloor, userId })
-    const hasMore = offset + articles.length < total
+    const perfStats = process.env.ARTICLES_PERF_LOG === '1' ? { queryCount: 0 } : undefined
+    const perfStartedAt = perfStats ? Date.now() : 0
+    const includeTotal = offset === 0
+    const { articles, total, hasMore: probedHasMore, totalWithoutFloor } = getArticles({
+      feedId,
+      categoryId,
+      feedViewType,
+      articleKind,
+      unread,
+      bookmarked,
+      liked,
+      read,
+      sort,
+      excludeIds,
+      limit,
+      offset,
+      smartFloor,
+      includeTotal,
+      includeTotalWithoutFloor: offset === 0,
+      perfStats,
+      userId,
+    })
+    const hasMore = probedHasMore ?? offset + articles.length < total
 
     // When unread filter yields 0 results, return total article count (without unread filter)
     // so the UI can distinguish "no articles" from "all read"
     let totalAll: number | undefined
     if (unread && total === 0 && offset === 0) {
-      const allResult = getArticles({ feedId, categoryId, feedViewType, articleKind, limit: 0, offset: 0, userId })
+      const allResult = getArticles({
+        feedId,
+        categoryId,
+        feedViewType,
+        articleKind,
+        limit: 0,
+        offset: 0,
+        includeTotalWithoutFloor: false,
+        perfStats,
+        userId,
+      })
       totalAll = allResult.total
+    }
+
+    if (perfStats) {
+      request.log.info({
+        msg: 'articles query completed',
+        queryCount: perfStats.queryCount,
+        elapsedMs: Date.now() - perfStartedAt,
+        limit,
+        offset,
+        smartFloor,
+        sort,
+        unread,
+        feedId,
+        categoryId,
+        feedViewType,
+      })
     }
 
     reply.send({ articles, total, has_more: hasMore, ...(totalWithoutFloor != null ? { total_without_floor: totalWithoutFloor } : {}), ...(totalAll != null ? { total_all: totalAll } : {}) })
@@ -361,25 +468,44 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
           return
         }
         const moved = getDb().transaction(() => {
-          if (userId == null) {
-            getDb().prepare('UPDATE articles SET feed_id = ?, category_id = NULL WHERE id = ?').run(clipFeed.id, existing.id)
-          } else {
-            getDb().prepare('UPDATE articles SET feed_id = ?, category_id = NULL WHERE id = ? AND user_id = ?').run(clipFeed.id, existing.id, userId)
+          const movedDoc = (userId == null
+            ? getDb().prepare(`
+              UPDATE articles
+              SET feed_id = ?, category_id = NULL
+              WHERE id = ?
+              RETURNING id, user_id, feed_id, category_id, title,
+                COALESCE(full_text, '') AS full_text,
+                COALESCE(full_text_translated, '') AS full_text_translated,
+                lang,
+                COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
+                COALESCE(score, 0) AS score,
+                (seen_at IS NULL) AS is_unread,
+                (liked_at IS NOT NULL) AS is_liked,
+                (bookmarked_at IS NOT NULL) AS is_bookmarked
+            `).get(clipFeed.id, existing.id)
+            : getDb().prepare(`
+              UPDATE articles
+              SET feed_id = ?, category_id = NULL
+              WHERE id = ? AND user_id = ?
+              RETURNING id, user_id, feed_id, category_id, title,
+                COALESCE(full_text, '') AS full_text,
+                COALESCE(full_text_translated, '') AS full_text_translated,
+                lang,
+                COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
+                COALESCE(score, 0) AS score,
+                (seen_at IS NULL) AS is_unread,
+                (liked_at IS NOT NULL) AS is_liked,
+                (bookmarked_at IS NOT NULL) AS is_bookmarked
+            `).get(clipFeed.id, existing.id, userId)
+          ) as MeiliArticleDoc | undefined
+          return {
+            article: getArticleById(existing.id, userId),
+            movedDoc,
           }
-          return getArticleById(existing.id, userId)
         })()
         // Sync clip move to Meilisearch (best-effort, outside transaction)
-        const movedDoc = getDb().prepare(`
-          SELECT id, user_id, feed_id, category_id, title,
-                 COALESCE(full_text, '') AS full_text,
-                 COALESCE(full_text_translated, '') AS full_text_translated,
-                 lang,
-                 COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
-                 COALESCE(score, 0) AS score
-          FROM active_articles WHERE id = ?
-        `).get(existing.id) as MeiliArticleDoc | undefined
-        if (movedDoc) syncArticleToSearch(movedDoc)
-        reply.status(200).send({ article: moved, moved: true })
+        if (moved.movedDoc) syncArticleToSearch(moved.movedDoc)
+        reply.status(200).send({ article: moved.article, moved: true })
         return
       }
 
@@ -505,23 +631,24 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       const articles = getArticlesByIds(body.ids, undefined, userId)
       const byId = new Map(articles.map(article => [article.id, article]))
       const translated_titles: Record<number, string> = {}
+      let translateTitle: ((title: string) => Promise<{ fullTextTranslated: string }>) | undefined
 
-      for (const id of body.ids) {
+      await runLimited(body.ids, TITLE_TRANSLATE_CONCURRENCY, async (id) => {
         const article = byId.get(id)
-        if (!article) continue
-        if (!article.title?.trim()) continue
+        if (!article) return
+        if (!article.title?.trim()) return
         if (article.lang === targetLang) {
           translated_titles[id] = article.title
-          continue
+          return
         }
         try {
-          const result = await translateText(article.title, targetLang, userId)
-          translated_titles[id] = result.fullTextTranslated.trim() || article.title
+          translateTitle ??= createTextTranslator(targetLang, userId)
+          translated_titles[id] = await translateTitleCached(article.title, targetLang, userId, translateTitle)
         } catch (err) {
           request.log.warn({ err, articleId: id }, 'translate title failed')
           translated_titles[id] = article.title
         }
-      }
+      })
 
       reply.send({ translated_titles, target_lang: targetLang })
     },
@@ -605,7 +732,8 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
         reply.status(400).send({ error: 'No full text available' })
         return
       }
-      if (!isImageArchivingEnabled()) {
+      const imageSettings = getArticleImageSettings()
+      if (!isImageArchivingEnabled(imageSettings)) {
         reply.status(400).send({ error: 'Image archiving is not enabled' })
         return
       }
@@ -618,7 +746,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       reply.status(202).send({ status: 'accepted' })
 
       // Background processing
-      archiveArticleImages(article.id, article.full_text).catch(err => {
+      archiveArticleImages(article.id, article.full_text, imageSettings).catch(err => {
         request.log.error(err, 'archive-images failed')
       })
     },
@@ -676,7 +804,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
         return
       }
 
-      const storagePath = getSetting('images.storage_path') || dataPath('articles', 'images')
+      const storagePath = getArticleImageStoragePath()
       const filepath = path.join(storagePath, sanitized)
 
       if (!fs.existsSync(filepath)) {

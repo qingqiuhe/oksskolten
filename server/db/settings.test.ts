@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
-import { getSetting, upsertSetting, deleteSetting, getOrCreateJwtSecret } from '../db.js'
+import { createUser, getDb, getSetting, getSettings, upsertSetting, deleteSetting, getOrCreateJwtSecret } from '../db.js'
 
 beforeEach(() => {
   setupTestDb()
@@ -14,6 +14,48 @@ describe('getSetting', () => {
   it('returns value for existing key', () => {
     upsertSetting('foo', 'bar')
     expect(getSetting('foo')).toBe('bar')
+  })
+})
+
+describe('getSettings', () => {
+  it('returns values for multiple legacy settings', () => {
+    upsertSetting('foo', 'bar')
+    upsertSetting('baz', 'qux')
+
+    expect(getSettings(['foo', 'baz', 'missing'])).toEqual({
+      foo: 'bar',
+      baz: 'qux',
+      missing: undefined,
+    })
+  })
+
+  it('uses user settings without falling back to legacy user-scoped keys', () => {
+    const user = createUser({
+      email: 'settings-user@example.com',
+      passwordHash: 'hash',
+      role: 'member',
+      status: 'active',
+    })
+    upsertSetting('chat.provider', 'legacy-provider')
+    upsertSetting('chat.provider', 'openai', user.id)
+
+    expect(getSettings(['chat.provider', 'chat.model'], user.id)).toEqual({
+      'chat.provider': 'openai',
+      'chat.model': undefined,
+    })
+  })
+
+  it('uses instance settings before legacy settings', () => {
+    upsertSetting('system.jwt_secret', 'instance-secret')
+    getDb().prepare(`
+      INSERT INTO settings (key, value)
+      VALUES ('system.jwt_secret', 'legacy-secret')
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run()
+
+    expect(getSettings(['system.jwt_secret'])).toEqual({
+      'system.jwt_secret': 'instance-secret',
+    })
   })
 })
 

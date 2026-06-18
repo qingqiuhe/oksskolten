@@ -4,6 +4,7 @@ import { buildApp } from './__tests__/helpers/buildApp.js'
 import { getDb, upsertSetting } from './db.js'
 import { hashSync } from 'bcryptjs'
 import type { FastifyInstance } from 'fastify'
+import { invalidatePasswordAuthEnabledCache } from './auth-password-settings.js'
 
 const mockVerifyAuthenticationResponse = vi.fn()
 
@@ -45,6 +46,7 @@ async function getAuthToken(email = 'test@example.com', password = 'password123'
 
 beforeEach(async () => {
   setupTestDb()
+  invalidatePasswordAuthEnabledCache()
   app = await buildApp()
   savedAuthDisabled = process.env.AUTH_DISABLED
   delete process.env.AUTH_DISABLED
@@ -98,6 +100,23 @@ describe('GET /api/auth/methods', () => {
     upsertSetting('auth.password_enabled', '0')
     const res = await app.inject({ method: 'GET', url: '/api/auth/methods' })
     expect(res.json().password.enabled).toBe(false)
+  })
+
+  it('reads auth method settings with a batched query', async () => {
+    upsertSetting('auth.password_enabled', '0')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({ method: 'GET', url: '/api/auth/methods' })
+
+    expect(res.statusCode).toBe(200)
+    expect(preparedSql.some(sql => sql.includes('FROM instance_settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM instance_settings WHERE key = ?'))).toHaveLength(0)
   })
 
   it('sets Cache-Control: no-store', async () => {
@@ -270,6 +289,30 @@ describe('POST /api/auth/password/toggle', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(res.json().enabled).toBe(false)
+  })
+
+  it('does not read GitHub OAuth settings when passkeys already prevent lockout', async () => {
+    seedUser()
+    seedCredential('cred-1')
+    const token = await getAuthToken()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/toggle',
+      headers: { ...json, authorization: `Bearer ${token}` },
+      payload: { enabled: false },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(preparedSql.some(sql => sql.includes('FROM instance_settings') && sql.includes('key IN'))).toBe(false)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM instance_settings WHERE key = ?'))).toHaveLength(0)
   })
 
   it('allows re-enabling password', async () => {

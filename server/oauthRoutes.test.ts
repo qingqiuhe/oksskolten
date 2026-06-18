@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Fastify from 'fastify'
 import jwt from '@fastify/jwt'
 import rateLimit from '@fastify/rate-limit'
@@ -116,6 +116,29 @@ describe('POST /api/oauth/github/authorize', () => {
     expect(body.url).toContain('github.com')
     expect(body.url).toContain('test-client-id')
   })
+
+  it('reuses one settings snapshot for enabled check and GitHub client creation', async () => {
+    enableGitHubOAuth()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/oauth/github/authorize',
+      headers: json,
+      payload: { origin: 'http://localhost' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const batchedSettingReads = preparedSql.filter(sql => sql.includes('FROM instance_settings') && sql.includes('key IN'))
+    expect(batchedSettingReads).toHaveLength(1)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM instance_settings WHERE key = ?'))).toHaveLength(0)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -217,6 +240,29 @@ describe('GET /api/oauth/github/config', () => {
     expect(body.clientId).toBe('test-client-id')
   })
 
+  it('reads GitHub OAuth config with batched settings queries', async () => {
+    seedUser()
+    enableGitHubOAuth()
+    const token = getToken()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/oauth/github/config',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(preparedSql.some(sql => sql.includes('FROM instance_settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM instance_settings WHERE key = ?'))).toHaveLength(0)
+  })
+
   it('returns unconfigured state when no credentials', async () => {
     seedUser()
     const token = getToken()
@@ -260,6 +306,32 @@ describe('POST /api/oauth/github/config', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().clientId).toBe('new-id')
     expect(res.json().configured).toBe(true)
+  })
+
+  it('reuses the current config snapshot when saving GitHub OAuth config', async () => {
+    seedUser()
+    enableGitHubOAuth()
+    const token = getToken()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/oauth/github/config',
+      headers: { ...json, authorization: `Bearer ${token}` },
+      payload: { allowedUsers: 'user1' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().configured).toBe(true)
+    expect(res.json().allowedUsers).toBe('user1')
+    expect(preparedSql.some(sql => sql.includes('FROM instance_settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM instance_settings WHERE key = ?'))).toHaveLength(0)
   })
 
   it('ignores empty clientSecret (does not clear)', async () => {

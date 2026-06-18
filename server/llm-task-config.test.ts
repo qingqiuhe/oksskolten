@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { hashSync } from 'bcryptjs'
 import { setupTestDb } from './__tests__/helpers/testDb.js'
 import { createCustomLLMProvider, getDb, upsertSetting } from './db.js'
@@ -28,6 +28,27 @@ describe('resolveLLMTaskConfig', () => {
       model: 'gpt-4.1-mini',
       providerInstanceId: null,
     })
+  })
+
+  it('reads provider/model/instance settings with one batched query', () => {
+    const userId = seedUser()
+    upsertSetting('summary.provider', 'openai', userId)
+    upsertSetting('summary.model', 'gpt-4.1-mini', userId)
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    expect(resolveLLMTaskConfig('summary', userId)).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+    })
+
+    expect(preparedSql.some(sql => sql.includes('FROM user_settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value') && sql.includes('WHERE user_id = ? AND key = ?'))).toHaveLength(0)
   })
 
   it('resolves custom OpenAI-compatible provider credentials', () => {

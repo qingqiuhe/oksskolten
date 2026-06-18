@@ -5,6 +5,7 @@ import { buildApp } from '../__tests__/helpers/buildApp.js'
 import { upsertSetting, getSetting, createFeed, createNotificationChannel, upsertFeedNotificationRule, insertArticle, markArticleSeen, getDb, createCustomLLMProvider } from '../db.js'
 import { hashSync } from 'bcryptjs'
 import type { FastifyInstance } from 'fastify'
+import { invalidateSocialRssHubBaseUrlCache } from '../social-feeds.js'
 
 // ---------------------------------------------------------------------------
 // Mocks — same as api.test.ts (needed for buildApp imports)
@@ -75,6 +76,7 @@ function createAuthedUserWithId(role: 'owner' | 'admin' | 'member') {
 
 beforeEach(async () => {
   setupTestDb()
+  invalidateSocialRssHubBaseUrlCache()
   app = await buildApp()
 })
 
@@ -87,6 +89,28 @@ afterEach(() => {
 // =========================================================================
 
 describe('PATCH /api/settings/preferences — provider-model validation', () => {
+  it('reads preferences with batched setting queries', async () => {
+    upsertSetting('chat.provider', 'anthropic')
+    upsertSetting('chat.model', 'claude-haiku-4-5-20251001')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/settings/preferences',
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()['chat.provider']).toBe('anthropic')
+    expect(preparedSql.some(sql => sql.includes('FROM settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM settings WHERE key = ?'))).toHaveLength(0)
+  })
+
   it('accepts valid anthropic provider and model', async () => {
     const res = await app.inject({
       method: 'PATCH',
@@ -550,6 +574,29 @@ describe('social source settings endpoints', () => {
     expect(getSetting('social.rsshub_base_url')).toBe('https://rsshub-gamma-ebon.vercel.app')
   })
 
+  it('reuses the RSSHub base URL cache for repeated GETs', async () => {
+    upsertSetting('social.rsshub_base_url', 'https://rsshub.example.com/')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    for (const _ of [0, 1]) {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/settings/social-sources',
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toEqual({ rsshub_base_url: 'https://rsshub.example.com' })
+    }
+
+    expect(preparedSql.filter(sql => sql.includes('FROM instance_settings') && sql.includes('WHERE key = ?'))).toHaveLength(1)
+  })
+
   it('PATCH rejects non-https urls', async () => {
     const res = await app.inject({
       method: 'PATCH',
@@ -668,6 +715,14 @@ describe('notification task settings endpoints', () => {
     expect(listRes.json().scope).toBe('all')
     expect(listRes.json().tasks).toHaveLength(2)
 
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
     const updateMemberRes = await app.inject({
       method: 'PATCH',
       url: `/api/settings/notification-tasks/${memberRule.id}`,
@@ -688,6 +743,7 @@ describe('notification task settings endpoints', () => {
     expect(updateMemberRes.json().max_articles_per_message).toBe(7)
     expect(updateMemberRes.json().max_title_chars).toBe(140)
     expect(updateMemberRes.json().max_body_chars).toBe(640)
+    expect(preparedSql.filter(sql => sql.includes('FROM feed_notification_rules r') && sql.includes('WHERE r.id = ?'))).toHaveLength(1)
 
     const updateOwnerRes = await app.inject({
       method: 'PATCH',
@@ -710,6 +766,13 @@ describe('notification task settings endpoints', () => {
       type: 'feishu_webhook',
       name: 'Owner Channel',
       webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/owner',
+      secret: null,
+      enabled: 1,
+    }, owner.userId)
+    const ownerChannelB = createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Owner Channel B',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/owner-b',
       secret: null,
       enabled: 1,
     }, owner.userId)
@@ -736,16 +799,32 @@ describe('notification task settings endpoints', () => {
       channel_ids: [memberChannel.id],
     }, member.userId)
 
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
     const ownUpdateRes = await app.inject({
       method: 'PATCH',
       url: `/api/settings/notification-tasks/${ownerRule.id}`,
       headers: { ...json, ...owner.headers },
       payload: {
-        channel_ids: [],
+        channel_ids: [ownerChannel.id, ownerChannelB.id],
       },
     })
     expect(ownUpdateRes.statusCode).toBe(200)
-    expect(ownUpdateRes.json().channels).toEqual([])
+    expect(ownUpdateRes.json().channels).toEqual([
+      { id: ownerChannel.id, name: 'Owner Channel', enabled: 1 },
+      { id: ownerChannelB.id, name: 'Owner Channel B', enabled: 1 },
+    ])
+    const channelLookups = preparedSql.filter(sql => sql.includes('FROM notification_channels'))
+    expect(channelLookups.some(sql => sql.includes('id IN (?, ?)'))).toBe(true)
+    expect(channelLookups.filter(sql => sql.includes('WHERE id = ?'))).toHaveLength(0)
+
+    vi.restoreAllMocks()
 
     const crossUserRes = await app.inject({
       method: 'PATCH',
@@ -855,6 +934,66 @@ describe('notification channel settings endpoints', () => {
 
     expect(updateRes.statusCode).toBe(200)
     expect(updateRes.json().timezone).toBe('UTC+9')
+  })
+
+  it('returns created channel without a follow-up row query', async () => {
+    const member = createAuthedUserWithId('member')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/settings/notification-channels',
+      headers: { ...json, ...member.headers },
+      payload: {
+        type: 'feishu_webhook',
+        name: 'Returning Team',
+        webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/returning-token',
+      },
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(preparedSql.some(sql => sql.includes('INSERT INTO notification_channels') && sql.includes('RETURNING *'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT * FROM notification_channels WHERE id = ?'))).toBe(false)
+  })
+
+  it('returns updated channel without preselecting or rereading the row', async () => {
+    const member = createAuthedUserWithId('member')
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/settings/notification-channels',
+      headers: { ...json, ...member.headers },
+      payload: {
+        type: 'feishu_webhook',
+        name: 'Team',
+        webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/update-token',
+      },
+    })
+    expect(createRes.statusCode).toBe(201)
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/notification-channels/${createRes.json().id}`,
+      headers: { ...json, ...member.headers },
+      payload: { name: 'Renamed Team' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().name).toBe('Renamed Team')
+    expect(preparedSql.some(sql => sql.includes('UPDATE notification_channels SET') && sql.includes('RETURNING *'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT *') && sql.includes('FROM notification_channels') && sql.includes('WHERE id = ?'))).toBe(false)
   })
 
   it('rejects invalid channel timezone', async () => {
@@ -1014,6 +1153,26 @@ describe('PATCH /api/settings/profile — avatar_seed', () => {
 // =========================================================================
 
 describe('GET /api/settings/profile — defaults', () => {
+  it('reads profile settings with a batched query', async () => {
+    upsertSetting('profile.account_name', 'Batch User')
+    upsertSetting('general.language', 'zh')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({ method: 'GET', url: '/api/settings/profile' })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().account_name).toBe('Batch User')
+    expect(res.json().language).toBe('zh')
+    expect(preparedSql.some(sql => sql.includes('FROM settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM settings WHERE key = ?'))).toHaveLength(0)
+  })
+
   it('initializes account_name from auth email on first access', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/settings/profile' })
     expect(res.statusCode).toBe(200)
@@ -1032,6 +1191,36 @@ describe('GET /api/settings/profile — defaults', () => {
 // =========================================================================
 
 describe('GET /api/settings/api-keys/:provider', () => {
+  it('returns all provider statuses with a batched query', async () => {
+    upsertSetting('api_key.anthropic', 'sk-anthropic')
+    upsertSetting('api_key.deepl', 'sk-deepl')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/settings/api-keys',
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({
+      keys: {
+        anthropic: { configured: true },
+        gemini: { configured: false },
+        openai: { configured: false },
+        'google-translate': { configured: false },
+        deepl: { configured: true },
+      },
+    })
+    expect(preparedSql.some(sql => sql.includes('FROM settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM settings WHERE key = ?'))).toHaveLength(0)
+  })
+
   it('returns configured=false when no key set', async () => {
     const res = await app.inject({
       method: 'GET',
@@ -1133,6 +1322,85 @@ describe('POST /api/settings/api-keys/:provider', () => {
   })
 })
 
+describe('GET /api/settings/ollama/status', () => {
+  it('loads Ollama models with one batched config read', async () => {
+    upsertSetting('ollama.base_url', 'http://ollama.local:11434')
+    upsertSetting('ollama.custom_headers', '{"X-Test":"1"}')
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      models: [
+        { name: 'llama3', size: 123, details: { parameter_size: '8B' } },
+      ],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/settings/ollama/models',
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({
+      models: [{ name: 'llama3', size: 123, parameter_size: '8B' }],
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://ollama.local:11434/api/tags',
+      expect.objectContaining({ headers: { 'X-Test': '1' } }),
+    )
+    expect(preparedSql.filter(sql => sql.includes('ollama.base_url') || sql.includes('ollama.custom_headers'))).toHaveLength(0)
+    expect(preparedSql.filter(sql => sql.includes('key IN') && sql.includes('FROM settings'))).toHaveLength(1)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM settings WHERE key = ?'))).toHaveLength(0)
+  })
+
+  it('reuses one batched Ollama config read for version and tags probes', async () => {
+    upsertSetting('ollama.base_url', 'http://ollama.local:11434')
+    upsertSetting('ollama.custom_headers', '{"X-Test":"1"}')
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/api/version')) {
+        return new Response(JSON.stringify({ version: '0.6.0' }), { status: 200 })
+      }
+      if (url.endsWith('/api/tags')) {
+        return new Response(JSON.stringify({ models: [{ name: 'llama3' }, { name: 'qwen' }] }), { status: 200 })
+      }
+      return new Response('{}', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/settings/ollama/status',
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ ok: true, version: '0.6.0', model_count: 2 })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://ollama.local:11434/api/version',
+      expect.objectContaining({ headers: { 'X-Test': '1' } }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://ollama.local:11434/api/tags',
+      expect.objectContaining({ headers: { 'X-Test': '1' } }),
+    )
+    expect(preparedSql.filter(sql => sql.includes('ollama.base_url') || sql.includes('ollama.custom_headers'))).toHaveLength(0)
+    expect(preparedSql.filter(sql => sql.includes('key IN') && sql.includes('FROM settings'))).toHaveLength(1)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM settings WHERE key = ?'))).toHaveLength(0)
+  })
+})
+
 describe('custom LLM providers', () => {
   it('creates and lists custom providers without exposing API keys', async () => {
     const { headers } = createAuthedUserWithId('member')
@@ -1175,6 +1443,33 @@ describe('custom LLM providers', () => {
     expect(listRes.json().providers[0].api_key).toBeUndefined()
   })
 
+  it('returns created custom provider without a follow-up provider lookup', async () => {
+    const { headers } = createAuthedUserWithId('member')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/settings/custom-llm-providers',
+      headers: { ...json, ...headers },
+      payload: {
+        name: 'Returning Provider',
+        base_url: 'https://returning.example.com/v1/',
+        api_key: 'sk-returning',
+      },
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(res.json().api_key).toBeUndefined()
+    expect(preparedSql.some(sql => sql.includes('INSERT INTO custom_llm_providers') && sql.includes('RETURNING'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('FROM custom_llm_providers') && sql.includes('WHERE id = ? AND user_id = ?'))).toBe(false)
+  })
+
   it('updates custom provider metadata and keeps API keys write-only', async () => {
     const { userId, headers } = createAuthedUserWithId('member')
     const provider = createCustomLLMProvider({
@@ -1201,6 +1496,35 @@ describe('custom LLM providers', () => {
       has_api_key: true,
     }))
     expect(res.json().api_key).toBeUndefined()
+  })
+
+  it('returns updated custom provider from update returning without a public reread', async () => {
+    const { userId, headers } = createAuthedUserWithId('member')
+    const provider = createCustomLLMProvider({
+      name: 'OpenRouter',
+      base_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-openrouter',
+    }, userId)
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/settings/custom-llm-providers/${provider.id}`,
+      headers: { ...json, ...headers },
+      payload: { name: 'Returning DeepSeek' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().name).toBe('Returning DeepSeek')
+    expect(res.json().api_key).toBeUndefined()
+    expect(preparedSql.some(sql => sql.includes('UPDATE custom_llm_providers') && sql.includes('RETURNING'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('FROM custom_llm_providers') && sql.includes('WHERE id = ? AND user_id = ?'))).toHaveLength(1)
   })
 
   it('blocks deleting a custom provider that is still assigned to a task', async () => {
@@ -1342,6 +1666,26 @@ function mockRssDatabaseSizes({ dbBytes, walBytes }: { dbBytes: number; walBytes
 }
 
 describe('GET /api/settings/retention/stats', () => {
+  it('reads retention settings with a batched query', async () => {
+    const statSyncSpy = mockRssDatabaseSizes({ dbBytes: 1024 })
+    upsertSetting('retention.read_days', '90')
+    upsertSetting('retention.unread_days', '180')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({ method: 'GET', url: '/api/settings/retention/stats' })
+
+    statSyncSpy.mockRestore()
+    expect(res.statusCode).toBe(200)
+    expect(preparedSql.some(sql => sql.includes('FROM settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM settings WHERE key = ?'))).toHaveLength(0)
+  })
+
   it('returns zeros when retention is not configured', async () => {
     const statSyncSpy = mockRssDatabaseSizes({ dbBytes: 1024 })
     const res = await app.inject({ method: 'GET', url: '/api/settings/retention/stats' })
@@ -1381,6 +1725,22 @@ describe('GET /api/settings/retention/stats', () => {
 })
 
 describe('POST /api/settings/retention/purge', () => {
+  it('reads retention purge settings with a batched query', async () => {
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({ method: 'POST', url: '/api/settings/retention/purge' })
+
+    expect(res.statusCode).toBe(400)
+    expect(preparedSql.some(sql => sql.includes('FROM settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM settings WHERE key = ?'))).toHaveLength(0)
+  })
+
   it('returns 400 when retention is not enabled', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/settings/retention/purge' })
     expect(res.statusCode).toBe(400)

@@ -83,6 +83,7 @@ function normalizeSearchArticlesInput(input: Record<string, unknown>): Record<st
 export interface ToolContext {
   timeZone?: string
   scope?: ChatScope
+  userLanguage?: string
 }
 
 export interface ToolDef {
@@ -326,13 +327,13 @@ const summarizeArticleTool: ToolDef = {
     },
     required: ['article_id'],
   },
-  execute: async (input) => {
+  execute: async (input, context) => {
     const article = getArticleById(input.article_id as number)
     if (!article) return JSON.stringify({ error: 'Article not found' })
     if (article.summary) return JSON.stringify({ summary: article.summary, cached: true })
     if (!article.full_text) return JSON.stringify({ error: 'No full text available' })
 
-    const { summary } = await summarizeArticle(article.full_text)
+    const { summary } = await summarizeArticle(article.full_text, context?.userLanguage)
     updateArticleContent(article.id, { summary })
     return JSON.stringify({ summary })
   },
@@ -348,8 +349,8 @@ const translateArticleTool: ToolDef = {
     },
     required: ['article_id'],
   },
-  execute: async (input) => {
-    const userLang = getSetting('general.language') || DEFAULT_LANGUAGE
+  execute: async (input, context) => {
+    const userLang = context?.userLanguage || getSetting('general.language') || DEFAULT_LANGUAGE
     const article = getArticleById(input.article_id as number) as ArticleDetail | undefined
     if (!article) return JSON.stringify({ error: 'Article not found' })
     if (article.full_text_translated && article.translated_lang === userLang) return JSON.stringify({ full_text_translated: article.full_text_translated, cached: true })
@@ -373,85 +374,116 @@ const getUserPreferencesTool: ToolDef = {
   execute: async () => {
     const db = getDb()
 
-    // Top feeds by engagement (liked + bookmarked + read, weighted)
-    const topFeeds = db.prepare(`
+    const feedStats = db.prepare(`
       SELECT f.name,
              COUNT(CASE WHEN a.liked_at IS NOT NULL THEN 1 END) AS like_count,
              COUNT(CASE WHEN a.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
              COUNT(CASE WHEN a.read_at IS NOT NULL THEN 1 END) AS read_count,
              COUNT(*) AS article_count,
-             ROUND(COUNT(CASE WHEN a.read_at IS NOT NULL THEN 1 END) * 1.0 / COUNT(*), 2) AS read_rate
+             ROUND(COUNT(CASE WHEN a.read_at IS NOT NULL THEN 1 END) * 1.0 / COUNT(*), 2) AS read_rate,
+             COUNT(CASE WHEN a.published_at > datetime('now', '-30 days') AND a.read_at IS NULL THEN 1 END) AS recent_unread_count
       FROM active_articles a
       JOIN feeds f ON a.feed_id = f.id
       WHERE f.type != 'clip'
       GROUP BY f.id
-      HAVING read_count > 0 OR like_count > 0 OR bookmark_count > 0
-      ORDER BY (like_count * 10 + bookmark_count * 5 + read_count * 2) DESC
-      LIMIT 10
-    `).all()
+    `).all() as Array<{
+      name: string
+      like_count: number
+      bookmark_count: number
+      read_count: number
+      article_count: number
+      read_rate: number
+      recent_unread_count: number
+    }>
+    const topFeeds = feedStats
+      .filter(feed => feed.read_count > 0 || feed.like_count > 0 || feed.bookmark_count > 0)
+      .sort((a, b) => (b.like_count * 10 + b.bookmark_count * 5 + b.read_count * 2) - (a.like_count * 10 + a.bookmark_count * 5 + a.read_count * 2))
+      .slice(0, 10)
+      .map(({ name, like_count, bookmark_count, read_count, article_count, read_rate }) => ({
+        name,
+        like_count,
+        bookmark_count,
+        read_count,
+        article_count,
+        read_rate,
+      }))
 
-    // Top categories by engagement
-    const topCategories = db.prepare(`
+    const categoryStats = db.prepare(`
       SELECT c.name,
              COUNT(CASE WHEN a.read_at IS NOT NULL THEN 1 END) AS read_count,
-             COUNT(CASE WHEN a.liked_at IS NOT NULL THEN 1 END) AS like_count
-      FROM active_articles a
-      JOIN feeds f ON a.feed_id = f.id
-      JOIN categories c ON f.category_id = c.id
-      WHERE f.type != 'clip' AND (a.read_at IS NOT NULL OR a.liked_at IS NOT NULL)
-      GROUP BY c.id
-      ORDER BY (like_count * 5 + read_count) DESC
-      LIMIT 5
-    `).all()
-
-    // Recent likes (last 20)
-    const recentLikes = db.prepare(`
-      SELECT a.title, f.name AS feed_name, a.published_at, a.summary
-      FROM active_articles a
-      JOIN feeds f ON a.feed_id = f.id
-      WHERE a.liked_at IS NOT NULL
-      ORDER BY a.liked_at DESC
-      LIMIT 20
-    `).all() as { title: string; feed_name: string; published_at: string; summary: string | null }[]
-
-    // Recent bookmarks (last 10)
-    const recentBookmarks = db.prepare(`
-      SELECT a.title, f.name AS feed_name, a.published_at
-      FROM active_articles a
-      JOIN feeds f ON a.feed_id = f.id
-      WHERE a.bookmarked_at IS NOT NULL
-      ORDER BY a.bookmarked_at DESC
-      LIMIT 10
-    `).all()
-
-    // Category read rates (last 30 days) — quantifies interest intensity per category
-    const categoryReadRates = db.prepare(`
-      SELECT c.name,
-             COUNT(*) AS total,
-             COUNT(CASE WHEN a.read_at IS NOT NULL THEN 1 END) AS read_count,
-             ROUND(COUNT(CASE WHEN a.read_at IS NOT NULL THEN 1 END) * 1.0 / COUNT(*), 2) AS read_rate
+             COUNT(CASE WHEN a.liked_at IS NOT NULL THEN 1 END) AS like_count,
+             COUNT(CASE WHEN a.published_at > datetime('now', '-30 days') THEN 1 END) AS recent_total,
+             COUNT(CASE WHEN a.published_at > datetime('now', '-30 days') AND a.read_at IS NOT NULL THEN 1 END) AS recent_read_count
       FROM active_articles a
       JOIN feeds f ON a.feed_id = f.id
       JOIN categories c ON f.category_id = c.id
       WHERE f.type != 'clip'
-        AND a.published_at > datetime('now', '-30 days')
+        AND (
+          a.read_at IS NOT NULL
+          OR a.liked_at IS NOT NULL
+          OR a.published_at > datetime('now', '-30 days')
+        )
       GROUP BY c.id
-      ORDER BY read_rate DESC
-    `).all()
+    `).all() as Array<{
+      name: string
+      read_count: number
+      like_count: number
+      recent_total: number
+      recent_read_count: number
+    }>
+    const topCategories = categoryStats
+      .filter(category => category.read_count > 0 || category.like_count > 0)
+      .sort((a, b) => (b.like_count * 5 + b.read_count) - (a.like_count * 5 + a.read_count))
+      .slice(0, 5)
+      .map(({ name, read_count, like_count }) => ({ name, read_count, like_count }))
 
-    // Ignored feeds — subscribed feeds with many unread articles in last 30 days
-    const ignoredFeeds = db.prepare(`
-      SELECT f.name, COUNT(*) AS unread_articles
-      FROM active_articles a
-      JOIN feeds f ON a.feed_id = f.id
-      WHERE a.published_at > datetime('now', '-30 days')
-        AND a.read_at IS NULL
-        AND f.type != 'clip'
-      GROUP BY f.id
-      HAVING unread_articles > 10
-      ORDER BY unread_articles DESC
-      LIMIT 5
-    `).all()
+    const recentCollectionRows = db.prepare(`
+      SELECT 'liked' AS collection_type, title, feed_name, published_at, summary
+      FROM (
+        SELECT a.title, f.name AS feed_name, a.published_at, a.summary, a.liked_at AS collection_at
+        FROM active_articles a
+        JOIN feeds f ON a.feed_id = f.id
+        WHERE a.liked_at IS NOT NULL
+        ORDER BY a.liked_at DESC
+        LIMIT 20
+      )
+      UNION ALL
+      SELECT 'bookmarked' AS collection_type, title, feed_name, published_at, NULL AS summary
+      FROM (
+        SELECT a.title, f.name AS feed_name, a.published_at, a.bookmarked_at AS collection_at
+        FROM active_articles a
+        JOIN feeds f ON a.feed_id = f.id
+        WHERE a.bookmarked_at IS NOT NULL
+        ORDER BY a.bookmarked_at DESC
+        LIMIT 10
+      )
+    `).all() as Array<{
+      collection_type: 'liked' | 'bookmarked'
+      title: string
+      feed_name: string
+      published_at: string
+      summary: string | null
+    }>
+    const recentLikes = recentCollectionRows.filter(row => row.collection_type === 'liked')
+    const recentBookmarks = recentCollectionRows
+      .filter(row => row.collection_type === 'bookmarked')
+      .map(({ title, feed_name, published_at }) => ({ title, feed_name, published_at }))
+
+    const categoryReadRates = categoryStats
+      .filter(category => category.recent_total > 0)
+      .map(category => ({
+        name: category.name,
+        total: category.recent_total,
+        read_count: category.recent_read_count,
+        read_rate: Math.round((category.recent_read_count / category.recent_total) * 100) / 100,
+      }))
+      .sort((a, b) => b.read_rate - a.read_rate)
+
+    const ignoredFeeds = feedStats
+      .filter(feed => feed.recent_unread_count > 10)
+      .sort((a, b) => b.recent_unread_count - a.recent_unread_count)
+      .slice(0, 5)
+      .map(({ name, recent_unread_count }) => ({ name, unread_articles: recent_unread_count }))
 
     return JSON.stringify({
       top_feeds: topFeeds,

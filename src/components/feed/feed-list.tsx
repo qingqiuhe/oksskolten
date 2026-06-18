@@ -14,7 +14,6 @@ import { useFeedActions } from '../../hooks/use-feed-actions'
 import { useFeedDragDrop } from '../../hooks/use-feed-drag-drop'
 import { useFeedSelection } from '../../hooks/use-feed-selection'
 import { useFeedBulkActions } from '../../hooks/use-feed-bulk-actions'
-import { useClipFeedId } from '../../hooks/use-clip-feed-id'
 import { FeedModal } from './feed-modal'
 import { ConfirmDialog } from '../ui/confirm-dialog'
 import { FeedContextMenu, MultiSelectContextMenu, CategoryContextMenu } from './feed-context-menu'
@@ -118,7 +117,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
     }
   }, [isOpen])
 
-  const clipFeedId = useClipFeedId()
+  const clipFeedId = feedsData?.clip_feed_id ?? null
 
   // Group feeds by category (exclude clip feed from regular list)
   const { categorized, uncategorized, clipFeedData } = useMemo(() => {
@@ -577,6 +576,7 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
           categories={categories}
           canUseJsonApi={canUseJsonApi}
           canUseSocial={canUseSocial}
+          rsshubBaseUrl={socialSourcesData?.rsshub_base_url}
         />
       )}
 
@@ -615,6 +615,8 @@ export function FeedList({ isOpen, onClose, onBackdropClose, onCollapse, onMarkA
         onOpenChange={setCommandOpen}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenAddFeed={() => setFeedModalOpen(true)}
+        feedsData={feedsData}
+        categoriesData={categoriesData}
       />
 
       {notificationFeed && (

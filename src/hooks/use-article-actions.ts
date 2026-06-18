@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSWRConfig } from 'swr'
 import { apiPatch, apiPost, apiDelete } from '../lib/fetcher'
+import { applyFeedsCachePatch, type FeedsCacheData, type FeedsCachePatch } from '../lib/feeds-cache'
 import type { ArticleDetail } from '../../shared/types'
 
 export function useArticleActions(article: ArticleDetail | undefined, articleKey: string) {
@@ -16,18 +17,23 @@ export function useArticleActions(article: ArticleDetail | undefined, articleKey
   const isBookmarked = optimisticBookmark !== undefined ? optimisticBookmark : !!article?.bookmarked_at
   const isLiked = optimisticLiked !== undefined ? !!optimisticLiked : !!article?.liked_at
 
+  const updateFeedsCache = useCallback((patch: FeedsCachePatch) => {
+    void globalMutate(
+      '/api/feeds',
+      (current: FeedsCacheData | undefined) => applyFeedsCachePatch(current, patch),
+      { revalidate: false },
+    )
+  }, [globalMutate])
+
   // Reset optimistic state when article changes
   useEffect(() => {
     setOptimisticBookmark(undefined)
     setOptimisticLiked(undefined)
   }, [article?.id])
 
-  const revalidateLists = useCallback(() => {
+  const revalidateArticleLists = useCallback(() => {
     void globalMutate((key: string) =>
-      typeof key === 'string' && (
-        key.includes('/api/feeds') ||
-        key.includes('/api/articles')
-      ),
+      typeof key === 'string' && key.includes('/api/articles'),
     )
   }, [globalMutate])
 
@@ -41,12 +47,13 @@ export function useArticleActions(article: ArticleDetail | undefined, articleKey
     try {
       await apiPatch(`/api/articles/${article.id}/bookmark`, { bookmarked: next })
       void globalMutate(articleKey)
-      revalidateLists()
+      updateFeedsCache({ bookmarkDelta: next ? 1 : -1 })
+      revalidateArticleLists()
     } catch {
       setOptimisticBookmark(undefined)
       void globalMutate(articleKey)
     }
-  }, [article, articleKey, isBookmarked, globalMutate, revalidateLists])
+  }, [article, articleKey, isBookmarked, globalMutate, revalidateArticleLists, updateFeedsCache])
 
   const toggleLike = useCallback(async () => {
     if (!article) return
@@ -59,12 +66,13 @@ export function useArticleActions(article: ArticleDetail | undefined, articleKey
     try {
       await apiPatch(`/api/articles/${article.id}/like`, { liked: next })
       void globalMutate(articleKey)
-      revalidateLists()
+      updateFeedsCache({ likeDelta: next ? 1 : -1 })
+      revalidateArticleLists()
     } catch {
       setOptimisticLiked(undefined)
       void globalMutate(articleKey)
     }
-  }, [article, articleKey, isLiked, globalMutate, revalidateLists])
+  }, [article, articleKey, isLiked, globalMutate, revalidateArticleLists, updateFeedsCache])
 
   const handleArchiveImages = useCallback(async () => {
     if (!article || archivingImages) return
@@ -87,12 +95,18 @@ export function useArticleActions(article: ArticleDetail | undefined, articleKey
     void navigate(`/feeds/${feedId}`, { replace: true })
     apiDelete(`/api/articles/${articleId}`)
       .then(() => {
-        void globalMutate((key: unknown) =>
-          typeof key === 'string' && key.startsWith('/api/feeds'),
-        )
+        updateFeedsCache({
+          feedDeltas: [{
+            feedId,
+            articleDelta: -1,
+            unreadDelta: article.seen_at == null ? -1 : 0,
+          }],
+          bookmarkDelta: article.bookmarked_at == null ? 0 : -1,
+          likeDelta: article.liked_at == null ? 0 : -1,
+        })
       })
       .catch((err) => console.warn('Failed to delete article:', err))
-  }, [article, globalMutate, navigate])
+  }, [article, navigate, updateFeedsCache])
 
   return {
     isBookmarked,

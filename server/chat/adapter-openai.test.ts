@@ -123,6 +123,7 @@ describe('runOpenAITurn', () => {
 
     expect(events.filter(e => e.type === 'text_delta')).toHaveLength(2)
     expect(events.find(e => e.type === 'done')).toBeDefined()
+    expect(mockGetOpenAIClient).toHaveBeenCalledWith(undefined, undefined, 'test-key')
     expect(result.usage.input_tokens).toBe(10)
     expect(result.usage.output_tokens).toBe(5)
   })
@@ -172,7 +173,7 @@ describe('runOpenAITurn', () => {
       onEvent: vi.fn(),
     })
 
-    expect(mockGetOpenAIClient).toHaveBeenCalledWith(42, undefined)
+    expect(mockGetOpenAIClient).toHaveBeenCalledWith(42, undefined, 'test-key')
   })
 
   it('passes explicit OpenAI-compatible config to the OpenAI client lookup', async () => {
@@ -248,7 +249,7 @@ describe('runOpenAITurn', () => {
     })
 
     expect(mockFetchOpenAICompatibleChatCompletion).toHaveBeenCalledTimes(2)
-    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', { query: 'test' }, { timeZone: undefined })
+    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', { query: 'test' }, expect.objectContaining({ timeZone: undefined }))
     expect(result.usage).toEqual({ input_tokens: 5, output_tokens: 3 })
   })
 
@@ -304,7 +305,7 @@ describe('runOpenAITurn', () => {
       onEvent: (e) => events.push(e),
     })
 
-    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', { query: 'test' }, { timeZone: undefined })
+    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', { query: 'test' }, expect.objectContaining({ timeZone: undefined }))
     expect(events.some(e => e.type === 'tool_use_start' && e.name === 'search_articles')).toBe(true)
     expect(events.some(e => e.type === 'tool_use_end')).toBe(true)
     expect(events.filter(e => e.type === 'done')).toHaveLength(1)
@@ -438,7 +439,7 @@ describe('runOpenAITurn', () => {
       onEvent: vi.fn(),
     })
 
-    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', { query: 'hello' }, { timeZone: undefined })
+    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', { query: 'hello' }, expect.objectContaining({ timeZone: undefined }))
   })
 
   it('handles multiple concurrent tool calls', async () => {
@@ -660,7 +661,7 @@ describe('OpenAI response to Anthropic format', () => {
     })
 
     // Should still proceed without crashing
-    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', {}, { timeZone: undefined })
+    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', {}, expect.objectContaining({ timeZone: undefined }))
     expect(result.allMessages.length).toBeGreaterThan(2)
   })
 })

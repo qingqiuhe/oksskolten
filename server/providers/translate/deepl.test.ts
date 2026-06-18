@@ -4,14 +4,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
-const { mockGetSetting, mockUpsertSetting, mockFetch } = vi.hoisted(() => ({
+const { mockGetSetting, mockGetSettings, mockUpsertSetting, mockFetch } = vi.hoisted(() => ({
   mockGetSetting: vi.fn(),
+  mockGetSettings: vi.fn(),
   mockUpsertSetting: vi.fn(),
   mockFetch: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
+  getSettings: (...args: unknown[]) => mockGetSettings(...args),
   upsertSetting: (...args: unknown[]) => mockUpsertSetting(...args),
 }))
 
@@ -41,6 +43,7 @@ function setupApiKey(key = 'deepl-key:fx') {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockGetSettings.mockReturnValue({})
 })
 
 // ---------------------------------------------------------------------------
@@ -144,6 +147,15 @@ describe('deeplTranslate', () => {
     await expect(deeplTranslate('test', 'ja')).rejects.toThrow('DeepL API error: 456')
   })
 
+  it('uses provided API key without reading settings', async () => {
+    mockDeeplResponse('<p>こんにちは</p>')
+
+    await deeplTranslate('Hello', 'ja', undefined, 'provided-key:fx')
+
+    expect(mockGetSetting).not.toHaveBeenCalledWith('api_key.deepl', undefined)
+    expect(mockFetch.mock.calls[0][1].headers['Authorization']).toBe('DeepL-Auth-Key provided-key:fx')
+  })
+
   it('splits long text into chunks', async () => {
     setupApiKey('key:fx')
 
@@ -168,7 +180,7 @@ describe('deeplTranslate', () => {
 
 describe('getDeeplMonthlyUsage', () => {
   it('returns zero when no usage recorded', () => {
-    mockGetSetting.mockReturnValue(undefined)
+    mockGetSettings.mockReturnValue({})
     const usage = getDeeplMonthlyUsage()
     expect(usage.monthlyChars).toBe(0)
     expect(usage.freeTierRemaining).toBe(500_000)
@@ -176,22 +188,22 @@ describe('getDeeplMonthlyUsage', () => {
 
   it('returns stored usage for current month', () => {
     const currentMonth = new Date().toISOString().slice(0, 7)
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'deepl.usage_month') return currentMonth
-      if (key === 'deepl.usage_chars') return '100000'
-      return undefined
+    mockGetSettings.mockReturnValue({
+      'deepl.usage_month': currentMonth,
+      'deepl.usage_chars': '100000',
     })
 
     const usage = getDeeplMonthlyUsage()
     expect(usage.monthlyChars).toBe(100_000)
     expect(usage.freeTierRemaining).toBe(400_000)
+    expect(mockGetSetting).not.toHaveBeenCalledWith('deepl.usage_month')
+    expect(mockGetSetting).not.toHaveBeenCalledWith('deepl.usage_chars')
   })
 
   it('returns zero for a different month (usage reset)', () => {
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'deepl.usage_month') return '2020-01'
-      if (key === 'deepl.usage_chars') return '999999'
-      return undefined
+    mockGetSettings.mockReturnValue({
+      'deepl.usage_month': '2020-01',
+      'deepl.usage_chars': '999999',
     })
 
     const usage = getDeeplMonthlyUsage()
@@ -201,10 +213,9 @@ describe('getDeeplMonthlyUsage', () => {
 
   it('clamps freeTierRemaining to zero when exceeded', () => {
     const currentMonth = new Date().toISOString().slice(0, 7)
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'deepl.usage_month') return currentMonth
-      if (key === 'deepl.usage_chars') return '600000'
-      return undefined
+    mockGetSettings.mockReturnValue({
+      'deepl.usage_month': currentMonth,
+      'deepl.usage_chars': '600000',
     })
 
     const usage = getDeeplMonthlyUsage()
@@ -222,9 +233,11 @@ describe('monthly usage tracking', () => {
     const currentMonth = new Date().toISOString().slice(0, 7)
     mockGetSetting.mockImplementation((key: string) => {
       if (key === 'api_key.deepl') return 'key:fx'
-      if (key === 'deepl.usage_month') return currentMonth
-      if (key === 'deepl.usage_chars') return '1000'
       return undefined
+    })
+    mockGetSettings.mockReturnValue({
+      'deepl.usage_month': currentMonth,
+      'deepl.usage_chars': '1000',
     })
     mockDeeplResponse('<p>翻訳済み</p>')
 
@@ -232,14 +245,17 @@ describe('monthly usage tracking', () => {
 
     expect(result.monthlyChars).toBeGreaterThan(1000)
     expect(mockUpsertSetting).toHaveBeenCalledWith('deepl.usage_chars', expect.any(String), undefined)
+    expect(mockGetSettings).toHaveBeenCalledWith(['deepl.usage_month', 'deepl.usage_chars'], undefined)
   })
 
   it('resets usage when month changes', async () => {
     mockGetSetting.mockImplementation((key: string) => {
       if (key === 'api_key.deepl') return 'key:fx'
-      if (key === 'deepl.usage_month') return '2020-01'
-      if (key === 'deepl.usage_chars') return '999999'
       return undefined
+    })
+    mockGetSettings.mockReturnValue({
+      'deepl.usage_month': '2020-01',
+      'deepl.usage_chars': '999999',
     })
     mockDeeplResponse('<p>翻訳済み</p>')
 

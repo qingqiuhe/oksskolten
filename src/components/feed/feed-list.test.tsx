@@ -32,11 +32,11 @@ vi.mock('../../contexts/fetch-progress-context', () => ({
   }),
 }))
 
-let lastFeedModalProps: { canUseSocial?: boolean } | null = null
+let lastFeedModalProps: { canUseSocial?: boolean; rsshubBaseUrl?: string } | null = null
 
 vi.mock('./feed-modal', () => ({
   FeedModal: (props: unknown) => {
-    lastFeedModalProps = props as { canUseSocial?: boolean }
+    lastFeedModalProps = props as { canUseSocial?: boolean; rsshubBaseUrl?: string }
     return null
   },
 }))
@@ -141,10 +141,12 @@ function renderFeedList(
   feedsData?: { feeds: FeedWithCounts[]; bookmark_count: number; like_count: number; clip_feed_id: number | null },
   categoriesData?: { categories: Category[] },
   initialPath = '/inbox',
+  socialSourcesData?: { rsshub_base_url: string },
 ) {
   const swrFallback: Record<string, unknown> = {}
   if (feedsData) swrFallback['/api/feeds'] = feedsData
   if (categoriesData) swrFallback['/api/categories'] = categoriesData
+  if (socialSourcesData) swrFallback['/api/settings/social-sources'] = socialSourcesData
 
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
@@ -183,6 +185,23 @@ describe('FeedList', () => {
       expect(lastFeedModalProps).not.toBeNull()
       expect(lastFeedModalProps?.canUseSocial).toBe(true)
     })
+  })
+
+  it('passes the loaded social source config to the feed modal', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    renderFeedList(
+      {},
+      { feeds: [], bookmark_count: 0, like_count: 0, clip_feed_id: null },
+      { categories: [] },
+      '/inbox',
+      { rsshub_base_url: 'https://rsshub.example.com' },
+    )
+
+    await user.click(screen.getByText('Get Started'))
+
+    expect(lastFeedModalProps).not.toBeNull()
+    expect(lastFeedModalProps?.canUseSocial).toBe(true)
+    expect(lastFeedModalProps?.rsshubBaseUrl).toBe('https://rsshub.example.com')
   })
 
   it('renders nav items: Inbox, Read Later, Liked, Read', () => {

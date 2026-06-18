@@ -24,13 +24,17 @@ function createMockStream(chunks: Record<string, unknown>[]) {
 }
 
 const mockGenerateContentStream = vi.fn()
+const mockGetGeminiClient = vi.fn()
 
 vi.mock('../providers/llm/gemini.js', () => ({
-  getGeminiClient: () => ({
-    models: {
-      generateContentStream: (...args: unknown[]) => mockGenerateContentStream(...args),
-    },
-  }),
+  getGeminiClient: (...args: unknown[]) => {
+    mockGetGeminiClient(...args)
+    return {
+      models: {
+        generateContentStream: (...args: unknown[]) => mockGenerateContentStream(...args),
+      },
+    }
+  },
   geminiProvider: {
     name: 'gemini',
     requireKey: () => {},
@@ -56,6 +60,7 @@ describe('runGeminiTurn', () => {
   beforeEach(() => {
     setupTestDb()
     mockGenerateContentStream.mockReset()
+    mockGetGeminiClient.mockReset()
     mockExecuteTool.mockReset()
   })
 
@@ -95,6 +100,7 @@ describe('runGeminiTurn', () => {
     expect(events.find(e => e.type === 'done')).toBeDefined()
     expect(result.usage.input_tokens).toBe(10)
     expect(result.usage.output_tokens).toBe(5)
+    expect(mockGetGeminiClient).toHaveBeenCalledWith(undefined, 'test-key')
   })
 
   it('captures provider request and response in debug trace', async () => {
@@ -159,7 +165,7 @@ describe('runGeminiTurn', () => {
       onEvent: (e) => events.push(e),
     })
 
-    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', { query: 'test' }, { timeZone: undefined })
+    expect(mockExecuteTool).toHaveBeenCalledWith('search_articles', { query: 'test' }, expect.objectContaining({ timeZone: undefined }))
     expect(events.some(e => e.type === 'tool_use_start')).toBe(true)
     expect(events.some(e => e.type === 'tool_use_end')).toBe(true)
     expect(events.filter(e => e.type === 'done')).toHaveLength(1)

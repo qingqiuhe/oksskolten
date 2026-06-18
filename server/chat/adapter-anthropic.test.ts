@@ -5,6 +5,7 @@ import { upsertSetting } from '../db.js'
 import { createChatDebugCollector } from './debug.js'
 
 const mockStreamFactory = vi.fn()
+const mockGetAnthropicClient = vi.fn()
 
 vi.mock('./tools.js', () => ({
   toAnthropicTools: () => [{ name: 'search_articles', description: 'Search', input_schema: { type: 'object', properties: {} } }],
@@ -12,11 +13,14 @@ vi.mock('./tools.js', () => ({
 }))
 
 vi.mock('../providers/llm/anthropic.js', () => ({
-  getAnthropicClient: () => ({
+  getAnthropicClient: (...args: unknown[]) => {
+    mockGetAnthropicClient(...args)
+    return {
     messages: {
       stream: (...args: unknown[]) => mockStreamFactory(...args),
     },
-  }),
+    }
+  },
   anthropicProvider: { name: 'anthropic', requireKey: () => {}, createMessage: vi.fn(), streamMessage: vi.fn() },
 }))
 
@@ -51,6 +55,7 @@ describe('runAnthropicTurn', () => {
   beforeEach(() => {
     setupTestDb()
     mockStreamFactory.mockReset()
+    mockGetAnthropicClient.mockReset()
   })
 
   it('captures provider request and response in debug trace', async () => {
@@ -82,5 +87,6 @@ describe('runAnthropicTurn', () => {
     expect((trace.provider_request as { transport?: string }).transport).toBe('anthropic-sdk')
     expect((trace.provider_response as { stop_reason?: string }).stop_reason).toBe('end_turn')
     expect(result.usage).toEqual({ input_tokens: 7, output_tokens: 3 })
+    expect(mockGetAnthropicClient).toHaveBeenCalledWith(undefined, 'test-key')
   })
 })

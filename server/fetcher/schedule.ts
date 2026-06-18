@@ -8,23 +8,35 @@ export const MIN_INTERVAL = DEFAULT_MIN_INTERVAL_MINUTES * 60
 export const MAX_INTERVAL = 4 * 60 * 60   // 4 hours (seconds)
 export const DEFAULT_INTERVAL = 60 * 60   // 1 hour (seconds)
 export const FETCH_MIN_INTERVAL_SETTING_KEY = 'system.feed_min_check_interval_minutes'
+const FETCH_SCHEDULE_CONFIG_CACHE_MS = 5_000
 
 export interface FetchScheduleConfig {
   minIntervalMinutes: number
   minIntervalSeconds: number
 }
 
-export function getFetchScheduleConfig(): FetchScheduleConfig {
+let cachedFetchScheduleConfig: FetchScheduleConfig | null = null
+let cachedFetchScheduleConfigUntil = 0
+
+export function invalidateFetchScheduleConfigCache(): void {
+  cachedFetchScheduleConfig = null
+  cachedFetchScheduleConfigUntil = 0
+}
+
+export function getFetchScheduleConfig(now = Date.now()): FetchScheduleConfig {
+  if (cachedFetchScheduleConfig && now < cachedFetchScheduleConfigUntil) return cachedFetchScheduleConfig
   const raw = getSetting(FETCH_MIN_INTERVAL_SETTING_KEY)
   const parsed = raw == null ? NaN : Number(raw)
   const minIntervalMinutes = Number.isInteger(parsed) && parsed >= 1 && parsed <= 240
     ? parsed
     : DEFAULT_MIN_INTERVAL_MINUTES
 
-  return {
+  cachedFetchScheduleConfig = {
     minIntervalMinutes,
     minIntervalSeconds: minIntervalMinutes * 60,
   }
+  cachedFetchScheduleConfigUntil = now + FETCH_SCHEDULE_CONFIG_CACHE_MS
+  return cachedFetchScheduleConfig
 }
 
 export function clampInterval(seconds: number, minIntervalSeconds = MIN_INTERVAL): number {

@@ -12,12 +12,22 @@ import {
 } from '../../../components/notifications/notification-rule-editor'
 
 type NotificationTaskScope = 'self' | 'all'
+const EMPTY_TASKS: NotificationTaskRecord[] = []
+const EMPTY_CHANNELS: NotificationChannel[] = []
 
-export function NotificationTasksSection() {
+export type NotificationTasksSharedData = {
+  me?: { id: number; role?: 'owner' | 'admin' | 'member' }
+  channelData?: { channels: NotificationChannel[] }
+}
+
+export function NotificationTasksSection({ sharedData }: { sharedData?: NotificationTasksSharedData } = {}) {
   const { t } = useI18n()
-  const { data: me } = useSWR<{ id: number; role?: 'owner' | 'admin' | 'member' }>('/api/me', fetcher, { revalidateOnFocus: false })
+  const { data: internalMe } = useSWR<{ id: number; role?: 'owner' | 'admin' | 'member' }>(sharedData ? null : '/api/me', fetcher, { revalidateOnFocus: false })
+  const me = sharedData?.me ?? internalMe
   const isAdminLike = me?.role === 'owner' || me?.role === 'admin'
-  const [scope, setScope] = useState<NotificationTaskScope>('self')
+  const [scope, setScope] = useState<NotificationTaskScope>(() => (
+    sharedData?.me?.role === 'owner' || sharedData?.me?.role === 'admin' ? 'all' : 'self'
+  ))
   const [form, setForm] = useState<(NotificationRuleFormState & { id: number }) | null>(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -33,15 +43,16 @@ export function NotificationTasksSection() {
     fetcher,
     { revalidateOnFocus: false },
   )
-  const { data: channelData } = useSWR<{ channels: NotificationChannel[] }>(
-    '/api/settings/notification-channels',
+  const { data: internalChannelData } = useSWR<{ channels: NotificationChannel[] }>(
+    sharedData ? null : '/api/settings/notification-channels',
     fetcher,
     { revalidateOnFocus: false },
   )
+  const channelData = sharedData?.channelData ?? internalChannelData
 
-  const tasks = data?.tasks ?? []
+  const tasks = data?.tasks ?? EMPTY_TASKS
   const availableChannels = useMemo(
-    () => (channelData?.channels ?? []).filter(channel => channel.enabled === 1),
+    () => (channelData?.channels ?? EMPTY_CHANNELS).filter(channel => channel.enabled === 1),
     [channelData],
   )
   const sortedTasks = useMemo(

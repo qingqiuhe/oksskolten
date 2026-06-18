@@ -7,7 +7,7 @@ import jwt from '@fastify/jwt'
 import rateLimit from '@fastify/rate-limit'
 import multipart from '@fastify/multipart'
 import cron, { type ScheduledTask } from 'node-cron'
-import { runMigrations, getSetting, upsertSetting, getOrCreateJwtSecret, ensureClipFeed, recalculateScores, purgeExpiredArticles, backfillLegacyXArticleKinds } from './db.js'
+import { runMigrations, getSetting, getSettings, upsertSetting, getOrCreateJwtSecret, ensureClipFeed, recalculateScores, purgeExpiredArticles, backfillLegacyXArticleKinds } from './db.js'
 import { logger } from './logger.js'
 
 const log = logger
@@ -18,7 +18,7 @@ import { authRoutes } from './authRoutes.js'
 import { passkeyRoutes } from './passkeyRoutes.js'
 import { oauthRoutes } from './oauthRoutes.js'
 import { fetchAllFeeds } from './fetcher.js'
-import { rebuildSearchIndex, isSearchReady, syncAllScoredArticlesToSearch } from './search/sync.js'
+import { rebuildSearchIndex, isSearchReady, syncArticleScoreUpdatesToSearch } from './search/sync.js'
 import { CONTENT_SECURITY_POLICY } from './security.js'
 import { runNotificationChecks } from './notifications/runner.js'
 
@@ -196,10 +196,10 @@ cronTasks.push(cron.schedule(CRON_SCHEDULE, async () => {
 const SCORE_RECALC_SCHEDULE = process.env.SCORE_RECALC_SCHEDULE || '*/5 * * * *'
 cronTasks.push(cron.schedule(SCORE_RECALC_SCHEDULE, async () => {
   try {
-    const { updated } = recalculateScores()
+    const { updated, scoreUpdates } = recalculateScores()
     log.info(`[cron] Scores recalculated: ${updated} articles`)
     if (updated > 0) {
-      const synced = await syncAllScoredArticlesToSearch()
+      const synced = await syncArticleScoreUpdatesToSearch(scoreUpdates)
       log.info(`[cron] Score sync to search: ${synced} articles`)
     }
   } catch (err) {
@@ -238,11 +238,11 @@ cronTasks.push(cron.schedule('0 */6 * * *', async () => {
 const RETENTION_SCHEDULE = process.env.RETENTION_SCHEDULE || '0 4 * * *'
 
 cronTasks.push(cron.schedule(RETENTION_SCHEDULE, () => {
-  const enabled = getSetting('retention.enabled')
-  if (enabled !== 'on') return
+  const retentionSettings = getSettings(['retention.enabled', 'retention.read_days', 'retention.unread_days'])
+  if (retentionSettings['retention.enabled'] !== 'on') return
 
-  const readDays = Number(getSetting('retention.read_days'))
-  const unreadDays = Number(getSetting('retention.unread_days'))
+  const readDays = Number(retentionSettings['retention.read_days'])
+  const unreadDays = Number(retentionSettings['retention.unread_days'])
   if (isNaN(readDays) || isNaN(unreadDays) || readDays < 1 || unreadDays < 1) return
 
   try {

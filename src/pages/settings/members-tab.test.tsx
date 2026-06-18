@@ -6,6 +6,7 @@ import { MembersTab } from './members-tab'
 const mockApiPost = vi.fn()
 const mockApiPatch = vi.fn()
 const mockMutate = vi.fn()
+let swrKeys: Array<string | null> = []
 
 const swrData: Record<string, unknown> = {
   '/api/users': {
@@ -27,7 +28,10 @@ const swrData: Record<string, unknown> = {
 }
 
 vi.mock('swr', () => ({
-  default: (key: string) => ({ data: swrData[key], mutate: mockMutate }),
+  default: (key: string | null) => {
+    swrKeys.push(key)
+    return { data: key ? swrData[key] : undefined, mutate: mockMutate }
+  },
 }))
 
 vi.mock('../../lib/fetcher', () => ({
@@ -41,6 +45,7 @@ describe('MembersTab', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    swrKeys = []
     mockApiPost.mockResolvedValue({
       invite_url: 'http://localhost/invite/token',
       import_result: {
@@ -50,14 +55,29 @@ describe('MembersTab', () => {
     })
   })
 
-  it('defaults all non-clip feeds to selected and supports group toggle', async () => {
+  it('defers feed and category loading until the subscription picker opens', async () => {
     render(<MembersTab />)
 
-    expect(screen.getByText('3 feeds selected across 2 folders.')).toBeTruthy()
+    expect(swrKeys).toContain('/api/users')
+    expect(swrKeys).not.toContain('/api/feeds')
+    expect(swrKeys).not.toContain('/api/categories')
+    expect(screen.getByText('0 feeds selected across 0 folders.')).toBeTruthy()
+
+    await user.click(screen.getByText('Choose subscriptions'))
+
+    await waitFor(() => {
+      expect(swrKeys).toContain('/api/feeds')
+      expect(swrKeys).toContain('/api/categories')
+    })
+  })
+
+  it('defaults all non-clip feeds to selected and supports group toggle', async () => {
+    render(<MembersTab />)
 
     await user.click(screen.getByText('Choose subscriptions'))
     await waitFor(() => {
       expect(screen.getByText('Import subscriptions')).toBeTruthy()
+      expect(screen.getByText('3 feeds selected across 2 folders.')).toBeTruthy()
     })
 
     const techHeader = screen.getByText('Tech')

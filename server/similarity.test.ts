@@ -1,5 +1,38 @@
-import { describe, it, expect } from 'vitest'
-import { computeTitleSimilarity } from './similarity.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { mockIsSearchReady, mockMeiliSearch } = vi.hoisted(() => ({
+  mockIsSearchReady: vi.fn(() => true),
+  mockMeiliSearch: vi.fn(),
+}))
+
+vi.mock('./search/sync.js', () => ({
+  isSearchReady: mockIsSearchReady,
+}))
+
+vi.mock('./search/client.js', () => ({
+  buildMeiliFilter: vi.fn(() => undefined),
+  meiliSearch: mockMeiliSearch,
+}))
+
+import {
+  _awaitSimilarityQueueIdle,
+  _resetSimilarityQueueForTests,
+  computeTitleSimilarity,
+  enqueueSimilarityDetection,
+} from './similarity.js'
+
+beforeEach(() => {
+  _resetSimilarityQueueForTests()
+  mockIsSearchReady.mockReset()
+  mockIsSearchReady.mockReturnValue(true)
+  mockMeiliSearch.mockReset()
+  mockMeiliSearch.mockResolvedValue({ hits: [], estimatedTotalHits: 0 })
+})
+
+afterEach(async () => {
+  await _awaitSimilarityQueueIdle()
+  _resetSimilarityQueueForTests()
+})
 
 describe('computeTitleSimilarity', () => {
   it('returns 1.0 for identical titles', () => {
@@ -60,5 +93,33 @@ describe('computeTitleSimilarity', () => {
       'Apple、iPhone 17を正式発表',
     )
     expect(score).toBeGreaterThan(0.4)
+  })
+})
+
+describe('enqueueSimilarityDetection', () => {
+  it('caps background similarity detections', async () => {
+    let inFlight = 0
+    let maxInFlight = 0
+    mockMeiliSearch.mockImplementation(async () => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise(resolve => setTimeout(resolve, 10))
+      inFlight -= 1
+      return { hits: [], estimatedTotalHits: 0 }
+    })
+
+    for (let i = 0; i < 6; i++) {
+      enqueueSimilarityDetection({
+        articleId: i + 1,
+        title: `Queued article ${i + 1}`,
+        feedId: 1,
+        publishedAt: '2026-01-01T00:00:00.000Z',
+      })
+    }
+
+    await _awaitSimilarityQueueIdle()
+
+    expect(mockMeiliSearch).toHaveBeenCalledTimes(6)
+    expect(maxInFlight).toBe(2)
   })
 })

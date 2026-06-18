@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { setupTestDb } from './__tests__/helpers/testDb.js'
 import {
+  getDb,
   // Feeds
   getFeeds,
   getFeedById,
@@ -26,6 +27,7 @@ import {
   getBookmarkCount,
   markArticleLiked,
   getLikeCount,
+  getArticleCollectionCounts,
   searchArticles,
   updateArticleContent,
   getExistingArticleUrls,
@@ -474,6 +476,32 @@ describe('Articles', () => {
 
     markArticleLiked(id1, false)
     expect(getLikeCount()).toBe(1)
+  })
+
+  it('getArticleCollectionCounts returns bookmark and like counts together', () => {
+    const feed = seedFeed()
+    const bookmarkedId = seedArticle(feed.id, { url: 'https://example.com/bookmarked' })
+    const likedId = seedArticle(feed.id, { url: 'https://example.com/liked' })
+    const bothId = seedArticle(feed.id, { url: 'https://example.com/both' })
+
+    markArticleBookmarked(bookmarkedId, true)
+    markArticleLiked(likedId, true)
+    markArticleBookmarked(bothId, true)
+    markArticleLiked(bothId, true)
+
+    expect(getArticleCollectionCounts()).toEqual({ bookmarkCount: 2, likeCount: 2 })
+  })
+
+  it('getArticleCollectionCounts keeps indexed bookmark and like lookups separate', () => {
+    const plan = getDb().prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT
+        (SELECT COUNT(*) FROM active_articles WHERE user_id = ? AND bookmarked_at IS NOT NULL) AS bookmark_count,
+        (SELECT COUNT(*) FROM active_articles WHERE user_id = ? AND liked_at IS NOT NULL) AS like_count
+    `).all(1, 1) as { detail: string }[]
+
+    expect(plan.some(row => row.detail.includes('idx_articles_user_bookmarked_active'))).toBe(true)
+    expect(plan.some(row => row.detail.includes('idx_articles_user_liked_active'))).toBe(true)
   })
 
   it('getArticles filters by liked', () => {

@@ -188,7 +188,7 @@ API keys provide programmatic access for external scripts, bots, and monitoring 
 1. External script sends request with Authorization: Bearer ok_<key>
 2. Server detects ok_ prefix → hashes the key with SHA-256
 3. Looks up hash in api_keys table
-4. If found: sets authUser = 'apikey:<id>', records last_used_at
+4. If found: sets authUser = 'apikey:<id>', periodically records last_used_at
 5. Checks scope: read-only keys can only make GET requests
 6. Non-GET with read scope → 403
 ```
@@ -232,4 +232,4 @@ Skip authentication checks with `AUTH_DISABLED=1`. Only effective when `NODE_ENV
 - API keys: `ok_` prefix enables secret scanning tools (e.g., GitHub) to detect leaked keys
 - API keys: only SHA-256 hashes are stored; plaintext is shown once at creation
 - API keys: scope enforcement via HTTP method check at plugin level (read-only keys cannot mutate data)
-- API keys: `last_used_at` tracking for audit purposes
+- API keys: `last_used_at` tracking for audit purposes; high-frequency repeated validations may be coalesced into short update windows

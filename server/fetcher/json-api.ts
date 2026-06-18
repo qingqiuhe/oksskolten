@@ -362,7 +362,7 @@ export async function generateJsonApiTransformScript(
   const providerName = resolvedTask.provider
   const model = resolvedTask.model || TASK_DEFAULTS.chat.model
   const provider = getProvider(providerName)
-  provider.requireKey(userId, resolvedTask.openaiConfig)
+  const apiKey = provider.requireKey(userId, resolvedTask.openaiConfig)
 
   const res = await safeFetch(endpointUrl, {
     headers: {
@@ -388,6 +388,7 @@ export async function generateJsonApiTransformScript(
     model,
     maxTokens: 1600,
     userId,
+    apiKey,
     openaiConfig: resolvedTask.openaiConfig,
     messages: [
       {

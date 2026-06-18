@@ -95,10 +95,11 @@ export function createUser(input: {
   invitedBy?: number | null
   githubLogin?: string | null
 }): UserRecord {
-  const result = getDb().prepare(`
+  return getDb().prepare(`
     INSERT INTO users (email, password_hash, role, status, github_login, invited_by, invited_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(
+    RETURNING *
+  `).get(
     input.email.trim(),
     input.passwordHash,
     input.role,
@@ -106,18 +107,16 @@ export function createUser(input: {
     input.githubLogin?.trim() || null,
     input.invitedBy ?? null,
     input.status === 'invited' ? new Date().toISOString() : null,
-  )
-  return getUserById(result.lastInsertRowid as number)!
+  ) as UserRecord
 }
 
 export function createInitialOwner(email: string, passwordHash: string): UserRecord | null {
-  const result = getDb().prepare(`
+  return getDb().prepare(`
     INSERT INTO users (email, password_hash, role, status)
     SELECT ?, ?, 'owner', 'active'
     WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')
-  `).run(email.trim(), passwordHash)
-  if (result.changes === 0) return null
-  return getUserById(result.lastInsertRowid as number)!
+    RETURNING *
+  `).get(email.trim(), passwordHash) as UserRecord | undefined ?? null
 }
 
 export function updateUser(
@@ -147,9 +146,7 @@ export function updateUser(
   if (fields.length === 0) return getUserById(id)
 
   fields.push("updated_at = datetime('now')")
-  const result = getDb().prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).run(...args, id)
-  if (result.changes === 0) return undefined
-  return getUserById(id)
+  return getDb().prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ? RETURNING *`).get(...args, id) as UserRecord | undefined
 }
 
 export function updateUserPassword(id: number, passwordHash: string, activate = false): UserRecord | undefined {
@@ -162,13 +159,12 @@ export function updateUserPassword(id: number, passwordHash: string, activate = 
   if (activate) {
     fields.push("status = 'active'")
   }
-  const result = getDb().prepare(`
+  return getDb().prepare(`
     UPDATE users
     SET ${fields.join(', ')}
     WHERE id = ?
-  `).run(...args, id)
-  if (result.changes === 0) return undefined
-  return getUserById(id)
+    RETURNING *
+  `).get(...args, id) as UserRecord | undefined
 }
 
 export function recordUserLogin(id: number): void {
@@ -192,14 +188,14 @@ export function revokeUserSessions(id: number): void {
 
 export function issueInvitation(userId: number, createdBy: number | null): InvitationRecord {
   const token = crypto.randomUUID()
-  getDb().transaction(() => {
+  return getDb().transaction(() => {
     getDb().prepare('DELETE FROM invitations WHERE user_id = ? AND used_at IS NULL').run(userId)
-    getDb().prepare(`
+    return getDb().prepare(`
       INSERT INTO invitations (user_id, token, created_by, expires_at)
       VALUES (?, ?, ?, ?)
-    `).run(userId, token, createdBy, inviteExpiry())
+      RETURNING *
+    `).get(userId, token, createdBy, inviteExpiry()) as InvitationRecord
   })()
-  return getInvitationByToken(token)!
 }
 
 export function getInvitationByToken(token: string): InvitationRecord | undefined {

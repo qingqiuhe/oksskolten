@@ -27,6 +27,7 @@ export interface ChatTurnParams {
   openaiConfig?: OpenAICompatibleConfig
   timeZone?: string
   scope?: ChatScope
+  userLanguage?: string
   debugCollector?: ChatDebugCollector
   onEvent: (event: ChatSSEEvent) => void
 }

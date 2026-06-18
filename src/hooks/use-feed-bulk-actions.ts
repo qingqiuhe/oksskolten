@@ -5,6 +5,25 @@ import type { KeyedMutator } from 'swr'
 import type { FetchResult } from './use-fetch-progress'
 
 type FeedsData = { feeds: FeedWithCounts[]; bookmark_count: number; like_count: number; clip_feed_id: number | null }
+const BULK_FEED_ACTION_CONCURRENCY = 4
+
+async function runLimited<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0
+  const workerCount = Math.min(concurrency, items.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= items.length) return
+      await worker(items[index])
+    }
+  }))
+}
 
 interface UseFeedBulkActionsOpts {
   feeds: FeedWithCounts[]
@@ -54,7 +73,7 @@ export function useFeedBulkActions({
   const handleBulkMarkAllRead = useCallback(async () => {
     const selected = getSelectedFeeds()
     clearSelection()
-    await Promise.all(selected.map(f => apiPost(`/api/feeds/${f.id}/mark-all-seen`)))
+    await runLimited(selected, BULK_FEED_ACTION_CONCURRENCY, feed => apiPost(`/api/feeds/${feed.id}/mark-all-seen`))
     void mutateFeeds()
     onMarkAllRead?.()
   }, [getSelectedFeeds, mutateFeeds, clearSelection, onMarkAllRead])
@@ -62,10 +81,10 @@ export function useFeedBulkActions({
   const handleBulkFetch = useCallback(async () => {
     const selected = getSelectedFeeds().filter(f => !f.disabled)
     clearSelection()
-    for (const feed of selected) {
+    await runLimited(selected, BULK_FEED_ACTION_CONCURRENCY, async (feed) => {
       const result = await startFeedFetch(feed.id)
       onFetchComplete?.({ ...result, name: feed.name })
-    }
+    })
   }, [getSelectedFeeds, clearSelection, startFeedFetch, onFetchComplete])
 
   const handleBulkDelete = useCallback(() => {
@@ -82,7 +101,7 @@ export function useFeedBulkActions({
     setBulkDeleteConfirm(false)
     clearSelection()
     try {
-      await Promise.all(ids.map(id => apiDelete(`/api/feeds/${id}`)))
+      await runLimited(ids, BULK_FEED_ACTION_CONCURRENCY, id => apiDelete(`/api/feeds/${id}`))
     } catch {
       // partial failure
     }

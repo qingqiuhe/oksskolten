@@ -4,14 +4,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
-const { mockGetSetting, mockUpsertSetting, mockFetch } = vi.hoisted(() => ({
+const { mockGetSetting, mockGetSettings, mockUpsertSetting, mockFetch } = vi.hoisted(() => ({
   mockGetSetting: vi.fn(),
+  mockGetSettings: vi.fn(),
   mockUpsertSetting: vi.fn(),
   mockFetch: vi.fn(),
 }))
 
 vi.mock('../../db.js', () => ({
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
+  getSettings: (...args: unknown[]) => mockGetSettings(...args),
   upsertSetting: (...args: unknown[]) => mockUpsertSetting(...args),
 }))
 
@@ -42,6 +44,7 @@ function setupApiKey() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockGetSettings.mockReturnValue({})
 })
 
 // ---------------------------------------------------------------------------
@@ -125,6 +128,15 @@ describe('googleTranslate', () => {
     await expect(googleTranslate('test', 'ja')).rejects.toThrow('Google Translate API error: 403')
   })
 
+  it('uses provided API key without reading settings', async () => {
+    mockTranslateResponse('<p>こんにちは</p>')
+
+    await googleTranslate('Hello', 'ja', undefined, 'provided-google-key')
+
+    expect(mockGetSetting).not.toHaveBeenCalledWith('api_key.google_translate', undefined)
+    expect(mockFetch.mock.calls[0][1].headers['x-goog-api-key']).toBe('provided-google-key')
+  })
+
   it('splits long text into chunks', async () => {
     setupApiKey()
 
@@ -149,7 +161,7 @@ describe('googleTranslate', () => {
 
 describe('getMonthlyUsage', () => {
   it('returns zero when no usage recorded', () => {
-    mockGetSetting.mockReturnValue(undefined)
+    mockGetSettings.mockReturnValue({})
     const usage = getMonthlyUsage()
     expect(usage.monthlyChars).toBe(0)
     expect(usage.freeTierRemaining).toBe(500_000)
@@ -157,22 +169,22 @@ describe('getMonthlyUsage', () => {
 
   it('returns stored usage for current month', () => {
     const currentMonth = new Date().toISOString().slice(0, 7)
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'google_translate.usage_month') return currentMonth
-      if (key === 'google_translate.usage_chars') return '100000'
-      return undefined
+    mockGetSettings.mockReturnValue({
+      'google_translate.usage_month': currentMonth,
+      'google_translate.usage_chars': '100000',
     })
 
     const usage = getMonthlyUsage()
     expect(usage.monthlyChars).toBe(100_000)
     expect(usage.freeTierRemaining).toBe(400_000)
+    expect(mockGetSetting).not.toHaveBeenCalledWith('google_translate.usage_month')
+    expect(mockGetSetting).not.toHaveBeenCalledWith('google_translate.usage_chars')
   })
 
   it('returns zero for a different month (usage reset)', () => {
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'google_translate.usage_month') return '2020-01'
-      if (key === 'google_translate.usage_chars') return '999999'
-      return undefined
+    mockGetSettings.mockReturnValue({
+      'google_translate.usage_month': '2020-01',
+      'google_translate.usage_chars': '999999',
     })
 
     const usage = getMonthlyUsage()
@@ -182,10 +194,9 @@ describe('getMonthlyUsage', () => {
 
   it('clamps freeTierRemaining to zero when exceeded', () => {
     const currentMonth = new Date().toISOString().slice(0, 7)
-    mockGetSetting.mockImplementation((key: string) => {
-      if (key === 'google_translate.usage_month') return currentMonth
-      if (key === 'google_translate.usage_chars') return '600000'
-      return undefined
+    mockGetSettings.mockReturnValue({
+      'google_translate.usage_month': currentMonth,
+      'google_translate.usage_chars': '600000',
     })
 
     const usage = getMonthlyUsage()
@@ -203,9 +214,11 @@ describe('monthly usage tracking', () => {
     const currentMonth = new Date().toISOString().slice(0, 7)
     mockGetSetting.mockImplementation((key: string) => {
       if (key === 'api_key.google_translate') return 'test-key'
-      if (key === 'google_translate.usage_month') return currentMonth
-      if (key === 'google_translate.usage_chars') return '1000'
       return undefined
+    })
+    mockGetSettings.mockReturnValue({
+      'google_translate.usage_month': currentMonth,
+      'google_translate.usage_chars': '1000',
     })
     mockTranslateResponse('<p>翻訳済み</p>')
 
@@ -214,14 +227,17 @@ describe('monthly usage tracking', () => {
     // Should accumulate: 1000 existing + chars from current call
     expect(result.monthlyChars).toBeGreaterThan(1000)
     expect(mockUpsertSetting).toHaveBeenCalledWith('google_translate.usage_chars', expect.any(String), undefined)
+    expect(mockGetSettings).toHaveBeenCalledWith(['google_translate.usage_month', 'google_translate.usage_chars'], undefined)
   })
 
   it('resets usage when month changes', async () => {
     mockGetSetting.mockImplementation((key: string) => {
       if (key === 'api_key.google_translate') return 'test-key'
-      if (key === 'google_translate.usage_month') return '2020-01'
-      if (key === 'google_translate.usage_chars') return '999999'
       return undefined
+    })
+    mockGetSettings.mockReturnValue({
+      'google_translate.usage_month': '2020-01',
+      'google_translate.usage_chars': '999999',
     })
     mockTranslateResponse('<p>翻訳済み</p>')
 

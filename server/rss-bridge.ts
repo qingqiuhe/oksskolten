@@ -2,7 +2,7 @@ import { JSDOM } from 'jsdom'
 import { XMLParser } from 'fast-xml-parser'
 import { fetchHtml } from './fetcher/http.js'
 import { fetchViaFlareSolverr } from './fetcher/flaresolverr.js'
-import { getSetting } from './db.js'
+import { getSettings } from './db.js'
 import { getProvider } from './providers/llm/index.js'
 import { DEFAULT_MODELS } from '../shared/models.js'
 import type { LLMProvider } from './providers/llm/provider.js'
@@ -42,12 +42,15 @@ const API_KEY_SETTINGS: Record<string, string> = {
 }
 
 const PROVIDER_PRIORITY = ['anthropic', 'gemini', 'openai'] as const
+const PROVIDER_API_KEY_SETTINGS = PROVIDER_PRIORITY.map(name => API_KEY_SETTINGS[name])
 
-export function getAvailableProvider(): { provider: LLMProvider; model: string } | null {
+export function getAvailableProvider(): { provider: LLMProvider; model: string; apiKey: string } | null {
+  const settings = getSettings(PROVIDER_API_KEY_SETTINGS)
   for (const name of PROVIDER_PRIORITY) {
     const settingKey = API_KEY_SETTINGS[name]
-    if (getSetting(settingKey)) {
-      return { provider: getProvider(name), model: DEFAULT_MODELS[name] }
+    const apiKey = settings[settingKey]
+    if (apiKey) {
+      return { provider: getProvider(name), model: DEFAULT_MODELS[name], apiKey }
     }
   }
   return null
@@ -160,10 +163,11 @@ export async function inferCssSelectorBridge(url: string): Promise<string | null
     const anchorData = anchorSnippets.slice(0, MAX_ANCHOR_SNIPPETS).join('\n')
 
     // Ask LLM for CSS selectors (assistant prefill forces JSON output)
-    const { provider, model } = available
+    const { provider, model, apiKey } = available
     const llmResult = await provider.createMessage({
       model,
       maxTokens: 512,
+      apiKey,
       systemInstruction: CSS_SELECTOR_SYSTEM,
       messages: [
         { role: 'user', content: buildSelectorUserPrompt(url, anchorData) },

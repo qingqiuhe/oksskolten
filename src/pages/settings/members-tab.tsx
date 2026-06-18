@@ -64,14 +64,15 @@ function FeedImportCheckbox({
 
 export function MembersTab() {
   const { data, mutate } = useSWR<{ users: MemberRecord[] }>('/api/users', fetcher)
-  const { data: feedsData } = useSWR<{ feeds: FeedRecord[] }>('/api/feeds', fetcher)
-  const { data: categoriesData } = useSWR<{ categories: CategoryRecord[] }>('/api/categories', fetcher)
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<'admin' | 'member'>('member')
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [inviteSummary, setInviteSummary] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const [shouldLoadFeedImportData, setShouldLoadFeedImportData] = useState(false)
+  const { data: feedsData } = useSWR<{ feeds: FeedRecord[] }>(shouldLoadFeedImportData ? '/api/feeds' : null, fetcher)
+  const { data: categoriesData } = useSWR<{ categories: CategoryRecord[] }>(shouldLoadFeedImportData ? '/api/categories' : null, fetcher)
   const [selectedFeedIds, setSelectedFeedIds] = useState<Set<number>>(new Set())
 
   const availableFeeds = useMemo(
@@ -220,7 +221,10 @@ export function MembersTab() {
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
-            onClick={() => setIsPickerOpen(true)}
+            onClick={() => {
+              setShouldLoadFeedImportData(true)
+              setIsPickerOpen(true)
+            }}
             className="rounded-lg border border-border px-3 py-2 text-sm text-text hover:bg-hover"
           >
             Choose subscriptions

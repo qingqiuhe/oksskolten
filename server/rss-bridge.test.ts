@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from './__tests__/helpers/testDb.js'
-import { upsertSetting } from './db.js'
+import { getDb, upsertSetting } from './db.js'
 
 // --- LLM provider mock ---
 
@@ -150,6 +150,23 @@ describe('getAvailableProvider', () => {
     // model should be the anthropic default since anthropic has priority
     expect(result!.model).toBe('claude-haiku-4-5-20251001')
   })
+
+  it('reads provider API keys with one batched settings query', () => {
+    upsertSetting('api_key.gemini', 'gemini-key')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const result = getAvailableProvider()
+
+    expect(result).not.toBeNull()
+    expect(preparedSql.some(sql => sql.includes('FROM settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM settings WHERE key = ?'))).toHaveLength(0)
+  })
 })
 
 // ============================================================
@@ -243,6 +260,7 @@ describe('inferCssSelectorBridge', () => {
 
     expect(mockCreateMessage).toHaveBeenCalledOnce()
     const callArgs = mockCreateMessage.mock.calls[0][0]
+    expect(callArgs.apiKey).toBe('sk-test')
     expect(callArgs.systemInstruction).toContain('CSS selector')
     // user message should contain anchor data
     const userMsg = callArgs.messages.find((m: { role: string }) => m.role === 'user')

@@ -39,6 +39,27 @@ const INDEX_SETTINGS = {
 // --- Rebuild ---
 
 const BATCH_SIZE = 1000
+const ID_LOOKUP_BATCH_SIZE = 500
+const SEARCH_DOC_COLUMNS = `
+  id, user_id, feed_id, category_id, title,
+  COALESCE(full_text, '') AS full_text,
+  COALESCE(full_text_translated, '') AS full_text_translated,
+  lang,
+  COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
+  COALESCE(score, 0) AS score,
+  (seen_at IS NULL) AS is_unread,
+  (liked_at IS NOT NULL) AS is_liked,
+  (bookmarked_at IS NOT NULL) AS is_bookmarked
+`
+
+function normalizeMeiliDoc(row: MeiliArticleDoc): MeiliArticleDoc {
+  return {
+    ...row,
+    is_unread: Boolean(row.is_unread),
+    is_liked: Boolean(row.is_liked),
+    is_bookmarked: Boolean(row.is_bookmarked),
+  }
+}
 
 export async function rebuildSearchIndex(): Promise<void> {
   if (rebuilding) {
@@ -66,31 +87,22 @@ export async function rebuildSearchIndex(): Promise<void> {
     const stagingIndex = client.index(ARTICLES_STAGING_INDEX)
     await stagingIndex.updateSettings(INDEX_SETTINGS).waitTask({ timeout: 60_000 })
 
-    // 3. Fetch all articles from SQLite and batch-insert into staging
-    const rows = getDb().prepare(`
-      SELECT id, user_id, feed_id, category_id, title,
-             COALESCE(full_text, '') AS full_text,
-             COALESCE(full_text_translated, '') AS full_text_translated,
-             lang,
-             COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
-             COALESCE(score, 0) AS score,
-             (seen_at IS NULL) AS is_unread,
-             (liked_at IS NOT NULL) AS is_liked,
-             (bookmarked_at IS NOT NULL) AS is_bookmarked
-      FROM active_articles
-    `).all() as MeiliArticleDoc[]
-
-    // SQLite returns 0/1 for boolean expressions; Meilisearch needs true/false
-    const docs = rows.map((row) => ({
-      ...row,
-      is_unread: Boolean(row.is_unread),
-      is_liked: Boolean(row.is_liked),
-      is_bookmarked: Boolean(row.is_bookmarked),
-    }))
-
-    for (let i = 0; i < docs.length; i += BATCH_SIZE) {
-      const batch = docs.slice(i, i + BATCH_SIZE)
+    // 3. Stream articles from SQLite in keyset batches and insert into staging
+    let indexedCount = 0
+    let lastId = 0
+    while (true) {
+      const rows = getDb().prepare(`
+        SELECT ${SEARCH_DOC_COLUMNS}
+        FROM active_articles
+        WHERE id > ?
+        ORDER BY id
+        LIMIT ?
+      `).all(lastId, BATCH_SIZE) as MeiliArticleDoc[]
+      if (rows.length === 0) break
+      lastId = rows[rows.length - 1].id
+      const batch = rows.map(normalizeMeiliDoc)
       await stagingIndex.addDocuments(batch).waitTask({ timeout: 60_000 })
+      indexedCount += batch.length
     }
 
     // 4. Promote staging to production
@@ -125,7 +137,7 @@ export async function rebuildSearchIndex(): Promise<void> {
 
     searchReady = true
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1)
-    log.info(`Index rebuild complete: ${docs.length} articles in ${elapsed}s`)
+    log.info(`Index rebuild complete: ${indexedCount} articles in ${elapsed}s`)
   } catch (err) {
     // On failure: keep searchReady as-is (true if previously built, false if first time)
     log.error('Index rebuild failed:', err)
@@ -181,6 +193,70 @@ export function syncArticleScoreToSearch(id: number, score: number): void {
   }
 }
 
+export interface ArticleScoreUpdate {
+  id: number
+  score: number
+}
+
+function normalizeScoreUpdates(updates: ArticleScoreUpdate[]): ArticleScoreUpdate[] {
+  const byId = new Map<number, number>()
+  for (const update of updates) {
+    byId.set(update.id, update.score)
+  }
+  return [...byId]
+    .map(([id, score]) => ({ id, score }))
+    .sort((left, right) => left.id - right.id)
+}
+
+export async function syncArticleScoreUpdatesToSearch(updates: ArticleScoreUpdate[]): Promise<number> {
+  if (rebuilding) {
+    log.info('Index rebuild in progress, skipping score sync')
+    return 0
+  }
+  if (updates.length === 0) return 0
+
+  const docs = normalizeScoreUpdates(updates)
+  const client = getSearchClient()
+  const index = client.index(ARTICLES_INDEX)
+  let synced = 0
+
+  for (let i = 0; i < docs.length; i += BATCH_SIZE) {
+    const batch = docs.slice(i, i + BATCH_SIZE)
+    await index.updateDocuments(batch).waitTask({ timeout: 60_000 })
+    synced += batch.length
+  }
+
+  return synced
+}
+
+export async function syncArticleScoresToSearch(articleIds: number[]): Promise<number> {
+  if (rebuilding) {
+    log.info('Index rebuild in progress, skipping score sync')
+    return 0
+  }
+  if (articleIds.length === 0) return 0
+
+  const ids = [...new Set(articleIds)]
+  const client = getSearchClient()
+  const index = client.index(ARTICLES_INDEX)
+  let synced = 0
+
+  for (let i = 0; i < ids.length; i += ID_LOOKUP_BATCH_SIZE) {
+    const batchIds = ids.slice(i, i + ID_LOOKUP_BATCH_SIZE)
+    const placeholders = batchIds.map(() => '?').join(', ')
+    const rows = getDb().prepare(`
+      SELECT id, score FROM active_articles
+      WHERE id IN (${placeholders})
+      ORDER BY id
+    `).all(...batchIds) as { id: number; score: number }[]
+    if (rows.length === 0) continue
+    await index.updateDocuments(rows.map(({ id, score }) => ({ id, score }))).waitTask({ timeout: 60_000 })
+    synced += rows.length
+  }
+
+  return synced
+}
+
 export function syncArticleFiltersToSearch(updates: { id: number; is_unread?: boolean; is_liked?: boolean; is_bookmarked?: boolean }[]): void {
   if (updates.length === 0) return
   try {
@@ -216,7 +292,7 @@ export function deleteArticlesFromSearch(articleIds: number[]): void {
 /**
  * Bulk-sync scores for all articles that have engagement or a non-zero score.
  * Uses the shared SCORED_ARTICLES_WHERE clause from server/db/articles.ts.
- * Called after the daily score recalculation batch to keep Meilisearch in sync.
+ * Kept as a manual/full fallback; scheduled recalculation syncs by recalculated ids.
  * Skips if an index rebuild is in progress (the rebuild will include fresh scores).
  */
 export async function syncAllScoredArticlesToSearch(): Promise<number> {
@@ -225,22 +301,25 @@ export async function syncAllScoredArticlesToSearch(): Promise<number> {
     return 0
   }
 
-  const rows = getDb().prepare(`
-    SELECT id, score FROM active_articles
-    WHERE ${SCORED_ARTICLES_WHERE}
-  `).all() as { id: number; score: number }[]
-
-  if (rows.length === 0) return 0
-
   const client = getSearchClient()
   const index = client.index(ARTICLES_INDEX)
+  let synced = 0
+  let lastId = 0
 
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE)
+  while (true) {
+    const batch = getDb().prepare(`
+      SELECT id, score FROM active_articles
+      WHERE id > ? AND ${SCORED_ARTICLES_WHERE}
+      ORDER BY id
+      LIMIT ?
+    `).all(lastId, BATCH_SIZE) as { id: number; score: number }[]
+    if (batch.length === 0) break
+    lastId = batch[batch.length - 1].id
     await index.updateDocuments(batch.map(({ id, score }) => ({ id, score }))).waitTask({ timeout: 60_000 })
+    synced += batch.length
   }
 
-  return rows.length
+  return synced
 }
 
 export function syncArticlesByFeedToSearch(docs: MeiliArticleDoc[]): void {

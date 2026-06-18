@@ -1,32 +1,51 @@
 import OpenAI from 'openai'
-import { getSetting } from '../../db.js'
+import { getSettings } from '../../db.js'
 import type { LLMProvider, LLMMessageParams, LLMStreamResult } from './provider.js'
 
 let cachedBaseUrl = ''
 let cachedHeaders = ''
 let cachedClient: OpenAI | null = null
+const OLLAMA_SETTING_KEYS = ['ollama.base_url', 'ollama.custom_headers'] as const
 
-export function getOllamaBaseUrl(userId?: number | null): string {
-  return getSetting('ollama.base_url', userId) || process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
+export interface OllamaConnectionConfig {
+  baseUrl: string
+  headersJson: string
+  headers: Record<string, string>
 }
 
-export function getOllamaCustomHeaders(userId?: number | null): Record<string, string> {
-  const raw = getSetting('ollama.custom_headers', userId)
+function parseOllamaCustomHeaders(raw?: string): Record<string, string> {
   if (!raw) return {}
   try { return JSON.parse(raw) } catch { return {} }
 }
 
+export function getOllamaConnectionConfig(userId?: number | null): OllamaConnectionConfig {
+  const settings = getSettings(OLLAMA_SETTING_KEYS, userId)
+  const baseUrl = settings['ollama.base_url'] || process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
+  const headersJson = settings['ollama.custom_headers'] || ''
+  return {
+    baseUrl,
+    headersJson,
+    headers: parseOllamaCustomHeaders(headersJson),
+  }
+}
+
+export function getOllamaBaseUrl(userId?: number | null): string {
+  return getOllamaConnectionConfig(userId).baseUrl
+}
+
+export function getOllamaCustomHeaders(userId?: number | null): Record<string, string> {
+  return getOllamaConnectionConfig(userId).headers
+}
+
 export function getOllamaClient(userId?: number | null): OpenAI {
-  const baseUrl = getOllamaBaseUrl(userId)
-  const headersJson = getSetting('ollama.custom_headers', userId) || ''
+  const { baseUrl, headersJson, headers } = getOllamaConnectionConfig(userId)
   if (cachedClient && baseUrl === cachedBaseUrl && headersJson === cachedHeaders) return cachedClient
   cachedBaseUrl = baseUrl
   cachedHeaders = headersJson
-  const customHeaders = headersJson ? getOllamaCustomHeaders(userId) : {}
   cachedClient = new OpenAI({
     baseURL: `${baseUrl}/v1`,
     apiKey: 'ollama',  // Ollama ignores this but the SDK requires it
-    defaultHeaders: customHeaders,
+    defaultHeaders: headers,
   })
   return cachedClient
 }
@@ -36,6 +55,7 @@ export const ollamaProvider: LLMProvider = {
 
   requireKey() {
     // no-op: no API key needed (same pattern as claude-code)
+    return undefined
   },
 
   async createMessage(params: LLMMessageParams): Promise<LLMStreamResult> {

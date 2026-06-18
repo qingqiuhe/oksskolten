@@ -7,9 +7,10 @@ import fs from 'node:fs'
 // Mocks
 // ---------------------------------------------------------------------------
 
-const { mockSafeFetch, mockGetSetting, mockUpdateArticleContent, mockMarkImagesArchived, mockClearImagesArchived } = vi.hoisted(() => ({
+const { mockSafeFetch, mockGetSetting, mockGetSettings, mockUpdateArticleContent, mockMarkImagesArchived, mockClearImagesArchived } = vi.hoisted(() => ({
   mockSafeFetch: vi.fn(),
   mockGetSetting: vi.fn(),
+  mockGetSettings: vi.fn(),
   mockUpdateArticleContent: vi.fn(),
   mockMarkImagesArchived: vi.fn(),
   mockClearImagesArchived: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock('./ssrf.js', () => ({
 
 vi.mock('../db/settings.js', () => ({
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
+  getSettings: (...args: unknown[]) => mockGetSettings(...args),
 }))
 
 vi.mock('../db/articles.js', () => ({
@@ -43,6 +45,9 @@ import { extractByDotPath, isImageArchivingEnabled, deleteArticleImages, archive
 beforeEach(() => {
   vi.clearAllMocks()
   mockGetSetting.mockReturnValue(undefined)
+  mockGetSettings.mockImplementation((keys: readonly string[]) => Object.fromEntries(
+    keys.map(key => [key, mockGetSetting(key)]),
+  ))
 })
 
 // ---------------------------------------------------------------------------
@@ -160,6 +165,7 @@ describe('archiveArticleImages', () => {
     expect(result.rewrittenText).not.toContain('https://example.com/image.png')
     expect(mockUpdateArticleContent).toHaveBeenCalled()
     expect(mockMarkImagesArchived).toHaveBeenCalledWith(1)
+    expect(mockGetSettings).toHaveBeenCalledTimes(1)
 
     // Verify file was created
     const files = fs.readdirSync(tmpDir)

@@ -32,12 +32,13 @@ function toNeutralContent(blocks: Anthropic.ContentBlock[]): ContentBlock[] {
 }
 
 export async function runAnthropicTurn(params: ChatTurnParams): Promise<RunChatTurnResult> {
-  if (!getSetting('api_key.anthropic', params.userId)) {
+  const apiKey = getSetting('api_key.anthropic', params.userId)
+  if (!apiKey) {
     throw new Error('ANTHROPIC_KEY_NOT_SET')
   }
 
   const { system, model, debugCollector } = params
-  const client = getAnthropicClient(params.userId)
+  const client = getAnthropicClient(params.userId, apiKey)
   const tools = toAnthropicTools()
 
   return runToolLoop(params, async (allMessages, onEvent) => {

@@ -5,18 +5,17 @@ import type { ChatScope, ListChatScope } from '../../shared/types.js'
 const ARTICLE_CONTEXT_MAX_CHARS = 10000
 
 /** Resolve user language from settings. */
-function getUserLanguage(): string {
+export function getUserLanguage(): string {
   return getSetting('general.language') || DEFAULT_LANGUAGE
 }
 
-export function buildSystemPrompt(scope?: ChatScope): string {
+export function buildSystemPrompt(scope?: ChatScope, userLanguage = getUserLanguage()): string {
   const today = new Date().toISOString().slice(0, 10)
-  const lang = getUserLanguage()
   let prompt = `You are an AI assistant for an RSS reader application.
 Today's date is ${today}. Interpret relative time expressions like "this week" or "recently" based on this date.
 You can use tools to retrieve articles and feed information from the database.
 Respond in Markdown format, concisely and accurately.
-IMPORTANT: Always respond in the same language the user writes in. Even if the article content is in a different language, match your response language to the user's message — not the article. If the user's language cannot be determined from their message, default to: ${languageName(lang)}.
+IMPORTANT: Always respond in the same language the user writes in. Even if the article content is in a different language, match your response language to the user's message — not the article. If the user's language cannot be determined from their message, default to: ${languageName(userLanguage)}.
 For article links, always use the url field returned by tools as-is (app-internal path like /example.com/...). Never convert to external URLs or prepend https://. Example: [Article Title](/example.com/path/to/article)
 
 ## Recommendation guidelines

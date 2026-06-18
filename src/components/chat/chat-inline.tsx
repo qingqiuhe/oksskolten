@@ -12,23 +12,28 @@ interface ChatInlineProps {
   articleId: number
 }
 
-export function useChatInline(articleId: number) {
+export function useChatInline(articleId: number, enabled = true) {
   const [open, setOpen] = useState(false)
 
   const { data: existingConv } = useSWR<{ conversations: { id: string }[] }>(
-    articleId ? `/api/chat/conversations?article_id=${articleId}` : null,
+    enabled && articleId ? `/api/chat/conversations?article_id=${articleId}` : null,
     fetcher,
     { revalidateOnFocus: false },
   )
 
   // Auto-open if article already has conversations
   useEffect(() => {
-    if (existingConv?.conversations?.length) {
+    if (enabled && existingConv?.conversations?.length) {
       setOpen(true)
     }
-  }, [existingConv])
+  }, [enabled, existingConv])
 
-  return { open, toggle: () => setOpen(prev => !prev), close: () => setOpen(false) }
+  return {
+    open,
+    conversationId: existingConv?.conversations?.[0]?.id,
+    toggle: () => setOpen(prev => !prev),
+    close: () => setOpen(false),
+  }
 }
 
 export function ChatInlineTrigger({ active, onToggle }: { active: boolean; onToggle: () => void }) {
@@ -41,10 +46,16 @@ export function ChatInlineTrigger({ active, onToggle }: { active: boolean; onTog
   )
 }
 
-export function ChatInlinePanel({ articleId, onClose, scopeSummary }: { articleId: number; onClose: () => void; scopeSummary?: ScopeSummary | null }) {
+export function ChatInlinePanel({ articleId, onClose, scopeSummary, conversationId }: { articleId: number; onClose: () => void; scopeSummary?: ScopeSummary | null; conversationId?: string }) {
   return (
     <div className="mt-2 mb-6">
-      <ChatPanel variant="inline" scope={buildArticleScope(articleId)} scopeSummary={scopeSummary} onClose={onClose} />
+      <ChatPanel
+        variant="inline"
+        scope={buildArticleScope(articleId)}
+        scopeSummary={scopeSummary}
+        conversationId={conversationId}
+        onClose={onClose}
+      />
     </div>
   )
 }
@@ -58,7 +69,12 @@ export function ChatInline({ articleId }: ChatInlineProps) {
       <ChatInlineTrigger active={chat.open} onToggle={chat.toggle} />
       {chat.open && (
         <div className="basis-full mt-2">
-          <ChatPanel variant="inline" scope={buildArticleScope(articleId)} onClose={chat.close} />
+          <ChatPanel
+            variant="inline"
+            scope={buildArticleScope(articleId)}
+            conversationId={chat.conversationId}
+            onClose={chat.close}
+          />
         </div>
       )}
     </>

@@ -3,6 +3,28 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ChatPanel, type ChatState } from './chat-panel'
 import type { ChatDebugTrace } from '../../../shared/types'
 
+const { swrKeys } = vi.hoisted(() => ({
+  swrKeys: [] as Array<string | null>,
+}))
+
+const { mockUseChat } = vi.hoisted(() => ({
+  mockUseChat: vi.fn(),
+}))
+
+vi.mock('swr', () => ({
+  default: (key: string | null) => {
+    swrKeys.push(key)
+    if (key?.startsWith('/api/chat/conversations?article_id=')) {
+      return { data: { conversations: [{ id: 'conv-from-article' }] } }
+    }
+    return { data: undefined }
+  },
+}))
+
+vi.mock('../../hooks/use-chat', () => ({
+  useChat: (...args: unknown[]) => mockUseChat(...args),
+}))
+
 vi.mock('../../hooks/use-escape-key', () => ({
   useEscapeKey: vi.fn(),
 }))
@@ -41,6 +63,9 @@ function makeChatState(): ChatState {
 describe('ChatPanel', () => {
   beforeEach(() => {
     localStorage.clear()
+    swrKeys.length = 0
+    mockUseChat.mockReset()
+    mockUseChat.mockReturnValue(makeChatState())
   })
 
   it('shows debug toggle and reveals debug panel when enabled', async () => {
@@ -60,5 +85,52 @@ describe('ChatPanel', () => {
     })
 
     expect(screen.getByText('Debug Trace')).toBeTruthy()
+    expect(mockUseChat).not.toHaveBeenCalled()
+  })
+
+  it('uses internal chat state only when no external chat state is provided', () => {
+    render(
+      <ChatPanel
+        variant="inline"
+        scope={{ type: 'article', article_id: 42 }}
+      />,
+    )
+
+    expect(mockUseChat).toHaveBeenCalledWith({ type: 'article', article_id: 42 })
+  })
+
+  it('looks up an article conversation when no conversation id is provided', async () => {
+    const chatState = makeChatState()
+
+    render(
+      <ChatPanel
+        variant="inline"
+        chatState={chatState}
+        scope={{ type: 'article', article_id: 42 }}
+      />,
+    )
+
+    expect(swrKeys).toContain('/api/chat/conversations?article_id=42')
+    await waitFor(() => {
+      expect(chatState.loadConversation).toHaveBeenCalledWith('conv-from-article')
+    })
+  })
+
+  it('skips the article conversation lookup when a conversation id is already known', async () => {
+    const chatState = makeChatState()
+
+    render(
+      <ChatPanel
+        variant="inline"
+        chatState={chatState}
+        scope={{ type: 'article', article_id: 42 }}
+        conversationId="conv-known"
+      />,
+    )
+
+    expect(swrKeys).not.toContain('/api/chat/conversations?article_id=42')
+    await waitFor(() => {
+      expect(chatState.loadConversation).toHaveBeenCalledWith('conv-known')
+    })
   })
 })

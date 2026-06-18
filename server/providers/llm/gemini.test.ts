@@ -40,7 +40,7 @@ describe('geminiProvider.requireKey', () => {
 
   it('does not throw when api key is set', () => {
     mockGetSetting.mockReturnValue('gemini-key')
-    expect(() => geminiProvider.requireKey()).not.toThrow()
+    expect(geminiProvider.requireKey()).toBe('gemini-key')
   })
 })
 
@@ -88,6 +88,22 @@ describe('geminiProvider.createMessage', () => {
     expect(result.text).toBe('Generated text')
     expect(result.inputTokens).toBe(15)
     expect(result.outputTokens).toBe(8)
+  })
+
+  it('uses provided API key without reading settings', async () => {
+    mockGenerateContent.mockResolvedValue({
+      text: 'Generated text',
+      usageMetadata: {},
+    })
+
+    await geminiProvider.createMessage({
+      model: 'gemini-pro',
+      maxTokens: 1024,
+      apiKey: 'checked-gemini-key',
+      messages: [{ role: 'user', content: 'Hello' }],
+    })
+
+    expect(mockGetSetting).not.toHaveBeenCalled()
   })
 
   it('maps assistant role to model', async () => {

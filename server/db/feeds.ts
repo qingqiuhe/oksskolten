@@ -1,4 +1,4 @@
-import { getDb, runNamed } from './connection.js'
+import { getDb, getNamed } from './connection.js'
 import type { Feed, FeedWithCounts } from './types.js'
 import type { MeiliArticleDoc } from '../search/client.js'
 import { deleteArticlesFromSearch, syncArticlesByFeedToSearch } from '../search/sync.js'
@@ -11,6 +11,8 @@ function resolveUserId(userId?: number | null): number | null {
 export function getFeeds(userId?: number | null): FeedWithCounts[] {
   const scopedUserId = resolveUserId(userId)
   const where = scopedUserId == null ? '' : 'WHERE f.user_id = ?'
+  const articleWhere = scopedUserId == null ? '' : 'WHERE user_id = ?'
+  const args = scopedUserId == null ? [] : [scopedUserId, scopedUserId]
   return getDb().prepare(`
     SELECT f.*, c.name AS category_name,
       COALESCE(ac.article_count, 0) AS article_count,
@@ -25,11 +27,13 @@ export function getFeeds(userId?: number | null): FeedWithCounts[] {
         SUM(CASE WHEN seen_at IS NULL THEN 1 ELSE 0 END) AS unread_count,
         COUNT(CASE WHEN COALESCE(published_at, fetched_at) >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-28 days') THEN 1 END) / 4.0 AS articles_per_week,
         MAX(COALESCE(published_at, fetched_at)) AS latest_published_at
-      FROM active_articles GROUP BY feed_id
+      FROM active_articles
+      ${articleWhere}
+      GROUP BY feed_id
     ) ac ON f.id = ac.feed_id
     ${where}
     ORDER BY f.name COLLATE NOCASE
-  `).all(...(scopedUserId == null ? [] : [scopedUserId])) as FeedWithCounts[]
+  `).all(...args) as FeedWithCounts[]
 }
 
 export function getFeedMetrics(feedId: number, userId?: number | null): { avg_content_length: number | null } | undefined {
@@ -106,9 +110,10 @@ export function createFeed(data: {
   source_config_json?: string | null
 }, userId?: number | null): Feed {
   const scopedUserId = resolveUserId(userId)
-  const info = runNamed(`
+  return getNamed<Feed>(`
     INSERT INTO feeds (user_id, name, url, icon_url, rss_url, rss_bridge_url, view_type, category_id, priority_level, requires_js_challenge, type, ingest_kind, source_kind, source_platform, source_config_json)
     VALUES (@user_id, @name, @url, @icon_url, @rss_url, @rss_bridge_url, @view_type, @category_id, @priority_level, @requires_js_challenge, @type, @ingest_kind, @source_kind, @source_platform, @source_config_json)
+    RETURNING *
   `, {
     user_id: scopedUserId,
     name: data.name,
@@ -126,7 +131,6 @@ export function createFeed(data: {
     source_platform: data.source_platform ?? null,
     source_config_json: data.source_config_json ?? null,
   })
-  return getDb().prepare('SELECT * FROM feeds WHERE id = ?').get(info.lastInsertRowid) as Feed
 }
 
 export function updateFeed(
@@ -134,8 +138,6 @@ export function updateFeed(
   data: { name?: string; icon_url?: string | null; rss_url?: string | null; rss_bridge_url?: string | null; view_type?: Feed['view_type']; disabled?: number; category_id?: number | null; priority_level?: Feed['priority_level']; requires_js_challenge?: number },
   userId?: number | null,
 ): Feed | undefined {
-  const feed = getFeedById(id, userId)
-  if (!feed) return undefined
   const scopedUserId = resolveUserId(userId)
 
   const fields: string[] = []
@@ -182,42 +184,54 @@ export function updateFeed(
     params.requires_js_challenge = data.requires_js_challenge
   }
 
-  if (fields.length === 0) return feed
+  if (fields.length === 0) return getFeedById(id, userId)
 
-  const updatedFeed = getDb().transaction(() => {
+  const { updatedFeed, changedDocs } = getDb().transaction(() => {
+    const updateSql = `UPDATE feeds SET ${fields.join(', ')} WHERE id = @id ${scopedUserId != null ? 'AND user_id = @user_id' : ''} RETURNING *`
+    let updated: Feed | undefined
     if (scopedUserId != null) {
       params.user_id = scopedUserId
-      runNamed(`UPDATE feeds SET ${fields.join(', ')} WHERE id = @id AND user_id = @user_id`, params)
+      updated = getNamed<Feed>(updateSql, params)
     } else {
-      runNamed(`UPDATE feeds SET ${fields.join(', ')} WHERE id = @id`, params)
+      updated = getNamed<Feed>(updateSql, params)
     }
 
-    if (data.category_id !== undefined) {
-      runNamed(`UPDATE articles SET category_id = @category_id WHERE feed_id = @id ${scopedUserId != null ? 'AND user_id = @user_id' : ''}`, {
-        category_id: data.category_id,
-        id,
-        user_id: scopedUserId,
-      })
+    let categoryDocs: (MeiliArticleDoc & { purged_at: string | null })[] = []
+    if (updated && data.category_id !== undefined) {
+      categoryDocs = getDb().prepare(`
+        UPDATE articles
+        SET category_id = ?
+        WHERE feed_id = ?
+          ${scopedUserId != null ? 'AND user_id = ?' : ''}
+          AND category_id IS NOT ?
+        RETURNING
+          id, user_id, feed_id, category_id, title,
+          COALESCE(full_text, '') AS full_text,
+          COALESCE(full_text_translated, '') AS full_text_translated,
+          lang,
+          COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
+          COALESCE(score, 0) AS score,
+          (seen_at IS NULL) AS is_unread,
+          (liked_at IS NOT NULL) AS is_liked,
+          (bookmarked_at IS NOT NULL) AS is_bookmarked,
+          purged_at
+      `).all(...(scopedUserId != null
+        ? [data.category_id, id, scopedUserId, data.category_id]
+        : [data.category_id, id, data.category_id])) as (MeiliArticleDoc & { purged_at: string | null })[]
     }
 
-    return getDb().prepare('SELECT * FROM feeds WHERE id = ?').get(feed.id) as Feed
+    return {
+      updatedFeed: updated,
+      changedDocs: categoryDocs,
+    }
   })()
 
   // Meilisearch sync outside transaction (external service, best-effort)
-  if (data.category_id !== undefined) {
-    const docs = getDb().prepare(`
-      SELECT id, user_id, feed_id, category_id, title,
-             COALESCE(full_text, '') AS full_text,
-             COALESCE(full_text_translated, '') AS full_text_translated,
-             lang,
-             COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
-             COALESCE(score, 0) AS score,
-             (seen_at IS NULL) AS is_unread,
-             (liked_at IS NOT NULL) AS is_liked,
-             (bookmarked_at IS NOT NULL) AS is_bookmarked
-      FROM active_articles WHERE feed_id = ? ${scopedUserId == null ? '' : 'AND user_id = ?'}
-    `).all(...(scopedUserId == null ? [id] : [id, scopedUserId])) as MeiliArticleDoc[]
-    syncArticlesByFeedToSearch(docs)
+  if (updatedFeed && data.category_id !== undefined) {
+    const activeDocs = changedDocs
+      .filter(doc => doc.purged_at == null)
+      .map(({ purged_at: _purgedAt, ...doc }) => doc)
+    syncArticlesByFeedToSearch(activeDocs)
   }
 
   return updatedFeed
@@ -245,47 +259,69 @@ export function bulkMoveFeedsToCategory(feedIds: number[], categoryId: number | 
   if (feedIds.length === 0) return
   const scopedUserId = resolveUserId(userId)
   const placeholders = feedIds.map(() => '?').join(',')
-  getDb().transaction(() => {
+  const changedDocs = getDb().transaction(() => {
     if (scopedUserId == null) {
-      getDb().prepare(`UPDATE feeds SET category_id = ? WHERE id IN (${placeholders})`).run(categoryId, ...feedIds)
-      getDb().prepare(`UPDATE articles SET category_id = ? WHERE feed_id IN (${placeholders})`).run(categoryId, ...feedIds)
-    } else {
-      getDb().prepare(`UPDATE feeds SET category_id = ? WHERE user_id = ? AND id IN (${placeholders})`).run(categoryId, scopedUserId, ...feedIds)
-      getDb().prepare(`UPDATE articles SET category_id = ? WHERE user_id = ? AND feed_id IN (${placeholders})`).run(categoryId, scopedUserId, ...feedIds)
+      getDb().prepare(`UPDATE feeds SET category_id = ? WHERE id IN (${placeholders}) AND category_id IS NOT ?`).run(categoryId, ...feedIds, categoryId)
+      return getDb().prepare(`
+        UPDATE articles
+        SET category_id = ?
+        WHERE feed_id IN (${placeholders})
+          AND category_id IS NOT ?
+        RETURNING
+          id, user_id, feed_id, category_id, title,
+          COALESCE(full_text, '') AS full_text,
+          COALESCE(full_text_translated, '') AS full_text_translated,
+          lang,
+          COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
+          COALESCE(score, 0) AS score,
+          (seen_at IS NULL) AS is_unread,
+          (liked_at IS NOT NULL) AS is_liked,
+          (bookmarked_at IS NOT NULL) AS is_bookmarked,
+          purged_at
+      `).all(categoryId, ...feedIds, categoryId) as (MeiliArticleDoc & { purged_at: string | null })[]
     }
+
+    getDb().prepare(`UPDATE feeds SET category_id = ? WHERE user_id = ? AND id IN (${placeholders}) AND category_id IS NOT ?`).run(categoryId, scopedUserId, ...feedIds, categoryId)
+    return getDb().prepare(`
+      UPDATE articles
+      SET category_id = ?
+      WHERE user_id = ?
+        AND feed_id IN (${placeholders})
+        AND category_id IS NOT ?
+      RETURNING
+        id, user_id, feed_id, category_id, title,
+        COALESCE(full_text, '') AS full_text,
+        COALESCE(full_text_translated, '') AS full_text_translated,
+        lang,
+        COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
+        COALESCE(score, 0) AS score,
+        (seen_at IS NULL) AS is_unread,
+        (liked_at IS NOT NULL) AS is_liked,
+        (bookmarked_at IS NOT NULL) AS is_bookmarked,
+        purged_at
+    `).all(categoryId, scopedUserId, ...feedIds, categoryId) as (MeiliArticleDoc & { purged_at: string | null })[]
   })()
 
-  // Sync Meilisearch index for all affected feeds in one batch
-  const allDocs = getDb().prepare(`
-    SELECT id, user_id, feed_id, category_id, title,
-           COALESCE(full_text, '') AS full_text,
-           COALESCE(full_text_translated, '') AS full_text_translated,
-           lang,
-           COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
-            COALESCE(score, 0) AS score,
-            (seen_at IS NULL) AS is_unread,
-            (liked_at IS NOT NULL) AS is_liked,
-            (bookmarked_at IS NOT NULL) AS is_bookmarked
-    FROM active_articles
-    WHERE feed_id IN (${placeholders})
-      ${scopedUserId == null ? '' : 'AND user_id = ?'}
-  `).all(...feedIds, ...(scopedUserId == null ? [] : [scopedUserId])) as MeiliArticleDoc[]
-  syncArticlesByFeedToSearch(allDocs)
+  const activeDocs = changedDocs
+    .filter(doc => doc.purged_at == null)
+    .map(({ purged_at: _purgedAt, ...doc }) => doc)
+  syncArticlesByFeedToSearch(activeDocs)
 }
 
 export function deleteFeed(id: number, userId?: number | null): boolean {
   const scopedUserId = resolveUserId(userId)
-  // Collect article IDs and delete feed atomically (CASCADE deletes articles)
   const { articleIds, deleted } = getDb().transaction(() => {
-    const idRows = (scopedUserId == null
-      ? getDb().prepare('SELECT id FROM articles WHERE feed_id = ?').all(id)
-      : getDb().prepare('SELECT id FROM articles WHERE feed_id = ? AND user_id = ?').all(id, scopedUserId)
+    const deletedArticles = (scopedUserId == null
+      ? getDb().prepare('DELETE FROM articles WHERE feed_id = ? RETURNING id').all(id)
+      : getDb().prepare('DELETE FROM articles WHERE feed_id = ? AND user_id = ? RETURNING id').all(id, scopedUserId)
     ) as { id: number }[]
-    const ids = idRows.map((r) => r.id)
     const result = scopedUserId == null
       ? getDb().prepare('DELETE FROM feeds WHERE id = ?').run(id)
       : getDb().prepare('DELETE FROM feeds WHERE id = ? AND user_id = ?').run(id, scopedUserId)
-    return { articleIds: ids, deleted: result.changes > 0 }
+    return {
+      articleIds: result.changes > 0 ? deletedArticles.map((r) => r.id) : [],
+      deleted: result.changes > 0,
+    }
   })()
   if (deleted && articleIds.length > 0) {
     deleteArticlesFromSearch(articleIds)
@@ -306,12 +342,11 @@ export function deleteFeed(id: number, userId?: number | null): boolean {
 export function updateFeedError(feedId: number, error: string | null): void {
   getDb().transaction(() => {
     if (error) {
-      getDb().prepare(
-        'UPDATE feeds SET last_error = ?, error_count = error_count + 1 WHERE id = ?',
-      ).run(error, feedId)
+      const feed = getDb().prepare(
+        'UPDATE feeds SET last_error = ?, error_count = error_count + 1 WHERE id = ? RETURNING error_count',
+      ).get(error, feedId) as { error_count: number } | undefined
 
       // Exponential backoff via next_check_at (instead of disabling)
-      const feed = getDb().prepare('SELECT error_count FROM feeds WHERE id = ?').get(feedId) as { error_count: number } | undefined
       if (feed && feed.error_count >= 3) {
         const BACKOFF_BASE = 3600 // 1 hour in seconds
         const MAX_BACKOFF = 4 * 3600 // 4 hours
@@ -349,6 +384,36 @@ export function updateFeedSchedule(feedId: number, nextCheckAt: string, checkInt
   getDb().prepare(
     'UPDATE feeds SET next_check_at = ?, check_interval = ? WHERE id = ?',
   ).run(nextCheckAt, checkInterval, feedId)
+}
+
+export function markFeedFetchSuccess(
+  feedId: number,
+  data: {
+    nextCheckAt: string
+    checkInterval: number
+    etag: string | null
+    lastModified: string | null
+    contentHash?: string | null
+  },
+): void {
+  getDb().prepare(`
+    UPDATE feeds
+    SET last_error = NULL,
+        error_count = 0,
+        etag = ?,
+        last_modified = ?,
+        last_content_hash = ?,
+        next_check_at = ?,
+        check_interval = ?
+    WHERE id = ?
+  `).run(
+    data.etag,
+    data.lastModified,
+    data.contentHash ?? null,
+    data.nextCheckAt,
+    data.checkInterval,
+    feedId,
+  )
 }
 
 export function updateFeedCacheHeaders(feedId: number, etag: string | null, lastModified: string | null, contentHash?: string | null): void {

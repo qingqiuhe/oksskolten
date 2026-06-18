@@ -72,6 +72,15 @@ describe('GET /api/feeds', () => {
     expect(feeds[0].article_count).toBe(2)
     expect(feeds[0].unread_count).toBe(2)
   })
+
+  it('includes clip_feed_id from the returned feeds', async () => {
+    const clipFeed = seedFeed({ name: 'Clips', url: 'clip://saved', type: 'clip' })
+
+    const res = await app.inject({ method: 'GET', url: '/api/feeds' })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().clip_feed_id).toBe(clipFeed.id)
+  })
 })
 
 describe('POST /api/feeds', () => {

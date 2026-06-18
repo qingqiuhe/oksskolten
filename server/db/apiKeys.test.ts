@@ -1,9 +1,15 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
-import { createApiKey, listApiKeys, deleteApiKey, validateApiKey } from './apiKeys.js'
+import { clearApiKeyUsageWriteCacheForTests, createApiKey, listApiKeys, deleteApiKey, validateApiKey } from './apiKeys.js'
+import { getDb } from './connection.js'
 
 beforeEach(() => {
   setupTestDb()
+  clearApiKeyUsageWriteCacheForTests()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('apiKeys', () => {
@@ -91,6 +97,41 @@ describe('apiKeys', () => {
 
       const keys = listApiKeys()
       expect(keys[0].last_used_at).not.toBeNull()
+    })
+
+    it('throttles last_used_at writes for repeated validations', () => {
+      const created = createApiKey('busy-client')
+      const db = getDb()
+      const originalPrepare = db.prepare.bind(db)
+      const preparedSql: string[] = []
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        preparedSql.push(sql)
+        return originalPrepare(sql)
+      })
+
+      validateApiKey(created.key)
+      validateApiKey(created.key)
+
+      expect(preparedSql.filter(sql => sql.includes('UPDATE api_keys SET last_used_at'))).toHaveLength(1)
+    })
+
+    it('refreshes last_used_at again after the throttle window', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-06-10T00:00:00Z'))
+      const created = createApiKey('periodic-audit')
+      const db = getDb()
+      const originalPrepare = db.prepare.bind(db)
+      const preparedSql: string[] = []
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        preparedSql.push(sql)
+        return originalPrepare(sql)
+      })
+
+      validateApiKey(created.key)
+      vi.setSystemTime(new Date('2026-06-10T00:01:01Z'))
+      validateApiKey(created.key)
+
+      expect(preparedSql.filter(sql => sql.includes('UPDATE api_keys SET last_used_at'))).toHaveLength(2)
     })
 
     it('returns null after key is deleted', () => {

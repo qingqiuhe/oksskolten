@@ -20,24 +20,41 @@ function resolveUserId(userId?: number | null): number | null {
   return userId ?? getCurrentUserId()
 }
 
-function buildMeiliDoc(id: number): MeiliArticleDoc | null {
-  const row = getDb().prepare(`
-    SELECT id, user_id, feed_id, category_id, title,
-           COALESCE(full_text, '') AS full_text,
-           COALESCE(full_text_translated, '') AS full_text_translated,
-           lang,
-           COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
-           COALESCE(score, 0) AS score,
-           (seen_at IS NULL) AS is_unread,
-           (liked_at IS NOT NULL) AS is_liked,
-           (bookmarked_at IS NOT NULL) AS is_bookmarked
-    FROM articles WHERE id = ?
-  `).get(id) as MeiliArticleDoc | undefined
-  return row ?? null
-}
+const MEILI_DOC_RETURNING_COLUMNS = `
+  id, user_id, feed_id, category_id, title,
+  COALESCE(full_text, '') AS full_text,
+  COALESCE(full_text_translated, '') AS full_text_translated,
+  lang,
+  COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
+  COALESCE(score, 0) AS score,
+  (seen_at IS NULL) AS is_unread,
+  (liked_at IS NOT NULL) AS is_liked,
+  (bookmarked_at IS NOT NULL) AS is_bookmarked
+`
+
+const SEARCH_DOCUMENT_FIELDS = new Set([
+  'category_id',
+  'feed_id',
+  'full_text',
+  'full_text_translated',
+  'lang',
+  'published_at',
+  'score',
+  'seen_at',
+  'title',
+  'url',
+])
 
 function hasVideoExpr(prefix: string): string {
   return `CASE WHEN COALESCE(${prefix}full_text, '') LIKE '%<video%' THEN 1 ELSE 0 END`
+}
+
+function similarCountExpr(prefix: string): string {
+  return `(SELECT COUNT(*) FROM article_similarities WHERE article_id = ${prefix}id)`
+}
+
+function formatSqliteUtc(value: Date): string {
+  return value.toISOString().replace(/\.\d{3}Z$/, 'Z')
 }
 
 function isResolvedSocialFeedExpr(alias: string): string {
@@ -105,6 +122,28 @@ type HighValueCandidate = ArticleListItemRow & {
 }
 
 type ArticleDetailRow = ArticleDetail & ArticleListItemRow
+type InboxHistoryStatsRow = {
+  id: number
+  article_count: number
+  read_count: number
+  bookmark_count: number
+  like_count: number
+}
+type InboxHistorySnapshot = {
+  db: ReturnType<typeof getDb>
+  expiresAt: number
+  feedRows: InboxHistoryStatsRow[]
+  categoryRows: InboxHistoryStatsRow[]
+}
+type FeedFrequencyRow = {
+  feed_id: number
+  articles_per_week: number
+}
+type FeedFrequencySnapshot = {
+  db: ReturnType<typeof getDb>
+  expiresAt: number
+  rows: FeedFrequencyRow[]
+}
 
 function mapArticleListItem(article: ArticleListItemRow): ArticleListItem {
   const {
@@ -322,7 +361,10 @@ const INBOX_SCORE_RECENT_12H_BOOST = 2.5
 const INBOX_SCORE_RECENT_48H_BOOST = 1.5
 const INBOX_SCORE_RECENT_7D_BOOST = 0.5
 const INBOX_SCORE_HISTORY_WINDOW_DAYS = 90
-const HIGH_VALUE_HISTORY_WINDOW_DAYS = 90
+const INBOX_HISTORY_CACHE_TTL_MS = 30_000
+const INBOX_HISTORY_CACHE_MAX = 50
+const FEED_FREQUENCY_CACHE_TTL_MS = 30_000
+const FEED_FREQUENCY_CACHE_MAX = 50
 const HIGH_VALUE_CANDIDATE_LOOKBACK_DAYS = 7
 const HIGH_VALUE_CANDIDATE_MULTIPLIER = 6
 const HIGH_VALUE_CANDIDATE_MIN_LIMIT = 30
@@ -337,17 +379,19 @@ const HIGH_VALUE_CATEGORY_AFFINITY_MULTIPLIER = 3
 const HIGH_VALUE_TOPIC_ALREADY_COVERED_PENALTY = 2
 const HIGH_VALUE_TOPIC_COOLDOWN_PENALTY = 4
 const HIGH_VALUE_REASON_LIMIT = 2
+const inboxHistoryCache = new Map<string, InboxHistorySnapshot>()
+const feedFrequencyCache = new Map<string, FeedFrequencySnapshot>()
 
 function inboxScoreExpr(
   prefix: string,
   opts: {
     feedHistoryAlias: string
     categoryHistoryAlias: string
-    similarAlias: string
+    similarCountSql: string
   },
 ): string {
   const p = prefix
-  const { feedHistoryAlias: fh, categoryHistoryAlias: ch, similarAlias: sim } = opts
+  const { feedHistoryAlias: fh, categoryHistoryAlias: ch, similarCountSql } = opts
 
   return `(
     (CASE WHEN ${p}liked_at IS NOT NULL THEN ${INBOX_SCORE_LIKE_BOOST} ELSE 0 END)
@@ -375,7 +419,7 @@ function inboxScoreExpr(
         0
       )
     )
-    + (MIN(COALESCE(${sim}.similar_count, 0), ${INBOX_SCORE_SIMILAR_COUNT_CAP}) * ${INBOX_SCORE_SIMILAR_ARTICLE_BOOST})
+    + (MIN(${similarCountSql}, ${INBOX_SCORE_SIMILAR_COUNT_CAP}) * ${INBOX_SCORE_SIMILAR_ARTICLE_BOOST})
     + (CASE WHEN ${p}summary IS NOT NULL OR ${p}excerpt IS NOT NULL THEN ${INBOX_SCORE_SUMMARY_OR_EXCERPT_BOOST} ELSE 0 END)
     + (CASE WHEN ${p}full_text IS NOT NULL THEN ${INBOX_SCORE_FULL_TEXT_BOOST} ELSE 0 END)
     + (CASE WHEN ${p}notification_body_text IS NOT NULL THEN ${INBOX_SCORE_NOTIFICATION_BODY_BOOST} ELSE 0 END)
@@ -394,6 +438,195 @@ function inboxScoreExpr(
   )`
 }
 
+function inboxHistoryCacheKey(scopedUserId: number | null): string {
+  return scopedUserId == null ? 'all' : `user:${scopedUserId}`
+}
+
+function deleteCurrentDbCacheEntries<T extends { db: ReturnType<typeof getDb> }>(
+  cache: Map<string, T>,
+  currentDb: ReturnType<typeof getDb>,
+): void {
+  for (const [key, entry] of cache) {
+    if (entry.db === currentDb) cache.delete(key)
+  }
+}
+
+function invalidateInboxRankingCaches(scopedUserId?: number | null): void {
+  const currentDb = getDb()
+  if (scopedUserId == null) {
+    deleteCurrentDbCacheEntries(inboxHistoryCache, currentDb)
+    deleteCurrentDbCacheEntries(feedFrequencyCache, currentDb)
+    return
+  }
+
+  inboxHistoryCache.delete(inboxHistoryCacheKey(scopedUserId))
+  inboxHistoryCache.delete(inboxHistoryCacheKey(null))
+  feedFrequencyCache.delete(inboxHistoryCacheKey(scopedUserId))
+  feedFrequencyCache.delete(inboxHistoryCacheKey(null))
+}
+
+function getInboxHistorySnapshot(
+  scopedUserId: number | null,
+  onQuery?: () => void,
+): InboxHistorySnapshot {
+  const key = inboxHistoryCacheKey(scopedUserId)
+  const cached = inboxHistoryCache.get(key)
+  if (cached && cached.db === getDb() && cached.expiresAt > Date.now()) {
+    inboxHistoryCache.delete(key)
+    inboxHistoryCache.set(key, cached)
+    return cached
+  }
+  if (cached) inboxHistoryCache.delete(key)
+
+  const params = scopedUserId == null ? {} : { userId: scopedUserId }
+  onQuery?.()
+  const feedRows = allNamed<InboxHistoryStatsRow>(`
+    SELECT
+      h.feed_id AS id,
+      COUNT(*) AS article_count,
+      COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
+      COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
+      COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
+    FROM active_articles h
+    JOIN feeds hf ON h.feed_id = hf.id
+    WHERE hf.type != 'clip'
+      AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${INBOX_SCORE_HISTORY_WINDOW_DAYS} days')
+      ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
+    GROUP BY h.feed_id
+  `, params)
+
+  onQuery?.()
+  const categoryRows = allNamed<InboxHistoryStatsRow>(`
+    SELECT
+      h.category_id AS id,
+      COUNT(*) AS article_count,
+      COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
+      COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
+      COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
+    FROM active_articles h
+    JOIN feeds hf ON h.feed_id = hf.id
+    WHERE hf.type != 'clip'
+      AND h.category_id IS NOT NULL
+      AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${INBOX_SCORE_HISTORY_WINDOW_DAYS} days')
+      ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
+    GROUP BY h.category_id
+  `, params)
+
+  const snapshot = {
+    db: getDb(),
+    expiresAt: Date.now() + INBOX_HISTORY_CACHE_TTL_MS,
+    feedRows,
+    categoryRows,
+  }
+  inboxHistoryCache.set(key, snapshot)
+  if (inboxHistoryCache.size > INBOX_HISTORY_CACHE_MAX) {
+    const oldestKey = inboxHistoryCache.keys().next().value
+    if (oldestKey != null) inboxHistoryCache.delete(oldestKey)
+  }
+  return snapshot
+}
+
+function getFeedFrequencySnapshot(
+  scopedUserId: number | null,
+  onQuery?: () => void,
+): FeedFrequencySnapshot {
+  const key = inboxHistoryCacheKey(scopedUserId)
+  const cached = feedFrequencyCache.get(key)
+  if (cached && cached.db === getDb() && cached.expiresAt > Date.now()) {
+    feedFrequencyCache.delete(key)
+    feedFrequencyCache.set(key, cached)
+    return cached
+  }
+  if (cached) feedFrequencyCache.delete(key)
+
+  onQuery?.()
+  const rows = allNamed<FeedFrequencyRow>(`
+    SELECT
+      f.id AS feed_id,
+      COUNT(
+        CASE
+          WHEN COALESCE(a.published_at, a.fetched_at) >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-28 days')
+          THEN 1
+        END
+      ) / 4.0 AS articles_per_week
+    FROM feeds f
+    LEFT JOIN active_articles a ON a.feed_id = f.id
+    WHERE f.type != 'clip'
+      ${scopedUserId == null ? '' : 'AND f.user_id = @userId'}
+    GROUP BY f.id
+  `, scopedUserId == null ? {} : { userId: scopedUserId })
+
+  const snapshot = {
+    db: getDb(),
+    expiresAt: Date.now() + FEED_FREQUENCY_CACHE_TTL_MS,
+    rows,
+  }
+  feedFrequencyCache.set(key, snapshot)
+  if (feedFrequencyCache.size > FEED_FREQUENCY_CACHE_MAX) {
+    const oldestKey = feedFrequencyCache.keys().next().value
+    if (oldestKey != null) feedFrequencyCache.delete(oldestKey)
+  }
+  return snapshot
+}
+
+function countLessOrEqual(sortedValues: number[], target: number): number {
+  let low = 0
+  let high = sortedValues.length
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (sortedValues[mid] <= target) low = mid + 1
+    else high = mid
+  }
+  return low
+}
+
+function sqlIntegerLiteral(value: number): string {
+  const normalized = Math.trunc(Number(value))
+  return Number.isFinite(normalized) ? String(normalized) : '0'
+}
+
+function sqlNumberLiteral(value: number): string {
+  const normalized = Number(value)
+  return Number.isFinite(normalized) ? String(normalized) : '0'
+}
+
+function buildHistoryValuesCte(
+  name: string,
+  idColumn: string,
+  rows: InboxHistoryStatsRow[],
+): string {
+  if (rows.length === 0) {
+    return `${name}(${idColumn}, article_count, read_count, bookmark_count, like_count) AS (SELECT NULL, 0, 0, 0, 0 WHERE 0)`
+  }
+
+  const values = rows.map(row => `(${[
+    sqlIntegerLiteral(row.id),
+    sqlIntegerLiteral(row.article_count),
+    sqlIntegerLiteral(row.read_count),
+    sqlIntegerLiteral(row.bookmark_count),
+    sqlIntegerLiteral(row.like_count),
+  ].join(', ')})`).join(', ')
+
+  return `${name}(${idColumn}, article_count, read_count, bookmark_count, like_count) AS (VALUES ${values})`
+}
+
+function buildInboxHistoryCtes(snapshot: InboxHistorySnapshot): string {
+  return [
+    buildHistoryValuesCte('feed_history', 'feed_id', snapshot.feedRows),
+    buildHistoryValuesCte('category_history', 'category_id', snapshot.categoryRows),
+  ].join(',\n')
+}
+
+function buildFeedFrequencyCte(rows: FeedFrequencyRow[]): string {
+  if (rows.length === 0) {
+    return 'feed_frequency(feed_id, articles_per_week) AS (SELECT NULL, 0 WHERE 0)'
+  }
+
+  const values = rows.map(row => `(${sqlIntegerLiteral(row.feed_id)}, ${sqlNumberLiteral(row.articles_per_week)})`).join(', ')
+
+  return `feed_frequency(feed_id, articles_per_week) AS (VALUES ${values})`
+}
+
 /** WHERE clause for articles that have engagement or a non-zero score. Shared with search sync. */
 export const SCORED_ARTICLES_WHERE = `(
   liked_at IS NOT NULL
@@ -403,30 +636,98 @@ export const SCORED_ARTICLES_WHERE = `(
   OR score > 0
 )`
 
-/** Update score in DB and sync to search. Call within a transaction for atomicity. */
-function updateScoreDb(id: number): void {
-  getDb().prepare(`UPDATE articles SET score = (${scoreExpr('')}) WHERE id = ?`).run(id)
+const SCORE_RECALC_BATCH_SIZE = 500
+export interface ArticleScoreUpdate {
+  id: number
+  score: number
 }
 
-function syncScoreToSearch(id: number): void {
-  const row = getDb().prepare('SELECT score FROM articles WHERE id = ?').get(id) as { score: number } | undefined
-  if (row) syncArticleScoreToSearch(id, row.score)
+/** Update score in DB and sync to search. Call within a transaction for atomicity. */
+function updateScoreDb(id: number): number | undefined {
+  const row = getDb().prepare(`UPDATE articles SET score = (${scoreExpr('')}) WHERE id = ? RETURNING score`).get(id) as { score: number } | undefined
+  return row?.score
 }
 
 export function updateScore(id: number): void {
-  updateScoreDb(id)
-  syncScoreToSearch(id)
+  const score = updateScoreDb(id)
+  if (score !== undefined) syncArticleScoreToSearch(id, score)
 }
 
-export function recalculateScores(): { updated: number } {
-  const result = getDb().prepare(`
-    UPDATE articles SET score = (${scoreExpr('')})
-    WHERE id IN (SELECT id FROM active_articles) AND ${SCORED_ARTICLES_WHERE}
-  `).run()
-  return { updated: result.changes }
+export function recalculateScores(opts?: { perfStats?: { queryCount: number } }): { updated: number; ids: number[]; scoreUpdates: ArticleScoreUpdate[] } {
+  let lastId = 0
+  let updated = 0
+  const ids: number[] = []
+  const scoreUpdates: ArticleScoreUpdate[] = []
+  const countQuery = () => {
+    if (opts?.perfStats) opts.perfStats.queryCount += 1
+  }
+
+  while (true) {
+    countQuery()
+    const batch = getDb().prepare(`
+      UPDATE articles SET score = (${scoreExpr('')})
+      WHERE id IN (
+        SELECT id FROM active_articles
+        WHERE id > ? AND ${SCORED_ARTICLES_WHERE}
+        ORDER BY id
+        LIMIT ?
+      )
+      RETURNING id, score
+    `).all(lastId, SCORE_RECALC_BATCH_SIZE) as ArticleScoreUpdate[]
+    if (batch.length === 0) break
+
+    batch.sort((left, right) => left.id - right.id)
+    const batchIds = batch.map(row => row.id)
+    lastId = Math.max(...batchIds)
+    updated += batch.length
+    ids.push(...batchIds)
+    scoreUpdates.push(...batch)
+  }
+
+  return { updated, ids, scoreUpdates }
 }
 
 // --- Article list queries ---
+
+const SMART_FLOOR_CACHE_TTL_MS = 15_000
+const SMART_FLOOR_CACHE_MAX = 100
+type SmartFloorCacheEntry = {
+  db: ReturnType<typeof getDb>
+  expiresAt: number
+  floor: string | null
+}
+const smartFloorCache = new Map<string, SmartFloorCacheEntry>()
+
+function smartFloorCacheKey(scopeWhere: string, params: Record<string, unknown>): string {
+  const stableParams = Object.keys(params)
+    .sort()
+    .map(key => [key, params[key]])
+  return JSON.stringify([scopeWhere, stableParams])
+}
+
+function readSmartFloorCache(key: string): string | null | undefined {
+  const entry = smartFloorCache.get(key)
+  if (!entry) return undefined
+  if (entry.db !== getDb() || entry.expiresAt <= Date.now()) {
+    smartFloorCache.delete(key)
+    return undefined
+  }
+  smartFloorCache.delete(key)
+  smartFloorCache.set(key, entry)
+  return entry.floor
+}
+
+function writeSmartFloorCache(key: string, floor: string | null): void {
+  smartFloorCache.set(key, {
+    db: getDb(),
+    expiresAt: Date.now() + SMART_FLOOR_CACHE_TTL_MS,
+    floor,
+  })
+  if (smartFloorCache.size > SMART_FLOOR_CACHE_MAX) {
+    const oldestKey = smartFloorCache.keys().next().value
+    if (oldestKey != null) smartFloorCache.delete(oldestKey)
+  }
+}
 
 export function getArticles(opts: {
   feedId?: number
@@ -444,11 +745,17 @@ export function getArticles(opts: {
   limit: number
   offset: number
   smartFloor?: boolean
+  includeTotal?: boolean
+  includeTotalWithoutFloor?: boolean
+  perfStats?: { queryCount: number }
   userId?: number | null
-}): { articles: ArticleListItem[]; total: number; totalWithoutFloor?: number } {
+}): { articles: ArticleListItem[]; total: number; hasMore?: boolean; totalWithoutFloor?: number } {
   const conditions: string[] = []
   const params: Record<string, unknown> = {}
   const scopedUserId = resolveUserId(opts.userId)
+  const countQuery = () => {
+    if (opts.perfStats) opts.perfStats.queryCount += 1
+  }
 
   if (scopedUserId != null) {
     conditions.push('a.user_id = @userId')
@@ -511,35 +818,39 @@ export function getArticles(opts: {
 
   if (opts.smartFloor && !opts.since && !opts.until) {
     const scopeWhere = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''
+    const cacheKey = smartFloorCacheKey(scopeWhere, params)
+    let smartFloorDate = readSmartFloorCache(cacheKey)
 
-    // Candidate 1: SMART_FLOOR_DAYS ago
-    const floorAgo = new Date(Date.now() - SMART_FLOOR_DAYS * 24 * 60 * 60 * 1000).toISOString()
+    if (smartFloorDate === undefined) {
+      // Candidate 1: SMART_FLOOR_DAYS ago
+      const floorAgo = new Date(Date.now() - SMART_FLOOR_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
-    // Candidate 2: SMART_FLOOR_MIN_ARTICLES-th newest article's date
-    const top20Row = getNamed<{ floor: string | null }>(`
-      SELECT a.published_at AS floor FROM active_articles a
-      JOIN feeds f ON a.feed_id = f.id
-      ${scopeWhere}
-      ORDER BY a.published_at DESC
-      LIMIT 1 OFFSET ${SMART_FLOOR_MIN_ARTICLES - 1}
-    `, params)
+      // Candidate 2: SMART_FLOOR_MIN_ARTICLES-th newest article's date
+      countQuery()
+      const top20Row = getNamed<{ floor: string | null }>(`
+        SELECT a.published_at AS floor FROM active_articles a
+        JOIN feeds f ON a.feed_id = f.id
+        ${scopeWhere}
+        ORDER BY a.published_at DESC
+        LIMIT 1 OFFSET ${SMART_FLOOR_MIN_ARTICLES - 1}
+      `, params)
 
-    // Candidate 3: oldest unread article's date
-    const unreadRow = getNamed<{ floor: string | null }>(`
-      SELECT MIN(a.published_at) AS floor FROM active_articles a
-      JOIN feeds f ON a.feed_id = f.id
-      ${scopeWhere ? scopeWhere + ' AND' : 'WHERE'} a.seen_at IS NULL AND a.published_at IS NOT NULL
-    `, params)
+      // Candidate 3: oldest unread article's date
+      countQuery()
+      const unreadRow = getNamed<{ floor: string | null }>(`
+        SELECT MIN(a.published_at) AS floor FROM active_articles a
+        JOIN feeds f ON a.feed_id = f.id
+        ${scopeWhere ? scopeWhere + ' AND' : 'WHERE'} a.seen_at IS NULL AND a.published_at IS NOT NULL
+      `, params)
 
-    // If fewer than SMART_FLOOR_MIN_ARTICLES exist, skip the floor entirely — show all
-    if (!top20Row?.floor) {
-      // no-op: don't add a date condition
-    } else {
-      // Pick the earliest (= shows the most articles)
-      const candidates: string[] = [floorAgo, top20Row.floor]
-      if (unreadRow?.floor) candidates.push(unreadRow.floor)
-      const smartFloorDate = candidates.sort()[0]
+      // If fewer than SMART_FLOOR_MIN_ARTICLES exist, skip the floor entirely — show all
+      smartFloorDate = top20Row?.floor
+        ? [floorAgo, top20Row.floor, ...(unreadRow?.floor ? [unreadRow.floor] : [])].sort()[0]
+        : null
+      writeSmartFloorCache(cacheKey, smartFloorDate)
+    }
 
+    if (smartFloorDate) {
       conditions.push('(a.published_at IS NULL OR a.published_at >= @smartFloorDate)')
       params.smartFloorDate = smartFloorDate
       floorApplied = true
@@ -555,41 +866,39 @@ export function getArticles(opts: {
     : undefined
 
   const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''
+
+  const shouldIncludeTotal = opts.includeTotal ?? true
+  let total = 0
+  if (shouldIncludeTotal) {
+    countQuery()
+    const totalRow = getNamed<{ cnt: number }>(`
+      SELECT COUNT(*) AS cnt
+      FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
+      ${where}
+    `, params)
+    total = totalRow.cnt
+  }
+
+  const shouldIncludeTotalWithoutFloor = opts.includeTotalWithoutFloor ?? true
+  const totalWithoutFloor = baseWhere != null && shouldIncludeTotal && shouldIncludeTotalWithoutFloor
+    ? (() => {
+        countQuery()
+        return getNamed<{ cnt: number }>(`
+      SELECT COUNT(*) AS cnt
+      FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
+      ${baseWhere}
+    `, params).cnt
+      })()
+    : undefined
+
+  if (Number(opts.limit) <= 0) {
+    return { articles: [], total, ...(totalWithoutFloor != null && totalWithoutFloor > total ? { totalWithoutFloor } : {}) }
+  }
+
   const inboxHistoryCtes = opts.sort === 'inbox_score'
-    ? `
-      WITH feed_history AS (
-        -- Include all articles in the ${INBOX_SCORE_HISTORY_WINDOW_DAYS}-day window so affinity reflects
-        -- consumption rate, not just absolute engaged volume.
-        SELECT
-          h.feed_id,
-          COUNT(*) AS article_count,
-          COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
-          COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
-          COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
-        FROM active_articles h
-        JOIN feeds hf ON h.feed_id = hf.id
-        WHERE hf.type != 'clip'
-          AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${INBOX_SCORE_HISTORY_WINDOW_DAYS} days')
-          ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
-        GROUP BY h.feed_id
-      ),
-      category_history AS (
-        -- Same denominator as feed_history: all articles in the window, not only engaged items.
-        SELECT
-          h.category_id,
-          COUNT(*) AS article_count,
-          COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
-          COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
-          COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
-        FROM active_articles h
-        JOIN feeds hf ON h.feed_id = hf.id
-        WHERE hf.type != 'clip'
-          AND h.category_id IS NOT NULL
-          AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${INBOX_SCORE_HISTORY_WINDOW_DAYS} days')
-          ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
-        GROUP BY h.category_id
-      )
-    `
+    ? `WITH ${buildInboxHistoryCtes(getInboxHistorySnapshot(scopedUserId, countQuery))}`
     : ''
   const inboxHistoryJoins = opts.sort === 'inbox_score'
     ? `
@@ -597,47 +906,25 @@ export function getArticles(opts: {
       LEFT JOIN category_history ch ON ch.category_id = a.category_id
     `
     : ''
+  const similarCountSql = similarCountExpr('a.')
   const inboxScoreSelect = opts.sort === 'inbox_score'
-    ? `${inboxScoreExpr('a.', { feedHistoryAlias: 'fh', categoryHistoryAlias: 'ch', similarAlias: 'sim' })} AS inbox_score,`
+    ? `${inboxScoreExpr('a.', { feedHistoryAlias: 'fh', categoryHistoryAlias: 'ch', similarCountSql })} AS inbox_score,`
     : 'NULL AS inbox_score,'
-  const similarCountSelect = opts.sort === 'inbox_score'
-    ? 'COALESCE(sim.similar_count, 0) AS similar_count'
-    : '(SELECT COUNT(*) FROM article_similarities WHERE article_id = a.id) AS similar_count'
-  const similarCountJoin = opts.sort === 'inbox_score'
-    ? `
-      LEFT JOIN (
-        SELECT article_id, COUNT(*) AS similar_count
-        FROM article_similarities
-        GROUP BY article_id
-      ) sim ON sim.article_id = a.id
-    `
-    : ''
+  const similarCountSelect = `${similarCountSql} AS similar_count`
   const orderBy = opts.sort === 'score'
     ? 'a.score DESC, a.published_at DESC'
     : opts.sort === 'inbox_score'
         ? 'inbox_score DESC, COALESCE(a.published_at, a.fetched_at) DESC, a.id DESC'
         : opts.sort === 'oldest_unread'
-          ? "CASE WHEN a.seen_at IS NULL THEN 0 ELSE 1 END, COALESCE(a.published_at, a.fetched_at) ASC"
+          ? opts.unread
+              ? 'COALESCE(a.published_at, a.fetched_at) ASC'
+              : "CASE WHEN a.seen_at IS NULL THEN 0 ELSE 1 END, COALESCE(a.published_at, a.fetched_at) ASC"
           : opts.liked ? 'a.liked_at DESC' : opts.read ? 'a.read_at DESC' : 'a.published_at DESC'
 
-  const totalRow = getNamed<{ cnt: number }>(`
-    SELECT COUNT(*) AS cnt
-    FROM active_articles a
-    JOIN feeds f ON a.feed_id = f.id
-    ${where}
-  `, params)
-  const total = totalRow.cnt
-
-  const totalWithoutFloor = baseWhere != null
-    ? getNamed<{ cnt: number }>(`
-      SELECT COUNT(*) AS cnt
-      FROM active_articles a
-      JOIN feeds f ON a.feed_id = f.id
-      ${baseWhere}
-    `, params).cnt
-    : undefined
-
-  const articles = allNamed<ArticleListItem>(`
+  countQuery()
+  const requestedLimit = Number(opts.limit)
+  const pageLimit = shouldIncludeTotal ? requestedLimit : requestedLimit + 1
+  const pageRows = allNamed<ArticleListItem>(`
     ${inboxHistoryCtes}
     SELECT a.id, a.feed_id, f.name AS feed_name, f.icon_url AS feed_icon_url,
            f.view_type AS _feed_view_type_raw, f.url AS _feed_url, f.rss_url AS _feed_rss_url, f.rss_bridge_url AS _feed_rss_bridge_url,
@@ -648,14 +935,18 @@ export function getArticles(opts: {
            ${similarCountSelect}
     FROM active_articles a
     JOIN feeds f ON a.feed_id = f.id
-    ${similarCountJoin}
     ${inboxHistoryJoins}
     ${where}
     ORDER BY ${orderBy}
     LIMIT @_limit OFFSET @_offset
-  `, { ...params, _limit: Number(opts.limit), _offset: Number(opts.offset) }).map((row) => mapArticleListItem(row as ArticleListItemRow))
+  `, { ...params, _limit: pageLimit, _offset: Number(opts.offset) }).map((row) => mapArticleListItem(row as ArticleListItemRow))
+  const hasMore = shouldIncludeTotal ? undefined : pageRows.length > requestedLimit
+  const articles = hasMore ? pageRows.slice(0, requestedLimit) : pageRows
+  if (!shouldIncludeTotal) {
+    total = Number(opts.offset) + articles.length + (hasMore ? 1 : 0)
+  }
 
-  return { articles, total, ...(totalWithoutFloor != null && totalWithoutFloor > total ? { totalWithoutFloor } : {}) }
+  return { articles, total, ...(hasMore != null ? { hasMore } : {}), ...(totalWithoutFloor != null && totalWithoutFloor > total ? { totalWithoutFloor } : {}) }
 }
 
 export function getInboxSummary(userId?: number | null): InboxSummary {
@@ -666,9 +957,10 @@ export function getInboxSummary(userId?: number | null): InboxSummary {
       COUNT(CASE WHEN a.published_at >= date('now', 'start of day') THEN 1 END) AS new_today,
       MIN(a.published_at) AS oldest_unread_at,
       COUNT(DISTINCT a.feed_id) AS source_feed_count
-    FROM active_articles a
+    FROM articles a INDEXED BY idx_articles_user_unread_published_active
     JOIN feeds f ON a.feed_id = f.id
-    WHERE a.seen_at IS NULL
+    WHERE a.purged_at IS NULL
+      AND a.seen_at IS NULL
       AND f.type != 'clip'
       ${scopedUserId == null ? '' : 'AND a.user_id = @userId'}
   `, scopedUserId == null ? {} : { userId: scopedUserId })
@@ -684,9 +976,13 @@ export function getInboxSummary(userId?: number | null): InboxSummary {
 export function getHighValueInbox(opts?: {
   limit?: number
   feedViewType?: FeedViewType
+  perfStats?: { queryCount: number }
   userId?: number | null
 }): HighValueResponse {
   const scopedUserId = resolveUserId(opts?.userId)
+  const countQuery = () => {
+    if (opts?.perfStats) opts.perfStats.queryCount += 1
+  }
   const requestedLimit = opts?.limit ?? HIGH_VALUE_DEFAULT_LIMIT
   const limit = clamp(requestedLimit, 1, HIGH_VALUE_MAX_LIMIT)
   const candidateLimit = Math.max(limit * HIGH_VALUE_CANDIDATE_MULTIPLIER, HIGH_VALUE_CANDIDATE_MIN_LIMIT)
@@ -720,83 +1016,58 @@ export function getHighValueInbox(opts?: {
           AND cooldown_sim.similar_to_id IN (${cooldownPlaceholders})
       ))`
     : '0'
+  const readSimilarExistsExpr = `EXISTS (
+    SELECT 1
+    FROM article_similarities s
+    JOIN active_articles similar ON similar.id = s.similar_to_id
+    WHERE s.article_id = a.id
+      AND similar.read_at IS NOT NULL
+      ${scopedUserId == null ? '' : 'AND similar.user_id = @userId'}
+  )`
 
-  const frequencyValues = allNamed<{ articles_per_week: number }>(`
-    SELECT
-      COUNT(
-        CASE
-          WHEN COALESCE(a.published_at, a.fetched_at) >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-28 days')
-          THEN 1
-        END
-      ) / 4.0 AS articles_per_week
-    FROM feeds f
-    LEFT JOIN active_articles a ON a.feed_id = f.id
-    WHERE f.type != 'clip'
-      ${scopedUserId == null ? '' : 'AND f.user_id = @userId'}
-    GROUP BY f.id
-  `, scopedUserId == null ? {} : { userId: scopedUserId })
-  const sortedFrequencyValues = frequencyValues
+  const feedFrequencyRows = getFeedFrequencySnapshot(scopedUserId, countQuery).rows
+  const sortedFrequencyValues = feedFrequencyRows
     .map((item) => item.articles_per_week)
     .sort((left, right) => left - right)
+  const historySnapshot = getInboxHistorySnapshot(scopedUserId, countQuery)
+  params.candidateCutoff = formatSqliteUtc(new Date(Date.now() - HIGH_VALUE_CANDIDATE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000))
 
+  countQuery()
   const candidates = allNamed<HighValueCandidate>(`
-    WITH feed_history AS (
-      SELECT
-        h.feed_id,
-        COUNT(*) AS article_count,
-        COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
-        COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
-        COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
-      FROM active_articles h
-      JOIN feeds hf ON h.feed_id = hf.id
-      WHERE hf.type != 'clip'
-        AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${HIGH_VALUE_HISTORY_WINDOW_DAYS} days')
-        ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
-      GROUP BY h.feed_id
+    WITH recent_published_candidates AS (
+      SELECT a.id, a.published_at AS sort_at
+      FROM articles a INDEXED BY idx_articles_user_unread_published_active
+      JOIN feeds f ON a.feed_id = f.id
+      WHERE a.purged_at IS NULL
+        AND a.seen_at IS NULL
+        AND a.published_at IS NOT NULL
+        AND a.published_at >= @candidateCutoff
+        AND f.type != 'clip'
+        ${scopedUserId == null ? '' : 'AND a.user_id = @userId'}
+        ${feedViewFilter}
+      ORDER BY a.published_at DESC, a.id DESC
+      LIMIT @candidateLimit
     ),
-    category_history AS (
-      SELECT
-        h.category_id,
-        COUNT(*) AS article_count,
-        COUNT(CASE WHEN h.read_at IS NOT NULL THEN 1 END) AS read_count,
-        COUNT(CASE WHEN h.bookmarked_at IS NOT NULL THEN 1 END) AS bookmark_count,
-        COUNT(CASE WHEN h.liked_at IS NOT NULL THEN 1 END) AS like_count
-      FROM active_articles h
-      JOIN feeds hf ON h.feed_id = hf.id
-      WHERE hf.type != 'clip'
-        AND h.category_id IS NOT NULL
-        AND julianday(COALESCE(h.published_at, h.fetched_at)) >= julianday('now', '-${HIGH_VALUE_HISTORY_WINDOW_DAYS} days')
-        ${scopedUserId == null ? '' : 'AND h.user_id = @userId'}
-      GROUP BY h.category_id
+    recent_fetched_candidates AS (
+      SELECT a.id, a.fetched_at AS sort_at
+      FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
+      WHERE a.seen_at IS NULL
+        AND a.published_at IS NULL
+        AND a.fetched_at >= @candidateCutoff
+        AND f.type != 'clip'
+        ${scopedUserId == null ? '' : 'AND a.user_id = @userId'}
+        ${feedViewFilter}
+      ORDER BY a.fetched_at DESC, a.id DESC
+      LIMIT @candidateLimit
     ),
-    feed_frequency AS (
-      SELECT
-        f.id AS feed_id,
-        COUNT(
-          CASE
-            WHEN COALESCE(fa.published_at, fa.fetched_at) >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-28 days')
-            THEN 1
-          END
-        ) / 4.0 AS articles_per_week
-      FROM feeds f
-      LEFT JOIN active_articles fa ON fa.feed_id = f.id
-      WHERE f.type != 'clip'
-        ${scopedUserId == null ? '' : 'AND f.user_id = @userId'}
-      GROUP BY f.id
+    recent_candidates AS (
+      SELECT id, sort_at FROM recent_published_candidates
+      UNION ALL
+      SELECT id, sort_at FROM recent_fetched_candidates
     ),
-    direct_similar AS (
-      SELECT article_id, COUNT(*) AS direct_similar_count
-      FROM article_similarities
-      GROUP BY article_id
-    ),
-    read_similar AS (
-      SELECT s.article_id, 1 AS has_read_similar
-      FROM article_similarities s
-      JOIN active_articles similar ON similar.id = s.similar_to_id
-      WHERE similar.read_at IS NOT NULL
-        ${scopedUserId == null ? '' : 'AND similar.user_id = @userId'}
-      GROUP BY s.article_id
-    )
+    ${buildInboxHistoryCtes(historySnapshot)},
+    ${buildFeedFrequencyCte(feedFrequencyRows)}
     SELECT
       a.id,
       a.feed_id,
@@ -821,7 +1092,7 @@ export function getHighValueInbox(opts?: {
       a.bookmarked_at,
       a.liked_at,
       ${hasVideoExpr('a.')} AS has_video,
-      COALESCE(a.published_at, a.fetched_at) AS _sort_published_at,
+      rc.sort_at AS _sort_published_at,
       f.priority_level,
       COALESCE(ff.articles_per_week, 0) AS articles_per_week,
       COALESCE(fh.article_count, 0) AS feed_history_count,
@@ -838,26 +1109,20 @@ export function getHighValueInbox(opts?: {
       0 AS article_quality_score,
       0 AS freshness_score,
       0 AS high_frequency_penalty,
-      CASE WHEN rs.has_read_similar = 1 THEN ${HIGH_VALUE_TOPIC_ALREADY_COVERED_PENALTY} ELSE 0 END AS already_covered_penalty,
-      CASE WHEN ${cooldownExistsExpr} THEN ${HIGH_VALUE_TOPIC_COOLDOWN_PENALTY} ELSE 0 END AS topic_cooldown_penalty,
-      COALESCE(rs.has_read_similar, 0) AS has_read_similar,
+      0 AS already_covered_penalty,
+      0 AS topic_cooldown_penalty,
+      CASE WHEN ${readSimilarExistsExpr} THEN 1 ELSE 0 END AS has_read_similar,
       CASE WHEN ${cooldownExistsExpr} THEN 1 ELSE 0 END AS has_cooldown,
-      COALESCE(ds.direct_similar_count, 0) AS direct_similar_count,
+      ${similarCountExpr('a.')} AS direct_similar_count,
       0 AS inbox_score,
       a.score
-    FROM active_articles a
+    FROM recent_candidates rc
+    JOIN active_articles a ON a.id = rc.id
     JOIN feeds f ON a.feed_id = f.id
     LEFT JOIN feed_history fh ON fh.feed_id = a.feed_id
     LEFT JOIN category_history ch ON ch.category_id = a.category_id
     LEFT JOIN feed_frequency ff ON ff.feed_id = a.feed_id
-    LEFT JOIN direct_similar ds ON ds.article_id = a.id
-    LEFT JOIN read_similar rs ON rs.article_id = a.id
-    WHERE a.seen_at IS NULL
-      AND f.type != 'clip'
-      AND julianday(COALESCE(a.published_at, a.fetched_at)) >= julianday('now', '-${HIGH_VALUE_CANDIDATE_LOOKBACK_DAYS} days')
-      ${scopedUserId == null ? '' : 'AND a.user_id = @userId'}
-      ${feedViewFilter}
-    ORDER BY COALESCE(a.published_at, a.fetched_at) DESC, a.id DESC
+    ORDER BY rc.sort_at DESC, a.id DESC
     LIMIT @candidateLimit
   `, params).map((row) => {
     const feedAffinityRatio = ((row.feed_read_count * 1) + (row.feed_bookmark_count * 3) + (row.feed_like_count * 5))
@@ -872,9 +1137,13 @@ export function getHighValueInbox(opts?: {
       + (row.notification_body_text ? 0.2 : 0)
       + (row.article_kind === 'original' ? 0.8 : row.article_kind === 'quote' ? 0.2 : row.article_kind === 'repost' ? -0.5 : 0)
     const freshnessScore = computeFreshnessScore(row._sort_published_at)
-    const lessOrEqualCount = sortedFrequencyValues.filter((value) => value <= row.articles_per_week).length
+    const lessOrEqualCount = countLessOrEqual(sortedFrequencyValues, row.articles_per_week)
     const frequencyQuantile = row.frequency_quantile || (sortedFrequencyValues.length > 0 ? lessOrEqualCount / sortedFrequencyValues.length : 0)
     const highFrequencyPenalty = computeFrequencyPenalty(row.articles_per_week, row.priority_level, frequencyQuantile)
+    const hasReadSimilar = Boolean(row.has_read_similar)
+    const hasCooldown = Boolean(row.has_cooldown)
+    const alreadyCoveredPenalty = hasReadSimilar ? HIGH_VALUE_TOPIC_ALREADY_COVERED_PENALTY : 0
+    const topicCooldownPenalty = hasCooldown ? HIGH_VALUE_TOPIC_COOLDOWN_PENALTY : 0
     const inboxScore =
       mapPriorityScore(row.priority_level)
       + feedAffinityScore
@@ -882,18 +1151,20 @@ export function getHighValueInbox(opts?: {
       + articleQualityScore
       + freshnessScore
       - highFrequencyPenalty
-      - row.already_covered_penalty
-      - row.topic_cooldown_penalty
+      - alreadyCoveredPenalty
+      - topicCooldownPenalty
 
     return {
       ...row,
-      has_read_similar: Boolean(row.has_read_similar),
-      has_cooldown: Boolean(row.has_cooldown),
+      has_read_similar: hasReadSimilar,
+      has_cooldown: hasCooldown,
       feed_affinity_score: feedAffinityScore,
       category_affinity_score: categoryAffinityScore,
       article_quality_score: articleQualityScore,
       freshness_score: freshnessScore,
       high_frequency_penalty: highFrequencyPenalty,
+      already_covered_penalty: alreadyCoveredPenalty,
+      topic_cooldown_penalty: topicCooldownPenalty,
       inbox_score: inboxScore,
     }
   })
@@ -910,6 +1181,7 @@ export function getHighValueInbox(opts?: {
     similarityParams[`candidate_id_${index}`] = id
   })
 
+  countQuery()
   const similarityRows = allNamed<{ article_id: number; similar_to_id: number }>(`
     SELECT article_id, similar_to_id
     FROM article_similarities
@@ -1023,27 +1295,29 @@ export function markArticleSeen(
   userId?: number | null,
 ): { seen_at: string | null; read_at: string | null } | undefined {
   const scopedUserId = resolveUserId(userId)
-  const row = getDb().transaction(() => {
-    if (seen) {
-      const sql = scopedUserId == null
-        ? "UPDATE articles SET seen_at = datetime('now') WHERE id = ? AND seen_at IS NULL"
-        : "UPDATE articles SET seen_at = datetime('now') WHERE id = ? AND user_id = ? AND seen_at IS NULL"
-      getDb().prepare(sql).run(...(scopedUserId == null ? [id] : [id, scopedUserId]))
-    } else {
-      const sql = scopedUserId == null
-        ? 'UPDATE articles SET seen_at = NULL, read_at = NULL WHERE id = ?'
-        : 'UPDATE articles SET seen_at = NULL, read_at = NULL WHERE id = ? AND user_id = ?'
-      getDb().prepare(sql).run(...(scopedUserId == null ? [id] : [id, scopedUserId]))
-    }
-    const sql = scopedUserId == null
-      ? 'SELECT seen_at, read_at FROM articles WHERE id = ?'
-      : 'SELECT seen_at, read_at FROM articles WHERE id = ? AND user_id = ?'
-    return getDb().prepare(sql).get(...(scopedUserId == null ? [id] : [id, scopedUserId])) as { seen_at: string | null; read_at: string | null } | undefined
-  })()
+  const updateSql = seen
+    ? `UPDATE articles
+       SET seen_at = datetime('now')
+       WHERE id = ?
+         ${scopedUserId == null ? '' : 'AND user_id = ?'}
+         AND seen_at IS NULL
+       RETURNING seen_at, read_at`
+    : `UPDATE articles
+       SET seen_at = NULL, read_at = NULL
+       WHERE id = ?
+         ${scopedUserId == null ? '' : 'AND user_id = ?'}
+         AND (seen_at IS NOT NULL OR read_at IS NOT NULL)
+       RETURNING seen_at, read_at`
+  const args = scopedUserId == null ? [id] : [id, scopedUserId]
+  const changedRow = getDb().prepare(updateSql).get(...args) as { seen_at: string | null; read_at: string | null } | undefined
+  const row = changedRow ?? getDb().prepare(
+    `SELECT seen_at, read_at FROM articles WHERE id = ? ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
+  ).get(...args) as { seen_at: string | null; read_at: string | null } | undefined
   if (!row) return undefined
+  if (!changedRow) return { seen_at: row.seen_at, read_at: row.read_at }
   if (!seen) {
-    updateScoreDb(id)
-    syncScoreToSearch(id)
+    invalidateInboxRankingCaches(scopedUserId)
+    updateScore(id)
   }
   syncArticleFiltersToSearch([{ id, is_unread: !seen }])
   return { seen_at: row.seen_at, read_at: row.read_at }
@@ -1053,39 +1327,34 @@ export function markArticlesSeen(ids: number[], userId?: number | null): { updat
   if (ids.length === 0) return { updated: 0 }
   const scopedUserId = resolveUserId(userId)
   const placeholders = ids.map(() => '?').join(',')
-  const result = getDb().prepare(
+  const updatedRows = getDb().prepare(
     `UPDATE articles SET seen_at = datetime('now')
      WHERE id IN (${placeholders})
        ${scopedUserId == null ? '' : 'AND user_id = ?'}
-       AND seen_at IS NULL`,
-  ).run(...ids, ...(scopedUserId == null ? [] : [scopedUserId]))
-  if (result.changes > 0) {
-    syncArticleFiltersToSearch(ids.map(id => ({ id, is_unread: false })))
+       AND seen_at IS NULL
+     RETURNING id`,
+  ).all(...ids, ...(scopedUserId == null ? [] : [scopedUserId])) as { id: number }[]
+  if (updatedRows.length > 0) {
+    syncArticleFiltersToSearch(updatedRows.map(row => ({ id: row.id, is_unread: false })))
   }
-  return { updated: result.changes }
+  return { updated: updatedRows.length }
 }
 
 export function markAllSeenByFeed(feedId: number, userId?: number | null): { updated: number } {
   const scopedUserId = resolveUserId(userId)
-  // Collect affected IDs before update for search sync
-  const affectedIds = (getDb().prepare(
-    `SELECT id FROM active_articles
-     WHERE feed_id = ?
-       ${scopedUserId == null ? '' : 'AND user_id = ?'}
-       AND seen_at IS NULL`,
-  ).all(...(scopedUserId == null ? [feedId] : [feedId, scopedUserId])) as { id: number }[]).map(r => r.id)
-  const result = getDb().prepare(`
+  const updatedRows = getDb().prepare(`
     UPDATE articles
     SET seen_at = datetime('now')
     WHERE feed_id = ?
       ${scopedUserId == null ? '' : 'AND user_id = ?'}
       AND seen_at IS NULL
       AND purged_at IS NULL
-  `).run(...(scopedUserId == null ? [feedId] : [feedId, scopedUserId]))
-  if (affectedIds.length > 0) {
-    syncArticleFiltersToSearch(affectedIds.map(id => ({ id, is_unread: false })))
+    RETURNING id
+  `).all(...(scopedUserId == null ? [feedId] : [feedId, scopedUserId])) as { id: number }[]
+  if (updatedRows.length > 0) {
+    syncArticleFiltersToSearch(updatedRows.map(row => ({ id: row.id, is_unread: false })))
   }
-  return { updated: result.changes }
+  return { updated: updatedRows.length }
 }
 
 export function markArticleLiked(
@@ -1094,26 +1363,28 @@ export function markArticleLiked(
   userId?: number | null,
 ): { liked_at: string | null } | undefined {
   const scopedUserId = resolveUserId(userId)
-  const row = getDb().transaction(() => {
-    if (liked) {
-      const sql = scopedUserId == null
-        ? "UPDATE articles SET liked_at = datetime('now') WHERE id = ? AND liked_at IS NULL"
-        : "UPDATE articles SET liked_at = datetime('now') WHERE id = ? AND user_id = ? AND liked_at IS NULL"
-      getDb().prepare(sql).run(...(scopedUserId == null ? [id] : [id, scopedUserId]))
-    } else {
-      const sql = scopedUserId == null
-        ? 'UPDATE articles SET liked_at = NULL WHERE id = ?'
-        : 'UPDATE articles SET liked_at = NULL WHERE id = ? AND user_id = ?'
-      getDb().prepare(sql).run(...(scopedUserId == null ? [id] : [id, scopedUserId]))
-    }
-    const sql = scopedUserId == null
-      ? 'SELECT liked_at FROM articles WHERE id = ?'
-      : 'SELECT liked_at FROM articles WHERE id = ? AND user_id = ?'
-    return getDb().prepare(sql).get(...(scopedUserId == null ? [id] : [id, scopedUserId])) as { liked_at: string | null } | undefined
-  })()
+  const updateSql = liked
+    ? `UPDATE articles
+       SET liked_at = datetime('now')
+       WHERE id = ?
+         ${scopedUserId == null ? '' : 'AND user_id = ?'}
+         AND liked_at IS NULL
+       RETURNING liked_at`
+    : `UPDATE articles
+       SET liked_at = NULL
+       WHERE id = ?
+         ${scopedUserId == null ? '' : 'AND user_id = ?'}
+         AND liked_at IS NOT NULL
+       RETURNING liked_at`
+  const args = scopedUserId == null ? [id] : [id, scopedUserId]
+  const changedRow = getDb().prepare(updateSql).get(...args) as { liked_at: string | null } | undefined
+  const row = changedRow ?? getDb().prepare(
+    `SELECT liked_at FROM articles WHERE id = ? ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
+  ).get(...args) as { liked_at: string | null } | undefined
   if (!row) return undefined
-  updateScoreDb(id)
-  syncScoreToSearch(id)
+  if (!changedRow) return { liked_at: row.liked_at }
+  invalidateInboxRankingCaches(scopedUserId)
+  updateScore(id)
   syncArticleFiltersToSearch([{ id, is_liked: liked }])
   return { liked_at: row.liked_at }
 }
@@ -1129,32 +1400,50 @@ export function getLikeCount(userId?: number | null): number {
   return row.cnt
 }
 
+export function getArticleCollectionCounts(userId?: number | null): { bookmarkCount: number; likeCount: number } {
+  const scopedUserId = resolveUserId(userId)
+  const row = scopedUserId == null
+    ? getDb().prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM active_articles WHERE bookmarked_at IS NOT NULL) AS bookmark_count,
+      (SELECT COUNT(*) FROM active_articles WHERE liked_at IS NOT NULL) AS like_count
+  `).get() as { bookmark_count: number; like_count: number }
+    : getDb().prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM active_articles WHERE user_id = ? AND bookmarked_at IS NOT NULL) AS bookmark_count,
+      (SELECT COUNT(*) FROM active_articles WHERE user_id = ? AND liked_at IS NOT NULL) AS like_count
+  `).get(scopedUserId, scopedUserId) as { bookmark_count: number; like_count: number }
+  return { bookmarkCount: row.bookmark_count, likeCount: row.like_count }
+}
+
 export function markArticleBookmarked(
   id: number,
   bookmarked: boolean,
   userId?: number | null,
 ): { bookmarked_at: string | null } | undefined {
   const scopedUserId = resolveUserId(userId)
-  const row = getDb().transaction(() => {
-    if (bookmarked) {
-      const sql = scopedUserId == null
-        ? "UPDATE articles SET bookmarked_at = datetime('now') WHERE id = ? AND bookmarked_at IS NULL"
-        : "UPDATE articles SET bookmarked_at = datetime('now') WHERE id = ? AND user_id = ? AND bookmarked_at IS NULL"
-      getDb().prepare(sql).run(...(scopedUserId == null ? [id] : [id, scopedUserId]))
-    } else {
-      const sql = scopedUserId == null
-        ? 'UPDATE articles SET bookmarked_at = NULL WHERE id = ?'
-        : 'UPDATE articles SET bookmarked_at = NULL WHERE id = ? AND user_id = ?'
-      getDb().prepare(sql).run(...(scopedUserId == null ? [id] : [id, scopedUserId]))
-    }
-    const sql = scopedUserId == null
-      ? 'SELECT bookmarked_at FROM articles WHERE id = ?'
-      : 'SELECT bookmarked_at FROM articles WHERE id = ? AND user_id = ?'
-    return getDb().prepare(sql).get(...(scopedUserId == null ? [id] : [id, scopedUserId])) as { bookmarked_at: string | null } | undefined
-  })()
+  const updateSql = bookmarked
+    ? `UPDATE articles
+       SET bookmarked_at = datetime('now')
+       WHERE id = ?
+         ${scopedUserId == null ? '' : 'AND user_id = ?'}
+         AND bookmarked_at IS NULL
+       RETURNING bookmarked_at`
+    : `UPDATE articles
+       SET bookmarked_at = NULL
+       WHERE id = ?
+         ${scopedUserId == null ? '' : 'AND user_id = ?'}
+         AND bookmarked_at IS NOT NULL
+       RETURNING bookmarked_at`
+  const args = scopedUserId == null ? [id] : [id, scopedUserId]
+  const changedRow = getDb().prepare(updateSql).get(...args) as { bookmarked_at: string | null } | undefined
+  const row = changedRow ?? getDb().prepare(
+    `SELECT bookmarked_at FROM articles WHERE id = ? ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
+  ).get(...args) as { bookmarked_at: string | null } | undefined
   if (!row) return undefined
-  updateScoreDb(id)
-  syncScoreToSearch(id)
+  if (!changedRow) return { bookmarked_at: row.bookmarked_at }
+  invalidateInboxRankingCaches(scopedUserId)
+  updateScore(id)
   syncArticleFiltersToSearch([{ id, is_bookmarked: bookmarked }])
   return { bookmarked_at: row.bookmarked_at }
 }
@@ -1175,23 +1464,16 @@ export function recordArticleRead(
   userId?: number | null,
 ): { seen_at: string | null; read_at: string | null } | undefined {
   const scopedUserId = resolveUserId(userId)
-  const row = getDb().transaction(() => {
-    getDb().prepare(
-      `UPDATE articles
-       SET read_at = datetime('now'), seen_at = COALESCE(seen_at, datetime('now'))
-       WHERE id = ?
-         ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
-    ).run(...(scopedUserId == null ? [id] : [id, scopedUserId]))
-    return getDb().prepare(
-      `SELECT seen_at, read_at
-       FROM articles
-       WHERE id = ?
-         ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
-    ).get(...(scopedUserId == null ? [id] : [id, scopedUserId])) as { seen_at: string | null; read_at: string | null } | undefined
-  })()
+  const row = getDb().prepare(
+    `UPDATE articles
+     SET read_at = datetime('now'), seen_at = COALESCE(seen_at, datetime('now'))
+     WHERE id = ?
+       ${scopedUserId == null ? '' : 'AND user_id = ?'}
+     RETURNING seen_at, read_at`,
+  ).get(...(scopedUserId == null ? [id] : [id, scopedUserId])) as { seen_at: string | null; read_at: string | null } | undefined
   if (!row) return undefined
-  updateScoreDb(id)
-  syncScoreToSearch(id)
+  invalidateInboxRankingCaches(scopedUserId)
+  updateScore(id)
   syncArticleFiltersToSearch([{ id, is_unread: false }])
   return { seen_at: row.seen_at, read_at: row.read_at }
 }
@@ -1218,7 +1500,7 @@ export function insertArticle(data: {
   const inferredUserId = data.user_id
     ?? resolveUserId()
     ?? (getDb().prepare('SELECT user_id FROM feeds WHERE id = ?').get(data.feed_id) as { user_id: number | null } | undefined)?.user_id
-  const info = runNamed(`
+  const doc = getNamed<MeiliArticleDoc>(`
     INSERT INTO articles (
       user_id, feed_id, category_id, title, url, article_kind, published_at, lang,
       full_text, full_text_translated, translated_lang, summary, excerpt, og_image,
@@ -1229,6 +1511,7 @@ export function insertArticle(data: {
       @full_text, @full_text_translated, @translated_lang, @summary, @excerpt, @og_image,
       @notification_body_text, @notification_media_json, @notification_media_extracted_at, @last_error
     )
+    RETURNING ${MEILI_DOC_RETURNING_COLUMNS}
   `, {
     user_id: inferredUserId ?? null,
     feed_id: data.feed_id,
@@ -1248,10 +1531,9 @@ export function insertArticle(data: {
     notification_media_extracted_at: data.notification_media_extracted_at ?? null,
     last_error: data.last_error ?? null,
   })
-  const articleId = info.lastInsertRowid as number
-  const doc = buildMeiliDoc(articleId)
-  if (doc) syncArticleToSearch(doc)
-  return articleId
+  invalidateInboxRankingCaches(inferredUserId ?? null)
+  syncArticleToSearch(doc)
+  return doc.id
 }
 
 export function updateArticleContent(
@@ -1277,21 +1559,30 @@ export function updateArticleContent(
   const scopedUserId = resolveUserId(userId)
   const fields: string[] = []
   const params: Record<string, unknown> = { id: articleId }
+  let affectsSearchDocument = false
 
   for (const [key, val] of Object.entries(data)) {
     if (val !== undefined) {
       fields.push(`${key} = @${key}`)
       params[key] = val
+      affectsSearchDocument ||= SEARCH_DOCUMENT_FIELDS.has(key)
     }
   }
   if (fields.length === 0) return
   if (scopedUserId != null) {
     params.user_id = scopedUserId
-    runNamed(`UPDATE articles SET ${fields.join(', ')} WHERE id = @id AND user_id = @user_id`, params)
-  } else {
-    runNamed(`UPDATE articles SET ${fields.join(', ')} WHERE id = @id`, params)
   }
-  const doc = buildMeiliDoc(articleId)
+  const baseSql = `
+    UPDATE articles
+    SET ${fields.join(', ')}
+    WHERE id = @id ${scopedUserId == null ? '' : 'AND user_id = @user_id'}
+  `
+  if (!affectsSearchDocument) {
+    runNamed(baseSql, params)
+    return
+  }
+
+  const doc = getNamed<MeiliArticleDoc | undefined>(`${baseSql} RETURNING ${MEILI_DOC_RETURNING_COLUMNS}`, params)
   if (doc) syncArticleToSearch(doc)
 }
 
@@ -1320,6 +1611,28 @@ export function getExistingArticlesByUrls(urls: string[]): Map<string, { id: num
 export function updateArticleKindIfMissing(id: number, articleKind: ArticleKind): boolean {
   const result = getDb().prepare('UPDATE articles SET article_kind = ? WHERE id = ? AND article_kind IS NULL').run(articleKind, id)
   return result.changes > 0
+}
+
+export function updateArticleKindsIfMissing(items: Array<{ id: number; articleKind: ArticleKind }>): number {
+  if (items.length === 0) return 0
+  const idsByKind = new Map<ArticleKind, number[]>()
+  for (const item of items) {
+    const ids = idsByKind.get(item.articleKind)
+    if (ids) {
+      ids.push(item.id)
+    } else {
+      idsByKind.set(item.articleKind, [item.id])
+    }
+  }
+
+  let updated = 0
+  for (const [articleKind, ids] of idsByKind) {
+    const placeholders = ids.map(() => '?').join(',')
+    updated += getDb().prepare(
+      `UPDATE articles SET article_kind = ? WHERE id IN (${placeholders}) AND article_kind IS NULL`,
+    ).run(articleKind, ...ids).changes
+  }
+  return updated
 }
 
 export function backfillLegacyXArticleKinds(): { updated: number } {
@@ -1361,16 +1674,7 @@ export function backfillLegacyXArticleKinds(): { updated: number } {
 
   if (updates.length === 0) return { updated: 0 }
 
-  const txn = getDb().transaction((items: Array<{ id: number; articleKind: ArticleKind }>) => {
-    let updated = 0
-    const stmt = getDb().prepare('UPDATE articles SET article_kind = ? WHERE id = ? AND article_kind IS NULL')
-    for (const item of items) {
-      updated += stmt.run(item.articleKind, item.id).changes
-    }
-    return updated
-  })
-
-  return { updated: txn(updates) }
+  return { updated: updateArticleKindsIfMissing(updates) }
 }
 
 // Backoff deadline: datetime when the article becomes eligible for retry again.
@@ -1576,7 +1880,10 @@ export function deleteArticle(id: number, userId?: number | null): boolean {
   const result = getDb().prepare(
     `DELETE FROM articles WHERE id = ? ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
   ).run(...(scopedUserId == null ? [id] : [id, scopedUserId]))
-  if (result.changes > 0) deleteArticleFromSearch(id)
+  if (result.changes > 0) {
+    invalidateInboxRankingCaches(scopedUserId)
+    deleteArticleFromSearch(id)
+  }
   return result.changes > 0
 }
 
@@ -1585,7 +1892,7 @@ export function getReadingStats(opts?: {
   until?: string
   article_ids?: number[]
   userId?: number | null
-}): { total: number; read: number; unread: number; by_feed: { feed_id: number; feed_name: string; total: number; read: number; unread: number }[] } {
+}): { total: number; read: number | null; unread: number | null; by_feed: { feed_id: number; feed_name: string; total: number; read: number; unread: number }[] } {
   const conditions: string[] = []
   const params: Record<string, unknown> = {}
   const scopedUserId = resolveUserId(opts?.userId)
@@ -1615,15 +1922,6 @@ export function getReadingStats(opts?: {
 
   const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''
 
-  const totals = getNamed<{ total: number; read: number; unread: number }>(`
-    SELECT
-      COUNT(*) AS total,
-      SUM(CASE WHEN a.seen_at IS NOT NULL THEN 1 ELSE 0 END) AS read,
-      SUM(CASE WHEN a.seen_at IS NULL THEN 1 ELSE 0 END) AS unread
-    FROM active_articles a
-    ${where}
-  `, params)
-
   const byFeed = allNamed<{ feed_id: number; feed_name: string; total: number; read: number; unread: number }>(`
     SELECT
       a.feed_id,
@@ -1637,6 +1935,17 @@ export function getReadingStats(opts?: {
     GROUP BY a.feed_id
     ORDER BY total DESC
   `, params)
+
+  const totals = byFeed.length === 0
+    ? { total: 0, read: null, unread: null }
+    : byFeed.reduce(
+        (acc, feed) => ({
+          total: acc.total + feed.total,
+          read: acc.read + feed.read,
+          unread: acc.unread + feed.unread,
+        }),
+        { total: 0, read: 0, unread: 0 },
+      )
 
   return { ...totals, by_feed: byFeed }
 }
@@ -1672,42 +1981,40 @@ export function purgeExpiredArticles(readDays: number, unreadDays: number): { pu
 
   // Collect IDs to purge — use seen_at for read status (consistent with UI unread indicator)
   const readIds = db.prepare(`
-    SELECT id FROM articles
+    SELECT id, images_archived_at FROM articles
     WHERE purged_at IS NULL
       AND feed_id NOT IN (SELECT id FROM feeds WHERE type = 'clip')
       AND seen_at IS NOT NULL
       AND seen_at < datetime('now', '-' || ? || ' days')
       AND bookmarked_at IS NULL
       AND liked_at IS NULL
-  `).all(readDays) as { id: number }[]
+  `).all(readDays) as { id: number; images_archived_at: string | null }[]
 
   const unreadIds = db.prepare(`
-    SELECT id FROM articles
+    SELECT id, images_archived_at FROM articles
     WHERE purged_at IS NULL
       AND feed_id NOT IN (SELECT id FROM feeds WHERE type = 'clip')
       AND seen_at IS NULL
       AND fetched_at < datetime('now', '-' || ? || ' days')
       AND bookmarked_at IS NULL
       AND liked_at IS NULL
-  `).all(unreadDays) as { id: number }[]
+  `).all(unreadDays) as { id: number; images_archived_at: string | null }[]
 
-  const allIds = [...readIds, ...unreadIds].map(r => r.id)
-  if (allIds.length === 0) return { purged: 0 }
+  const candidates = [...readIds, ...unreadIds]
+  if (candidates.length === 0) return { purged: 0 }
 
   // Process in batches to avoid overly large SQL
   const BATCH = 500
   let purged = 0
 
-  for (let i = 0; i < allIds.length; i += BATCH) {
-    const batch = allIds.slice(i, i + BATCH)
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    const candidateBatch = candidates.slice(i, i + BATCH)
+    const batch = candidateBatch.map(({ id }) => id)
     const placeholders = batch.map(() => '?').join(',')
 
     // Clean up archived images before the transaction (external I/O)
-    const articlesWithImages = db.prepare(
-      `SELECT id FROM articles WHERE id IN (${placeholders}) AND images_archived_at IS NOT NULL`,
-    ).all(...batch) as { id: number }[]
-
-    for (const { id } of articlesWithImages) {
+    for (const { id, images_archived_at } of candidateBatch) {
+      if (images_archived_at == null) continue
       try {
         deleteArticleImages(id)
       } catch (err) {
@@ -1739,5 +2046,6 @@ export function purgeExpiredArticles(readDays: number, unreadDays: number): { pu
     purged += result.changes
   }
 
+  if (purged > 0) invalidateInboxRankingCaches(null)
   return { purged }
 }

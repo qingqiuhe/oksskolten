@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { buildApp } from '../__tests__/helpers/buildApp.js'
-import { createFeed } from '../db.js'
+import { createFeed, createNotificationChannel, getDb } from '../db.js'
 import type { FastifyInstance } from 'fastify'
 
 // ---------------------------------------------------------------------------
@@ -386,6 +386,54 @@ describe('POST /api/feeds — RSS discovery pipeline', () => {
 
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(mockFetchSingleFeed).not.toHaveBeenCalled()
+  })
+})
+
+describe('PUT /api/feeds/:id/notification-rule', () => {
+  it('validates requested notification channels with one scoped lookup', async () => {
+    const feed = seedFeed({ name: 'Notify Feed', url: 'https://notify.example.com/feed' })
+    const channels = [0, 1, 2].map(index => createNotificationChannel({
+      type: 'feishu_webhook',
+      name: `Notify Channel ${index}`,
+      webhook_url: `https://open.feishu.cn/open-apis/bot/v2/hook/feed-rule-${index}`,
+      secret: null,
+      enabled: 1,
+    }))
+    createNotificationChannel({
+      type: 'feishu_webhook',
+      name: 'Unrelated',
+      webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/feed-rule-unrelated',
+      secret: null,
+      enabled: 1,
+    })
+
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/feeds/${feed.id}/notification-rule`,
+      headers: json,
+      payload: {
+        enabled: true,
+        delivery_mode: 'immediate',
+        translate_enabled: false,
+        max_articles_per_message: 5,
+        channel_ids: channels.map(channel => channel.id),
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().channel_ids).toEqual(channels.map(channel => channel.id))
+    const channelLookups = preparedSql.filter(sql => sql.includes('FROM notification_channels'))
+    expect(channelLookups.some(sql => sql.includes('id IN (?, ?, ?)'))).toBe(true)
+    expect(channelLookups.some(sql => sql.includes('ORDER BY created_at DESC'))).toBe(false)
+    expect(channelLookups.filter(sql => sql.includes('WHERE id = ?'))).toHaveLength(0)
   })
 })
 

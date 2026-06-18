@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setupTestDb } from './__tests__/helpers/testDb.js'
 import { buildApp } from './__tests__/helpers/buildApp.js'
 import { createApiKey } from './db/apiKeys.js'
+import { getDb } from './db/connection.js'
 import type { FastifyInstance } from 'fastify'
 
 let app: FastifyInstance
@@ -227,5 +228,35 @@ describe('GET /api/stats', () => {
     expect(body).toHaveProperty('by_feed')
     expect(body.total_articles).toBe(0)
     expect(body.total_feeds).toBe(0)
+  })
+
+  it('reads metadata and collection counts with one auxiliary query', async () => {
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/stats',
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(preparedSql.some(sql =>
+      sql.includes('AS feed_count') &&
+      sql.includes('AS category_count') &&
+      sql.includes('AS bookmark_count') &&
+      sql.includes('AS like_count'),
+    )).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT COUNT(*) AS cnt FROM feeds'))).toBe(false)
+    expect(preparedSql.some(sql => sql.includes('SELECT COUNT(*) AS cnt FROM categories'))).toBe(false)
+    expect(preparedSql.filter(sql =>
+      sql.includes('FROM active_articles') &&
+      sql.includes('bookmarked_at IS NOT NULL') &&
+      sql.includes('liked_at IS NOT NULL'),
+    )).toHaveLength(1)
   })
 })

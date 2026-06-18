@@ -74,6 +74,12 @@ function defaultOpts(overrides: any = {}) {
   }
 }
 
+async function waitForCalls(mock: { mock: { calls: unknown[] } }, count: number) {
+  for (let attempts = 0; attempts < 20 && mock.mock.calls.length < count; attempts += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+}
+
 describe('useFeedActions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -269,6 +275,49 @@ describe('useFeedActions', () => {
       expect(opts.startFeedFetch).toHaveBeenCalledWith(10)
       expect(opts.startFeedFetch).not.toHaveBeenCalledWith(11)
       expect(opts.startFeedFetch).toHaveBeenCalledWith(12)
+    })
+
+    it('limits category feed refresh concurrency', async () => {
+      const feeds = Array.from({ length: 8 }, (_, index) => makeFeed({ id: index + 1, disabled: 0 }))
+      const categorized = new Map([[1, feeds]])
+      let activeFetches = 0
+      let maxActiveFetches = 0
+      const resolvers: Array<() => void> = []
+      const startFeedFetch = vi.fn(async () => {
+        activeFetches += 1
+        maxActiveFetches = Math.max(maxActiveFetches, activeFetches)
+        await new Promise<void>(resolve => resolvers.push(resolve))
+        activeFetches -= 1
+        return { totalNew: 1 }
+      })
+      const opts = defaultOpts({ categorized, startFeedFetch, onFetchComplete: vi.fn() })
+      const { result } = renderHook(() => useFeedActions(opts))
+      const category = makeCategory({ id: 1, name: 'Tech' })
+
+      let actionPromise!: Promise<void>
+      act(() => {
+        actionPromise = result.current.handleFetchCategory(category)
+      })
+
+      await waitForCalls(startFeedFetch, 4)
+      expect(startFeedFetch).toHaveBeenCalledTimes(4)
+      expect(maxActiveFetches).toBe(4)
+
+      resolvers.splice(0).forEach(resolve => resolve())
+      await waitForCalls(startFeedFetch, 8)
+      expect(startFeedFetch).toHaveBeenCalledTimes(8)
+      expect(maxActiveFetches).toBe(4)
+
+      resolvers.splice(0).forEach(resolve => resolve())
+      await act(async () => {
+        await actionPromise
+      })
+
+      expect(opts.onFetchComplete).toHaveBeenCalledWith({
+        totalNew: 8,
+        error: undefined,
+        name: 'Tech',
+      })
     })
   })
 

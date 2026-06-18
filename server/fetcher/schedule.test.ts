@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
-import { upsertSetting } from '../db.js'
+import { getDb, upsertSetting } from '../db.js'
 import {
   DEFAULT_MIN_INTERVAL_MINUTES,
   FETCH_MIN_INTERVAL_SETTING_KEY,
@@ -13,10 +13,12 @@ import {
   computeEmpiricalInterval,
   computeInterval,
   getFetchScheduleConfig,
+  invalidateFetchScheduleConfigCache,
 } from './schedule.js'
 
 beforeEach(() => {
   setupTestDb()
+  invalidateFetchScheduleConfigCache()
 })
 
 describe('getFetchScheduleConfig', () => {
@@ -38,6 +40,22 @@ describe('getFetchScheduleConfig', () => {
   it('falls back to the default when the stored value is invalid', () => {
     upsertSetting(FETCH_MIN_INTERVAL_SETTING_KEY, '0')
     expect(getFetchScheduleConfig().minIntervalMinutes).toBe(DEFAULT_MIN_INTERVAL_MINUTES)
+  })
+
+  it('reuses a short-lived cached setting value', () => {
+    upsertSetting(FETCH_MIN_INTERVAL_SETTING_KEY, '5')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    expect(getFetchScheduleConfig(1_000).minIntervalMinutes).toBe(5)
+    expect(getFetchScheduleConfig(2_000).minIntervalMinutes).toBe(5)
+
+    expect(preparedSql.filter(sql => sql.includes('FROM instance_settings') && sql.includes('WHERE key = ?'))).toHaveLength(1)
   })
 })
 

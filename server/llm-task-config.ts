@@ -1,5 +1,5 @@
 import { TASK_DEFAULTS } from '../shared/models.js'
-import { getSetting, getCustomLLMProviderSecretById } from './db.js'
+import { getSettings, getCustomLLMProviderSecretById } from './db.js'
 
 export type LLMTaskName = 'chat' | 'summary' | 'translate'
 
@@ -46,9 +46,10 @@ const TASK_DEFAULT_CONFIG: Record<LLMTaskName, { provider: string; model: string
 export function resolveLLMTaskConfig(task: LLMTaskName, userId?: number | null): ResolvedLLMTaskConfig {
   const keys = TASK_PREF_KEYS[task]
   const defaults = TASK_DEFAULT_CONFIG[task]
-  const provider = getSetting(keys.providerKey, userId) || defaults.provider
-  const model = getSetting(keys.modelKey, userId) || defaults.model
-  const providerInstanceRaw = getSetting(keys.providerInstanceKey, userId)
+  const settings = getSettings([keys.providerKey, keys.modelKey, keys.providerInstanceKey], userId)
+  const provider = settings[keys.providerKey] || defaults.provider
+  const model = settings[keys.modelKey] || defaults.model
+  const providerInstanceRaw = settings[keys.providerInstanceKey]
   const providerInstanceId = providerInstanceRaw ? Number(providerInstanceRaw) : null
 
   if (provider !== 'openai' || providerInstanceId == null) {

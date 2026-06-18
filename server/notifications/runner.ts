@@ -17,6 +17,24 @@ import { DEFAULT_NOTIFICATION_TIMEZONE, parseNotificationTimezoneOffsetMinutes }
 import { truncateNotificationText } from '../../shared/notification-message.js'
 
 const log = logger.child('notifications')
+const NOTIFICATION_TRANSLATION_CONCURRENCY = 4
+
+async function runLimited<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0
+  const workerCount = Math.min(concurrency, items.length)
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= items.length) return
+      await worker(items[index])
+    }
+  }))
+}
 
 function parseUtcLikeDate(value: string | null): Date {
   const normalized = value
@@ -39,13 +57,32 @@ function formatArticleTime(value: string | null, timezone: string): string {
 async function deliverRule(rule: DueNotificationRule): Promise<void> {
   const bindings = listRuleBindings(rule.id)
   const pendingByBinding = new Map<number, ReturnType<typeof getPendingNotificationArticles>>()
+  const pendingByCursor = new Map<number | null, ReturnType<typeof getPendingNotificationArticles>>()
+  const channelsById = new Map<number, ReturnType<typeof getNotificationChannelById> | null>()
   let pendingForTranslation: ReturnType<typeof getPendingNotificationArticles> | null = null
 
+  function getChannel(channelId: number) {
+    if (!channelsById.has(channelId)) {
+      channelsById.set(channelId, getNotificationChannelById(channelId, rule.user_id) ?? null)
+    }
+    return channelsById.get(channelId)
+  }
+
+  function getPending(lastNotifiedArticleId: number | null) {
+    if (!pendingByCursor.has(lastNotifiedArticleId)) {
+      pendingByCursor.set(
+        lastNotifiedArticleId,
+        getPendingNotificationArticles(rule.feed_id, lastNotifiedArticleId, rule.max_articles_per_message),
+      )
+    }
+    return pendingByCursor.get(lastNotifiedArticleId)!
+  }
+
   for (const binding of bindings) {
-    const channel = getNotificationChannelById(binding.channel_id, rule.user_id)
+    const channel = getChannel(binding.channel_id)
     if (!channel || channel.enabled !== 1) continue
 
-    const pending = getPendingNotificationArticles(rule.feed_id, binding.last_notified_article_id, rule.max_articles_per_message)
+    const pending = getPending(binding.last_notified_article_id)
     pendingByBinding.set(binding.channel_id, pending)
     if (pending.total === 0 || pending.maxArticleId == null) continue
     if (!pendingForTranslation || pending.total > pendingForTranslation.total) {
@@ -55,7 +92,7 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
 
   const translationCache = new Map<number, string | null>()
   if (rule.content_mode === 'title_and_body' && rule.translate_enabled === 1 && pendingForTranslation) {
-    await Promise.all(pendingForTranslation.articles.map(async (article) => {
+    await runLimited(pendingForTranslation.articles, NOTIFICATION_TRANSLATION_CONCURRENCY, async (article) => {
       const truncatedBody = truncateNotificationText(article.notification_body_text, rule.max_body_chars)
       if (!truncatedBody) {
         translationCache.set(article.id, null)
@@ -74,15 +111,15 @@ async function deliverRule(rule: DueNotificationRule): Promise<void> {
         translationCache.set(article.id, null)
         log.warn({ err, ruleId: rule.id, articleId: article.id }, 'notification translation failed, falling back to source text')
       }
-    }))
+    })
   }
 
   let retryPending = false
   for (const binding of bindings) {
-    const channel = getNotificationChannelById(binding.channel_id, rule.user_id)
+    const channel = getChannel(binding.channel_id)
     if (!channel || channel.enabled !== 1) continue
 
-    const pending = pendingByBinding.get(binding.channel_id) ?? getPendingNotificationArticles(rule.feed_id, binding.last_notified_article_id, rule.max_articles_per_message)
+    const pending = pendingByBinding.get(binding.channel_id) ?? getPending(binding.last_notified_article_id)
     if (pending.total === 0 || pending.maxArticleId == null) {
       continue
     }

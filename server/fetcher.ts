@@ -5,18 +5,17 @@ import {
   getRetryArticles,
   getRetryStats,
   insertArticle,
+  markFeedFetchSuccess,
   updateArticleContent,
-  updateArticleKindIfMissing,
+  updateArticleKindsIfMissing,
   updateFeedError,
   updateFeedRateLimit,
-  updateFeedCacheHeaders,
-  updateFeedSchedule,
   type Feed,
   type Article,
 } from './db.js'
 
-import { Semaphore, CONCURRENCY, errorMessage } from './fetcher/util.js'
-import { detectAndStoreSimilarArticles } from './similarity.js'
+import { CONCURRENCY, errorMessage } from './fetcher/util.js'
+import { enqueueSimilarityDetection } from './similarity.js'
 import { type FetchProgressEvent, emitProgress, markFeedDone } from './fetcher/progress.js'
 import { fetchFullText, isBotBlockPage, convertHtmlToMarkdown, markdownToExcerpt, extractFirstVideoPoster, MIN_EXTRACTED_LENGTH } from './fetcher/content.js'
 import { fetchAndTransformJsonApiFeed, parseJsonApiSourceConfig, type JsonApiItem } from './fetcher/json-api.js'
@@ -42,6 +41,7 @@ export {
   streamTranslateArticle,
   translateText,
   streamTranslateText,
+  createTextTranslator,
 } from './fetcher/ai.js'
 export type { AiTextResult, AiBillingMode } from './fetcher/ai.js'
 
@@ -214,8 +214,12 @@ async function processArticle(task: ArticleTask): Promise<boolean> {
         notification_media_extracted_at: notificationPreview.notification_media_extracted_at,
         last_error: content.lastError,
       })
-      // Fire-and-forget: detect similar articles asynchronously
-      void detectAndStoreSimilarArticles(articleId, task.title, task.feed_id, task.published_at)
+      enqueueSimilarityDetection({
+        articleId,
+        title: task.title,
+        feedId: task.feed_id,
+        publishedAt: task.published_at,
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (!msg.includes('UNIQUE constraint failed')) {
@@ -241,12 +245,14 @@ function backfillExistingArticleKinds(
   rssResult: FetchRssResult,
   existingArticles: Map<string, { id: number; article_kind: ArticleKind | null }>,
 ): void {
+  const updates: Array<{ id: number; articleKind: ArticleKind }> = []
   for (const item of rssResult.items) {
     if (!item.article_kind) continue
     const existing = existingArticles.get(item.url)
     if (!existing || existing.article_kind) continue
-    updateArticleKindIfMissing(existing.id, item.article_kind)
+    updates.push({ id: existing.id, articleKind: item.article_kind })
   }
+  updateArticleKindsIfMissing(updates)
 }
 
 interface FeedFetchItem {
@@ -291,6 +297,24 @@ function mapJsonApiItems(items: JsonApiItem[]): FeedFetchItem[] {
   }))
 }
 
+async function runLimited<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0
+  const workerCount = Math.min(concurrency, items.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= items.length) return
+      await worker(items[index])
+    }
+  }))
+}
+
 // --- Single feed fetch ---
 
 export async function fetchSingleFeed(
@@ -298,13 +322,15 @@ export async function fetchSingleFeed(
   onProgress?: (event: FetchProgressEvent) => void,
   opts?: { skipCache?: boolean },
 ): Promise<void> {
-  const semaphore = new Semaphore(CONCURRENCY)
   const { minIntervalSeconds } = getFetchScheduleConfig()
 
   let items: FeedFetchItem[]
   let notModified: boolean
   let httpCacheSeconds: number | null
   let rssTtlSeconds: number | null
+  let etag: string | null
+  let lastModified: string | null
+  let contentHash: string | null
   try {
     if (feed.ingest_kind === 'json_api') {
       const sourceConfig = parseJsonApiSourceConfig(getFeedSourceConfig(feed.id))
@@ -321,16 +347,18 @@ export async function fetchSingleFeed(
       notModified = jsonApiResult.notModified
       httpCacheSeconds = jsonApiResult.httpCacheSeconds
       rssTtlSeconds = null
-      updateFeedError(feed.id, null)
-      updateFeedCacheHeaders(feed.id, jsonApiResult.etag, jsonApiResult.lastModified, jsonApiResult.contentHash)
+      etag = jsonApiResult.etag
+      lastModified = jsonApiResult.lastModified
+      contentHash = jsonApiResult.contentHash
     } else {
       const rssResult = await fetchAndParseRss(feed, opts)
       items = rssResult.items
       notModified = rssResult.notModified
       httpCacheSeconds = rssResult.httpCacheSeconds
       rssTtlSeconds = rssResult.rssTtlSeconds
-      updateFeedError(feed.id, null)
-      updateFeedCacheHeaders(feed.id, rssResult.etag, rssResult.lastModified, rssResult.contentHash)
+      etag = rssResult.etag
+      lastModified = rssResult.lastModified
+      contentHash = rssResult.contentHash
     }
   } catch (err) {
     if (err instanceof RateLimitError) {
@@ -344,19 +372,20 @@ export async function fetchSingleFeed(
     return
   }
 
+  const interval = notModified
+    ? clampInterval(feed.check_interval ?? DEFAULT_INTERVAL, minIntervalSeconds)
+    : computeInterval(httpCacheSeconds, rssTtlSeconds, computeEmpiricalInterval(items), minIntervalSeconds)
+  markFeedFetchSuccess(feed.id, {
+    nextCheckAt: sqliteFuture(interval),
+    checkInterval: interval,
+    etag,
+    lastModified,
+    contentHash,
+  })
+
   if (notModified) {
-    // Reschedule using stored interval (or default)
-    const interval = clampInterval(feed.check_interval ?? DEFAULT_INTERVAL, minIntervalSeconds)
-    updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
     log.info(`Feed ${feed.name}: not modified (304)`)
     return
-  }
-
-  // Compute and store adaptive interval
-  {
-    const empirical = computeEmpiricalInterval(items)
-    const interval = computeInterval(httpCacheSeconds, rssTtlSeconds, empirical, minIntervalSeconds)
-    updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
   }
 
   const urls = items.map(i => i.url)
@@ -379,29 +408,25 @@ export async function fetchSingleFeed(
   onProgress?.(foundEvent)
 
   log.info(`Feed ${feed.name}: processing ${total} articles`)
-  await Promise.all(
-    tasks.map(task =>
-      semaphore.run(async () => {
-        try {
-          await processArticle(task)
-          if (task.kind === 'new') {
-            fetched++
-            const doneEvent: FetchProgressEvent = { type: 'article-done', feed_id: feed.id, fetched, total }
-            emitProgress(doneEvent)
-            onProgress?.(doneEvent)
-          }
-        } catch (err) {
-          log.error('Article error:', err)
-          if (task.kind === 'new') {
-            fetched++
-            const doneEvent: FetchProgressEvent = { type: 'article-done', feed_id: feed.id, fetched, total }
-            emitProgress(doneEvent)
-            onProgress?.(doneEvent)
-          }
-        }
-      }),
-    ),
-  )
+  await runLimited(tasks, CONCURRENCY, async (task) => {
+    try {
+      await processArticle(task)
+      if (task.kind === 'new') {
+        fetched++
+        const doneEvent: FetchProgressEvent = { type: 'article-done', feed_id: feed.id, fetched, total }
+        emitProgress(doneEvent)
+        onProgress?.(doneEvent)
+      }
+    } catch (err) {
+      log.error('Article error:', err)
+      if (task.kind === 'new') {
+        fetched++
+        const doneEvent: FetchProgressEvent = { type: 'article-done', feed_id: feed.id, fetched, total }
+        emitProgress(doneEvent)
+        onProgress?.(doneEvent)
+      }
+    }
+  })
 
   const completeEvent: FetchProgressEvent = { type: 'feed-complete', feed_id: feed.id }
   markFeedDone(feed.id)
@@ -423,7 +448,6 @@ export async function fetchAllFeeds(
   onProgress?: (event: FetchProgressEvent) => void,
 ): Promise<void> {
   const feeds = getEnabledFeeds()
-  const semaphore = new Semaphore(CONCURRENCY)
   const { minIntervalSeconds } = getFetchScheduleConfig()
 
   const allTasks: ArticleTask[] = []
@@ -432,78 +456,85 @@ export async function fetchAllFeeds(
   // Track new article counts per feed for progress events
   const feedNewCounts = new Map<number, number>()
 
-  await Promise.all(
-    feeds.map(feed =>
-      semaphore.run(async () => {
-        try {
-          let items: FeedFetchItem[]
-          let notModified: boolean
-          let httpCacheSeconds: number | null
-          let rssTtlSeconds: number | null
+  await runLimited(
+    feeds,
+    CONCURRENCY,
+    async (feed) => {
+      try {
+        let items: FeedFetchItem[]
+        let notModified: boolean
+        let httpCacheSeconds: number | null
+        let rssTtlSeconds: number | null
+        let etag: string | null
+        let lastModified: string | null
+        let contentHash: string | null
 
-          if (feed.ingest_kind === 'json_api') {
-            const sourceConfig = parseJsonApiSourceConfig(getFeedSourceConfig(feed.id))
-            if (!sourceConfig) throw new Error('Missing or invalid JSON API source config')
-            const jsonApiResult = await fetchAndTransformJsonApiFeed({
-              endpointUrl: feed.url,
-              transformScript: sourceConfig.transform_script,
-              etag: feed.etag,
-              lastModified: feed.last_modified,
-              lastContentHash: feed.last_content_hash,
-            })
-            items = mapJsonApiItems(jsonApiResult.items)
-            notModified = jsonApiResult.notModified
-            httpCacheSeconds = jsonApiResult.httpCacheSeconds
-            rssTtlSeconds = null
-            updateFeedError(feed.id, null)
-            updateFeedCacheHeaders(feed.id, jsonApiResult.etag, jsonApiResult.lastModified, jsonApiResult.contentHash)
-          } else {
-            const rssResult = await fetchAndParseRss(feed)
-            items = rssResult.items
-            notModified = rssResult.notModified
-            httpCacheSeconds = rssResult.httpCacheSeconds
-            rssTtlSeconds = rssResult.rssTtlSeconds
-            updateFeedError(feed.id, null)
-            updateFeedCacheHeaders(feed.id, rssResult.etag, rssResult.lastModified, rssResult.contentHash)
-          }
-
-          if (notModified) {
-            const interval = clampInterval(feed.check_interval ?? DEFAULT_INTERVAL, minIntervalSeconds)
-            updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
-            log.info(`Feed ${feed.name}: not modified (304)`)
-            feedNewCounts.set(feed.id, 0)
-            return
-          }
-
-          // Compute and store adaptive interval
-          {
-            const empirical = computeEmpiricalInterval(items)
-            const interval = computeInterval(httpCacheSeconds, rssTtlSeconds, empirical, minIntervalSeconds)
-            updateFeedSchedule(feed.id, sqliteFuture(interval), interval)
-          }
-
-          const urls = items.map(i => i.url)
-          const existing = getExistingArticlesByUrls(urls)
-          if (feed.ingest_kind !== 'json_api') {
-            backfillExistingArticleKinds({ items, notModified: false, etag: null, lastModified: null, contentHash: null, httpCacheSeconds: null, rssTtlSeconds: null }, existing)
-          }
-
-          const newItems = mapFeedItemsToNewArticleTasks(feed, items, existing)
-
-          allTasks.push(...newItems)
-          feedNewCounts.set(feed.id, newItems.length)
-        } catch (err) {
-          if (err instanceof RateLimitError) {
-            log.warn(`Feed ${feed.name}: ${err.message}`)
-            updateFeedRateLimit(feed.id, err.retryAfterSeconds)
-            return
-          }
-          const msg = errorMessage(err)
-          log.error(`Feed ${feed.name}: ${msg}`)
-          updateFeedError(feed.id, msg)
+        if (feed.ingest_kind === 'json_api') {
+          const sourceConfig = parseJsonApiSourceConfig(getFeedSourceConfig(feed.id))
+          if (!sourceConfig) throw new Error('Missing or invalid JSON API source config')
+          const jsonApiResult = await fetchAndTransformJsonApiFeed({
+            endpointUrl: feed.url,
+            transformScript: sourceConfig.transform_script,
+            etag: feed.etag,
+            lastModified: feed.last_modified,
+            lastContentHash: feed.last_content_hash,
+          })
+          items = mapJsonApiItems(jsonApiResult.items)
+          notModified = jsonApiResult.notModified
+          httpCacheSeconds = jsonApiResult.httpCacheSeconds
+          rssTtlSeconds = null
+          etag = jsonApiResult.etag
+          lastModified = jsonApiResult.lastModified
+          contentHash = jsonApiResult.contentHash
+        } else {
+          const rssResult = await fetchAndParseRss(feed)
+          items = rssResult.items
+          notModified = rssResult.notModified
+          httpCacheSeconds = rssResult.httpCacheSeconds
+          rssTtlSeconds = rssResult.rssTtlSeconds
+          etag = rssResult.etag
+          lastModified = rssResult.lastModified
+          contentHash = rssResult.contentHash
         }
-      }),
-    ),
+
+        const interval = notModified
+          ? clampInterval(feed.check_interval ?? DEFAULT_INTERVAL, minIntervalSeconds)
+          : computeInterval(httpCacheSeconds, rssTtlSeconds, computeEmpiricalInterval(items), minIntervalSeconds)
+        markFeedFetchSuccess(feed.id, {
+          nextCheckAt: sqliteFuture(interval),
+          checkInterval: interval,
+          etag,
+          lastModified,
+          contentHash,
+        })
+
+        if (notModified) {
+          log.info(`Feed ${feed.name}: not modified (304)`)
+          feedNewCounts.set(feed.id, 0)
+          return
+        }
+
+        const urls = items.map(i => i.url)
+        const existing = getExistingArticlesByUrls(urls)
+        if (feed.ingest_kind !== 'json_api') {
+          backfillExistingArticleKinds({ items, notModified: false, etag: null, lastModified: null, contentHash: null, httpCacheSeconds: null, rssTtlSeconds: null }, existing)
+        }
+
+        const newItems = mapFeedItemsToNewArticleTasks(feed, items, existing)
+
+        allTasks.push(...newItems)
+        feedNewCounts.set(feed.id, newItems.length)
+      } catch (err) {
+        if (err instanceof RateLimitError) {
+          log.warn(`Feed ${feed.name}: ${err.message}`)
+          updateFeedRateLimit(feed.id, err.retryAfterSeconds)
+          return
+        }
+        const msg = errorMessage(err)
+        log.error(`Feed ${feed.name}: ${msg}`)
+        updateFeedError(feed.id, msg)
+      }
+    },
   )
 
   // Phase B: Add retry candidates with backoff
@@ -540,42 +571,41 @@ export async function fetchAllFeeds(
   // Phase C: Process each article with semaphore
   // Per-feed counters for progress (only count 'new' articles)
   const feedFetchedCounts = new Map<number, number>()
-  const processingSemaphore = new Semaphore(CONCURRENCY)
-  await Promise.all(
-    allTasks.map(task =>
-      processingSemaphore.run(async () => {
-        let retryFailed = false
-        try {
-          retryFailed = await processArticle(task)
-        } catch (err) {
-          log.error('Article error:', err)
-          retryFailed = true
-          if (task.kind === 'retry') {
-            const msg = err instanceof Error ? err.message : String(err)
-            updateArticleContent(task.article.id, {
-              last_error: msg,
-            })
-          }
-        }
-        // Single place where retry_count is incremented — covers both
-        // the returned-error path and the thrown-exception path.
-        if (task.kind === 'retry' && retryFailed) {
+  await runLimited(
+    allTasks,
+    CONCURRENCY,
+    async (task) => {
+      let retryFailed = false
+      try {
+        retryFailed = await processArticle(task)
+      } catch (err) {
+        log.error('Article error:', err)
+        retryFailed = true
+        if (task.kind === 'retry') {
+          const msg = err instanceof Error ? err.message : String(err)
           updateArticleContent(task.article.id, {
-            retry_count: (task.article.retry_count ?? 0) + 1,
+            last_error: msg,
           })
         }
-        if (task.kind === 'new') {
-          const feedId = task.feed_id
-          const prev = feedFetchedCounts.get(feedId) ?? 0
-          const fetched = prev + 1
-          feedFetchedCounts.set(feedId, fetched)
-          const total = feedNewCounts.get(feedId) ?? 0
-          const event: FetchProgressEvent = { type: 'article-done', feed_id: feedId, fetched, total }
-          emitProgress(event)
-          onProgress?.(event)
-        }
-      }),
-    ),
+      }
+      // Single place where retry_count is incremented — covers both
+      // the returned-error path and the thrown-exception path.
+      if (task.kind === 'retry' && retryFailed) {
+        updateArticleContent(task.article.id, {
+          retry_count: (task.article.retry_count ?? 0) + 1,
+        })
+      }
+      if (task.kind === 'new') {
+        const feedId = task.feed_id
+        const prev = feedFetchedCounts.get(feedId) ?? 0
+        const fetched = prev + 1
+        feedFetchedCounts.set(feedId, fetched)
+        const total = feedNewCounts.get(feedId) ?? 0
+        const event: FetchProgressEvent = { type: 'article-done', feed_id: feedId, fetched, total }
+        emitProgress(event)
+        onProgress?.(event)
+      }
+    },
   )
 
   // Emit feed-complete for each feed

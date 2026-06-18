@@ -1,16 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { buildApp } from '../__tests__/helpers/buildApp.js'
-import { createFeed, createCategory, insertArticle, markArticleSeen } from '../db.js'
+import { createFeed, createCategory, getDb, insertArticle, markArticleSeen, upsertSetting } from '../db.js'
 import type { FastifyInstance } from 'fastify'
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
-const { mockStreamSummarize, mockStreamTranslate } = vi.hoisted(() => ({
+const { mockStreamSummarize, mockStreamTranslate, mockCreateTextTranslator, mockTranslateText } = vi.hoisted(() => ({
   mockStreamSummarize: vi.fn(),
   mockStreamTranslate: vi.fn(),
+  mockCreateTextTranslator: vi.fn(),
+  mockTranslateText: vi.fn(),
 }))
 
 vi.mock('../fetcher.js', async () => {
@@ -23,7 +25,7 @@ vi.mock('../fetcher.js', async () => {
     streamSummarizeArticle: (...args: unknown[]) => mockStreamSummarize(...args),
     translateArticle: vi.fn().mockResolvedValue({ fullTextTranslated: '翻訳テキスト', inputTokens: 10, outputTokens: 5, billingMode: 'standard', model: 'sonnet' }),
     streamTranslateArticle: (...args: unknown[]) => mockStreamTranslate(...args),
-    translateText: vi.fn(async (text: string) => ({ fullTextTranslated: `${text} (translated)`, inputTokens: 1, outputTokens: 1, billingMode: 'standard', model: 'sonnet' })),
+    createTextTranslator: (...args: unknown[]) => mockCreateTextTranslator(...args),
     fetchProgress: new EventEmitter(),
     getFeedState: vi.fn(),
   }
@@ -56,9 +58,15 @@ function seedArticle(feedId: number, overrides: Partial<Parameters<typeof insert
 
 beforeEach(async () => {
   setupTestDb()
+  const { _clearTitleTranslateCacheForTests } = await import('./articles.js')
+  _clearTitleTranslateCacheForTests()
   app = await buildApp()
   mockStreamSummarize.mockReset()
   mockStreamTranslate.mockReset()
+  mockCreateTextTranslator.mockReset()
+  mockTranslateText.mockReset()
+  mockTranslateText.mockImplementation(async (text: string) => ({ fullTextTranslated: `${text} (translated)`, inputTokens: 1, outputTokens: 1, billingMode: 'standard', model: 'sonnet' }))
+  mockCreateTextTranslator.mockImplementation(() => (text: string) => mockTranslateText(text))
 })
 
 // ---------------------------------------------------------------------------
@@ -307,6 +315,31 @@ describe('POST /api/articles/:id/translate?stream=1', () => {
 })
 
 describe('POST /api/articles/translate-titles', () => {
+  it('resolves target language with a batched settings query', async () => {
+    upsertSetting('general.language', 'zh')
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, { title: 'Bonjour le monde', lang: 'fr' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/articles/translate-titles',
+      headers: json,
+      payload: { ids: [id] },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().target_lang).toBe('zh')
+    expect(preparedSql.some(sql => sql.includes('FROM settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM settings WHERE key = ?'))).toHaveLength(0)
+  })
+
   it('translates non-target-language titles and keeps target-language titles unchanged', async () => {
     const feed = seedFeed()
     const frId = seedArticle(feed.id, { title: 'Bonjour le monde', lang: 'fr' })
@@ -323,6 +356,91 @@ describe('POST /api/articles/translate-titles', () => {
     expect(res.json().translated_titles[frId]).toBe('Bonjour le monde (translated)')
     expect(res.json().translated_titles[enId]).toBe('Already English')
     expect(res.json().target_lang).toBe('en')
+  })
+
+  it('translates titles with bounded concurrency', async () => {
+    const feed = seedFeed()
+    const ids = Array.from({ length: 6 }, (_, index) => (
+      seedArticle(feed.id, { title: `Bonjour ${index}`, lang: 'fr' })
+    ))
+    let inFlight = 0
+    let maxInFlight = 0
+    mockTranslateText.mockImplementation(async (text: string) => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise(resolve => setTimeout(resolve, 10))
+      inFlight -= 1
+      return { fullTextTranslated: `${text} (translated)`, inputTokens: 1, outputTokens: 1, billingMode: 'standard', model: 'sonnet' }
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/articles/translate-titles',
+      headers: json,
+      payload: { ids },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(mockCreateTextTranslator).toHaveBeenCalledTimes(1)
+    expect(mockCreateTextTranslator).toHaveBeenCalledWith('en', null)
+    expect(mockTranslateText).toHaveBeenCalledTimes(6)
+    expect(maxInFlight).toBeGreaterThan(1)
+    expect(maxInFlight).toBeLessThanOrEqual(4)
+  })
+
+  it('reuses cached title translations across duplicate titles and requests', async () => {
+    const feed = seedFeed()
+    const ids = Array.from({ length: 3 }, (_, index) => (
+      seedArticle(feed.id, { title: 'Bonjour cache', lang: 'fr', url: `https://example.com/cache-${index}` })
+    ))
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/articles/translate-titles',
+      headers: json,
+      payload: { ids },
+    })
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/articles/translate-titles',
+      headers: json,
+      payload: { ids },
+    })
+
+    expect(first.statusCode).toBe(200)
+    expect(second.statusCode).toBe(200)
+    expect(mockTranslateText).toHaveBeenCalledTimes(1)
+    for (const id of ids) {
+      expect(first.json().translated_titles[id]).toBe('Bonjour cache (translated)')
+      expect(second.json().translated_titles[id]).toBe('Bonjour cache (translated)')
+    }
+  })
+
+  it('does not cache failed title translations', async () => {
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, { title: 'Bonjour retry', lang: 'fr' })
+    mockTranslateText
+      .mockRejectedValueOnce(new Error('provider failed'))
+      .mockResolvedValueOnce({ fullTextTranslated: 'Bonjour retry translated', inputTokens: 1, outputTokens: 1, billingMode: 'standard', model: 'sonnet' })
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/articles/translate-titles',
+      headers: json,
+      payload: { ids: [id] },
+    })
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/articles/translate-titles',
+      headers: json,
+      payload: { ids: [id] },
+    })
+
+    expect(first.statusCode).toBe(200)
+    expect(second.statusCode).toBe(200)
+    expect(first.json().translated_titles[id]).toBe('Bonjour retry')
+    expect(second.json().translated_titles[id]).toBe('Bonjour retry translated')
+    expect(mockTranslateText).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -358,6 +476,23 @@ describe('GET /api/articles boundary values', () => {
     const res = await app.inject({ method: 'GET', url: '/api/articles?offset=-10' })
     expect(res.statusCode).toBe(200)
     expect(res.json().articles).toHaveLength(1)
+  })
+
+  it('uses offset pages to probe has_more without requiring exact total', async () => {
+    const feed = seedFeed()
+    for (let i = 0; i < 25; i++) {
+      seedArticle(feed.id, {
+        url: `https://example.com/offset-page-${i}`,
+        published_at: new Date(Date.now() - i * 60_000).toISOString(),
+      })
+    }
+
+    const res = await app.inject({ method: 'GET', url: '/api/articles?limit=10&offset=10' })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().articles).toHaveLength(10)
+    expect(res.json().has_more).toBe(true)
+    expect(res.json().total).toBe(21)
   })
 
   it('handles non-numeric limit/offset gracefully', async () => {
@@ -571,6 +706,40 @@ describe('GET /api/articles?unread=1 — total_all field', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/articles' })
     expect(res.json().total_all).toBeUndefined()
+  })
+})
+
+describe('GET /api/articles smart floor metadata', () => {
+  function daysAgo(days: number): string {
+    return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+  }
+
+  it('returns total_without_floor only on the first page', async () => {
+    const feed = seedFeed()
+    for (let i = 0; i < 5; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://example.com/route-twf-recent-${i}`,
+        published_at: daysAgo(i),
+      })
+      markArticleSeen(id, true)
+    }
+    for (let i = 0; i < 20; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://example.com/route-twf-old-${i}`,
+        published_at: daysAgo(30 + i),
+      })
+      markArticleSeen(id, true)
+    }
+
+    const firstPage = await app.inject({ method: 'GET', url: `/api/articles?feed_id=${feed.id}&limit=10&offset=0` })
+    expect(firstPage.statusCode).toBe(200)
+    expect(firstPage.json().total).toBeLessThan(25)
+    expect(firstPage.json().total_without_floor).toBe(25)
+
+    const secondPage = await app.inject({ method: 'GET', url: `/api/articles?feed_id=${feed.id}&limit=10&offset=10` })
+    expect(secondPage.statusCode).toBe(200)
+    expect(secondPage.json().articles).toHaveLength(10)
+    expect(secondPage.json().total_without_floor).toBeUndefined()
   })
 })
 

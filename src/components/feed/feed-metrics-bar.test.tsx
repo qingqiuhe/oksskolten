@@ -4,9 +4,13 @@ import { FeedMetricsBar } from './feed-metrics-bar'
 import type { FeedWithCounts } from '../../../shared/types'
 
 let swrData: { avg_content_length: number | null } | undefined
+const swrKeys: Array<string | null> = []
 
 vi.mock('swr', () => ({
-  default: () => ({ data: swrData }),
+  default: (key: string | null) => {
+    swrKeys.push(key)
+    return { data: swrData }
+  },
 }))
 
 vi.mock('../../lib/fetcher', () => ({
@@ -47,6 +51,7 @@ function makeFeed(overrides: Partial<FeedWithCounts> = {}): FeedWithCounts {
 describe('FeedMetricsBar', () => {
   beforeEach(() => {
     swrData = undefined
+    swrKeys.length = 0
   })
 
   it('renders article count', () => {
@@ -98,5 +103,10 @@ describe('FeedMetricsBar', () => {
     const { container } = render(<FeedMetricsBar feed={makeFeed()} />)
     expect(container.textContent).toContain('500')
     expect(container.textContent).not.toContain('0.5k')
+  })
+
+  it('skips metrics request for empty feeds', () => {
+    render(<FeedMetricsBar feed={makeFeed({ article_count: 0 })} />)
+    expect(swrKeys).toEqual([null])
   })
 })

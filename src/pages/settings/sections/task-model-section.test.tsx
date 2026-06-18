@@ -11,12 +11,16 @@ vi.mock('../../../lib/fetcher', () => ({
 }))
 
 let swrData: Record<string, unknown> = {}
+let swrKeys: Array<string | null> = []
 
 vi.mock('swr', () => ({
-  default: (key: string | null) => ({
-    data: key ? swrData[key] : undefined,
-    mutate: vi.fn(async (value?: unknown) => value ?? (key ? swrData[key] : undefined)),
-  }),
+  default: (key: string | null) => {
+    swrKeys.push(key)
+    return {
+      data: key ? swrData[key] : undefined,
+      mutate: vi.fn(async (value?: unknown) => value ?? (key ? swrData[key] : undefined)),
+    }
+  },
 }))
 
 function t(key: string, params?: Record<string, string>) {
@@ -60,12 +64,17 @@ function t(key: string, params?: Record<string, string>) {
 describe('TaskModelSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    swrKeys = []
     swrData = {
-      '/api/settings/api-keys/anthropic': { configured: true },
-      '/api/settings/api-keys/gemini': { configured: false },
-      '/api/settings/api-keys/openai': { configured: false },
-      '/api/settings/api-keys/google-translate': { configured: false },
-      '/api/settings/api-keys/deepl': { configured: true },
+      '/api/settings/api-keys': {
+        keys: {
+          anthropic: { configured: true },
+          gemini: { configured: false },
+          openai: { configured: false },
+          'google-translate': { configured: false },
+          deepl: { configured: true },
+        },
+      },
       '/api/chat/claude-code-status': { loggedIn: false },
       '/api/settings/custom-llm-providers': {
         providers: [
@@ -93,6 +102,13 @@ describe('TaskModelSection', () => {
       '/api/settings/deepl/usage': { monthlyChars: 1000, freeTierRemaining: 499000 },
     }
     mockApiPatch.mockResolvedValue(swrData['/api/settings/preferences'])
+  })
+
+  it('uses one batched API-key status request', () => {
+    render(<TaskModelSection settings={{} as any} t={t as any} />)
+
+    expect(swrKeys).toContain('/api/settings/api-keys')
+    expect(swrKeys.filter(key => key?.startsWith('/api/settings/api-keys/'))).toHaveLength(0)
   })
 
   it('keeps task edits local until Save and persists provider_instance_id on save', async () => {

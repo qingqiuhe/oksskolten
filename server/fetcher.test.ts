@@ -45,9 +45,11 @@ vi.mock('./fetcher/flaresolverr.js', () => ({
 
 const mockFetch = vi.fn()
 
-beforeEach(() => {
+beforeEach(async () => {
   setupTestDb()
   upsertSetting('api_key.anthropic', 'test-key')
+  const { invalidateFetchScheduleConfigCache } = await import('./fetcher/schedule.js')
+  invalidateFetchScheduleConfigCache()
   mockMessagesCreate.mockReset()
   mockMessagesStream.mockReset()
   mockFetch.mockReset()
@@ -161,6 +163,12 @@ function seedFeed(overrides: Partial<Parameters<typeof createFeed>[0]> = {}): Fe
     rss_url: 'https://example.com/feed.xml',
     ...overrides,
   })
+}
+
+async function waitForMockCalls(mock: { mock: { calls: unknown[] } }, count: number) {
+  for (let attempts = 0; attempts < 20 && mock.mock.calls.length < count; attempts += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
 }
 
 // ==========================================================================
@@ -646,6 +654,53 @@ describe('fetchSingleFeed', () => {
     expect(count.cnt).toBe(35)
   })
 
+  it('limits single-feed article processing scheduling without queueing every article at once', async () => {
+    const feed = seedFeed()
+    const items = Array.from({ length: 8 }, (_, index) => ({
+      title: `Article ${index + 1}`,
+      link: `https://example.com/limited/${index + 1}`,
+    }))
+    const rssXml = rss20Xml('Limited Feed', items)
+    let activeArticleFetches = 0
+    let maxActiveArticleFetches = 0
+    const resolvers: Array<() => void> = []
+
+    mockFetch.mockImplementation((url: string | URL) => {
+      const u = url.toString()
+      if (u === feed.rss_url) {
+        return Promise.resolve(mockResponse(rssXml, { headers: { 'content-type': 'application/rss+xml' } }))
+      }
+      if (!items.some(item => item.link === u)) {
+        return Promise.resolve(mockResponse(articleHtml({ title: u })))
+      }
+
+      activeArticleFetches += 1
+      maxActiveArticleFetches = Math.max(maxActiveArticleFetches, activeArticleFetches)
+      return new Promise<Response>(resolve => {
+        resolvers.push(() => {
+          activeArticleFetches -= 1
+          resolve(mockResponse(articleHtml({ title: u })))
+        })
+      })
+    })
+
+    const runPromise = fetchSingleFeed(feed)
+
+    await waitForMockCalls(mockFetch, 6)
+    expect(mockFetch).toHaveBeenCalledTimes(6)
+    expect(maxActiveArticleFetches).toBe(5)
+
+    resolvers.splice(0).forEach(resolve => resolve())
+    for (let attempts = 0; attempts < 20 && resolvers.length < 3; attempts += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    expect(resolvers).toHaveLength(3)
+    expect(maxActiveArticleFetches).toBe(5)
+
+    resolvers.splice(0).forEach(resolve => resolve())
+    await runPromise
+  })
+
   it('clamps not-modified reschedule to the configured minimum interval', async () => {
     upsertSetting('system.feed_min_check_interval_minutes', '2')
     const feed = { ...seedFeed(), check_interval: 30 }
@@ -695,6 +750,45 @@ describe('fetchAllFeeds', () => {
 
     expect(getArticleByUrl('https://a.example.com/1')).toBeDefined()
     expect(getArticleByUrl('https://b.example.com/1')).toBeDefined()
+  })
+
+  it('limits batch feed fetch scheduling without queueing every feed at once', async () => {
+    const feeds = Array.from({ length: 8 }, (_, index) => seedFeed({
+      name: `Feed ${index + 1}`,
+      url: `https://feed-${index + 1}.example.com`,
+      rss_url: `https://feed-${index + 1}.example.com/rss`,
+    }))
+    let activeRssFetches = 0
+    let maxActiveRssFetches = 0
+    const resolvers: Array<() => void> = []
+
+    mockFetch.mockImplementation((url: string | URL) => {
+      const matchedFeed = feeds.find(feed => url.toString() === feed.rss_url)
+      if (!matchedFeed) return Promise.resolve(mockResponse('', { status: 404 }))
+
+      activeRssFetches += 1
+      maxActiveRssFetches = Math.max(maxActiveRssFetches, activeRssFetches)
+      return new Promise<Response>(resolve => {
+        resolvers.push(() => {
+          activeRssFetches -= 1
+          resolve(mockResponse(rss20Xml(matchedFeed.name, []), { headers: { 'content-type': 'application/rss+xml' } }))
+        })
+      })
+    })
+
+    const runPromise = fetchAllFeeds()
+
+    await waitForMockCalls(mockFetch, 5)
+    expect(mockFetch).toHaveBeenCalledTimes(5)
+    expect(maxActiveRssFetches).toBe(5)
+
+    resolvers.splice(0).forEach(resolve => resolve())
+    await waitForMockCalls(mockFetch, 8)
+    expect(mockFetch).toHaveBeenCalledTimes(8)
+    expect(maxActiveRssFetches).toBe(5)
+
+    resolvers.splice(0).forEach(resolve => resolve())
+    await runPromise
   })
 
   it('retries articles with last_error', async () => {

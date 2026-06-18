@@ -4,12 +4,20 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { SettingsPage } from './settings-page'
 
 let meData: { role?: 'owner' | 'admin' | 'member' } | undefined
+let swrKeys: Array<string | null> = []
 
 vi.mock('swr', () => ({
-  default: (key: string) => ({
-    data: key === '/api/me' ? meData : undefined,
-    mutate: vi.fn(),
-  }),
+  default: (key: string | null) => {
+    swrKeys.push(key)
+    return {
+      data: key === '/api/me'
+        ? meData
+        : key === '/api/auth/methods'
+          ? { password: { enabled: true }, passkey: { enabled: false, count: 0 }, github: { enabled: false } }
+          : undefined,
+      mutate: vi.fn(),
+    }
+  },
 }))
 
 vi.mock('../app', () => ({
@@ -37,6 +45,7 @@ vi.mock('./settings/sections/notification-tasks-section', () => ({ NotificationT
 describe('SettingsPage', () => {
   beforeEach(() => {
     meData = { role: 'member' }
+    swrKeys = []
   })
 
   function renderPage(path: string) {
@@ -58,6 +67,8 @@ describe('SettingsPage', () => {
     renderPage('/settings/notifications')
     expect(screen.getByText('Notification Channels Section')).toBeTruthy()
     expect(screen.getByText('Notification Tasks Section')).toBeTruthy()
+    expect(swrKeys.filter(key => key === '/api/settings/notification-channels')).toHaveLength(1)
+    expect(swrKeys.filter(key => key === '/api/me')).toHaveLength(1)
   })
 
   it('keeps integration focused on ai settings only', () => {
@@ -65,5 +76,23 @@ describe('SettingsPage', () => {
     expect(screen.getByText('Provider Config Section')).toBeTruthy()
     expect(screen.getByText('Task Model Section')).toBeTruthy()
     expect(screen.queryByText('Notification Channels Section')).toBeNull()
+  })
+
+  it('shares current user data with the data tab', () => {
+    meData = { role: 'owner' }
+    renderPage('/settings/data')
+
+    expect(screen.getByText('Data Tab')).toBeTruthy()
+    expect(swrKeys.filter(key => key === '/api/me')).toHaveLength(1)
+  })
+
+  it('shares security auth method data across security sections', () => {
+    renderPage('/settings/security')
+
+    expect(screen.getByText('Password Settings')).toBeTruthy()
+    expect(screen.getByText('Passkey Settings')).toBeTruthy()
+    expect(screen.getByText('GitHub OAuth Settings')).toBeTruthy()
+    expect(swrKeys.filter(key => key === '/api/auth/methods')).toHaveLength(1)
+    expect(swrKeys.filter(key => key === '/api/me')).toHaveLength(1)
   })
 })

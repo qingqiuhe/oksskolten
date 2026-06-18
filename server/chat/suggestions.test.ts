@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { createFeed, insertArticle, markArticleSeen, createCategory, getDb } from '../db.js'
 import { generateSuggestions } from './suggestions.js'
@@ -44,6 +44,29 @@ describe('generateSuggestions', () => {
     const catSuggestion = suggestions.find(s => s.key === 'suggestion.topCategory')
     expect(catSuggestion).toBeDefined()
     expect(catSuggestion!.params).toEqual({ category: 'Tech' })
+  })
+
+  it('reads unread count and top category with one prepared query', () => {
+    const cat = createCategory('Tech')
+    const feed = seedFeed({ category_id: cat.id })
+    const id = insertArticle({ feed_id: feed.id, title: 'Art', url: 'https://example.com/a', published_at: '2025-01-01T00:00:00Z' })
+    markArticleSeen(id, true)
+    getDb().prepare("UPDATE articles SET read_at = datetime('now') WHERE id = ?").run(id)
+
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const suggestions = generateSuggestions()
+
+    expect(suggestions.some(s => s.key === 'suggestion.topCategory')).toBe(true)
+    expect(preparedSql).toHaveLength(1)
+    expect(preparedSql[0]).toContain('unread_count')
+    expect(preparedSql[0]).toContain('top_category_name')
   })
 
   it('includes time-based suggestion keys', () => {

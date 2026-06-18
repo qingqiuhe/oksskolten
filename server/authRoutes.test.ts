@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setupTestDb } from './__tests__/helpers/testDb.js'
 import { buildApp } from './__tests__/helpers/buildApp.js'
 import { getDb } from './db.js'
 import { hashSync } from 'bcryptjs'
 import type { FastifyInstance } from 'fastify'
+import { invalidatePasswordAuthEnabledCache } from './auth-password-settings.js'
 
 let app: FastifyInstance
 let savedAuthDisabled: string | undefined
@@ -16,6 +17,7 @@ function seedUser(email = 'test@example.com', password = 'password123') {
 
 beforeEach(async () => {
   setupTestDb()
+  invalidatePasswordAuthEnabledCache()
   app = await buildApp()
   // Disable AUTH_DISABLED so auth routes actually verify credentials
   savedAuthDisabled = process.env.AUTH_DISABLED
@@ -89,6 +91,29 @@ describe('POST /api/login', () => {
     expect(body.ok).toBe(true)
     expect(body.token).toBeDefined()
     expect(typeof body.token).toBe('string')
+  })
+
+  it('reuses a short-lived password auth setting cache', async () => {
+    seedUser()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    for (const password of ['password123', 'password123']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/login',
+        headers: json,
+        payload: { email: 'test@example.com', password },
+      })
+      expect(res.statusCode).toBe(200)
+    }
+
+    expect(preparedSql.filter(sql => sql.includes('FROM instance_settings') && sql.includes('WHERE key = ?'))).toHaveLength(1)
   })
 
   it('includes token_version in JWT payload', async () => {

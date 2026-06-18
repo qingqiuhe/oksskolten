@@ -208,6 +208,17 @@ export async function demoFetcher(url: string): Promise<unknown> {
   }
 
   // API key status: Anthropic and DeepL are "configured" in demo
+  if (path === '/api/settings/api-keys') {
+    return {
+      keys: {
+        anthropic: { configured: true },
+        gemini: { configured: true },
+        openai: { configured: true },
+        'google-translate': { configured: true },
+        deepl: { configured: true },
+      },
+    }
+  }
   const apiKeyMatch = path.match(/^\/api\/settings\/api-keys\/(.+)$/)
   if (apiKeyMatch) {
     const provider = apiKeyMatch[1]

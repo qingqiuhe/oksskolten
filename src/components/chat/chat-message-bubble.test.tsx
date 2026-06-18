@@ -104,4 +104,13 @@ describe('ChatMessageBubble', () => {
     rerender(<ChatMessageBubble message={message} debugEnabled />)
     expect(screen.getByText('Debug Trace')).toBeTruthy()
   })
+
+  it('does not apply prose class to assistant markdown', () => {
+    const message: ChatMessage = { role: 'assistant', text: 'Some **markdown**' }
+    render(<ChatMessageBubble message={message} />)
+    const chatMarkdown = document.querySelector('.chat-markdown')!
+    expect(chatMarkdown).toBeTruthy()
+    expect(chatMarkdown.classList.contains('prose')).toBe(false)
+    expect(chatMarkdown.classList.contains('prose-sm')).toBe(false)
+  })
 })

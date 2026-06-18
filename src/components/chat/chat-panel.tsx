@@ -30,7 +30,7 @@ export interface ChatState {
   thinking: boolean
   activeTool: ToolStatus | null
   error: string | null
-  sendMessage: (text: string) => void
+  sendMessage: (text: string, opts?: { suggestionKey?: string }) => void
   loadConversation: (id: string) => Promise<void>
   reset: () => void
 }
@@ -56,14 +56,44 @@ interface Conversation {
 }
 
 export function ChatPanel({ variant, chatState: externalChatState, scope, scopeSummary, scopeControl, conversationId: initialConversationId, onConversationCreated, onClose }: ChatPanelProps) {
+  if (externalChatState) {
+    return (
+      <ChatPanelContent
+        variant={variant}
+        chatState={externalChatState}
+        scope={scope}
+        scopeSummary={scopeSummary}
+        scopeControl={scopeControl}
+        conversationId={initialConversationId}
+        onConversationCreated={onConversationCreated}
+        onClose={onClose}
+      />
+    )
+  }
+
+  return (
+    <InternalChatPanel
+      variant={variant}
+      scope={scope}
+      scopeSummary={scopeSummary}
+      scopeControl={scopeControl}
+      conversationId={initialConversationId}
+      onConversationCreated={onConversationCreated}
+      onClose={onClose}
+    />
+  )
+}
+
+function InternalChatPanel(props: Omit<ChatPanelProps, 'chatState'>) {
+  const chatState = useChat(props.scope)
+  return <ChatPanelContent {...props} chatState={chatState} />
+}
+
+function ChatPanelContent({ variant, chatState: chat, scope, scopeSummary, scopeControl, conversationId: initialConversationId, onConversationCreated, onClose }: ChatPanelProps & { chatState: ChatState }) {
   const { t } = useI18n()
   const articleId = scope?.type === 'article' ? scope.article_id : undefined
   const { chatDebugMode, setChatDebugMode } = useChatDebugMode()
   const debugEnabled = chatDebugMode === 'on'
-
-  // Use external chat state if provided, otherwise create internal one
-  const internalChatState = useChat(scope)
-  const chat = externalChatState ?? internalChatState
 
   const {
     messages,

@@ -15,6 +15,7 @@ import {
 } from '../db.js'
 import { getOrigin, getRequestIdentity, requireAuth, requireJson, requireRoles } from '../auth.js'
 import { fetchSingleFeed } from '../fetcher.js'
+import { CONCURRENCY } from '../fetcher/util.js'
 import { roleCanManage, type UserRole, type UserStatus } from '../identity.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 import type { Feed } from '../../shared/types.js'
@@ -68,6 +69,21 @@ interface SourceFeedRow {
   type: Feed['type']
   ingest_kind?: Feed['ingest_kind']
   source_config_json?: string | null
+}
+
+async function fetchImportedFeeds(feeds: Feed[]): Promise<void> {
+  const fetchableFeeds = feeds.filter(feed => feed.rss_url || feed.rss_bridge_url)
+  let nextIndex = 0
+  const workerCount = Math.min(CONCURRENCY, fetchableFeeds.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= fetchableFeeds.length) return
+      await fetchSingleFeed(fetchableFeeds[index]).catch(() => {})
+    }
+  }))
 }
 
 export async function userRoutes(api: FastifyInstance): Promise<void> {
@@ -210,10 +226,7 @@ export async function userRoutes(api: FastifyInstance): Promise<void> {
       }
     })()
 
-    for (const feed of importedFeedsToFetch) {
-      if (!feed.rss_url && !feed.rss_bridge_url) continue
-      fetchSingleFeed(feed).catch(() => {})
-    }
+    void fetchImportedFeeds(importedFeedsToFetch)
 
     reply.status(201).send({
       user: result.user,

@@ -28,13 +28,22 @@ const EMPTY_FORM: ChannelFormState = {
   enabled: true,
 }
 
-export function NotificationChannelsSection({ t }: { t: TFunc }) {
-  const { data, mutate } = useSWR<{ channels: NotificationChannel[] }>(
-    '/api/settings/notification-channels',
+const EMPTY_CHANNELS: NotificationChannel[] = []
+
+export type NotificationChannelsSharedData = {
+  channelData?: { channels: NotificationChannel[] }
+  mutateChannels?: () => unknown
+}
+
+export function NotificationChannelsSection({ t, sharedData }: { t: TFunc; sharedData?: NotificationChannelsSharedData }) {
+  const { data: internalData, mutate: internalMutate } = useSWR<{ channels: NotificationChannel[] }>(
+    sharedData ? null : '/api/settings/notification-channels',
     fetcher,
     { revalidateOnFocus: false },
   )
-  const channels = data?.channels ?? []
+  const data = sharedData?.channelData ?? internalData
+  const mutate = sharedData?.mutateChannels ?? internalMutate
+  const channels = data?.channels ?? EMPTY_CHANNELS
   const [form, setForm] = useState<ChannelFormState | null>(null)
   const [saving, setSaving] = useState(false)
   const [testingId, setTestingId] = useState<number | null>(null)

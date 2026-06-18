@@ -7,6 +7,10 @@ const parser = new XMLParser({
   attributeNamePrefix: '',
 })
 
+const SOCIAL_RSSHUB_BASE_URL_CACHE_MS = 5_000
+let cachedSocialRssHubBaseUrl: string | null = null
+let cachedSocialRssHubBaseUrlUntil = 0
+
 export class SocialFeedError extends Error {
   statusCode: number
 
@@ -16,9 +20,19 @@ export class SocialFeedError extends Error {
   }
 }
 
-export function getSocialRssHubBaseUrl(): string | null {
+export function invalidateSocialRssHubBaseUrlCache(): void {
+  cachedSocialRssHubBaseUrl = null
+  cachedSocialRssHubBaseUrlUntil = 0
+}
+
+export function getSocialRssHubBaseUrl(now = Date.now()): string | null {
+  if (cachedSocialRssHubBaseUrl !== null && now < cachedSocialRssHubBaseUrlUntil) {
+    return cachedSocialRssHubBaseUrl || null
+  }
   const stored = getSetting('social.rsshub_base_url')
-  return stored ? normalizeRssHubBaseUrl(stored) : null
+  cachedSocialRssHubBaseUrl = stored ? normalizeRssHubBaseUrl(stored) ?? '' : ''
+  cachedSocialRssHubBaseUrlUntil = now + SOCIAL_RSSHUB_BASE_URL_CACHE_MS
+  return cachedSocialRssHubBaseUrl || null
 }
 
 export function resolveXSocialFeed(input: string): { handle: string; profileUrl: string; rssUrl: string } {

@@ -106,11 +106,12 @@ export function createCustomLLMProvider(input: {
   api_key: string
 }, userId?: number | null): CustomLLMProvider {
   const scopedUserId = resolveRequiredUserId(userId)
-  const info = getDb().prepare(`
+  const row = getDb().prepare(`
     INSERT INTO custom_llm_providers (user_id, name, kind, base_url, api_key)
     VALUES (?, ?, 'openai-compatible', ?, ?)
-  `).run(scopedUserId, input.name.trim(), normalizeBaseUrl(input.base_url), input.api_key.trim())
-  return getCustomLLMProviderById(Number(info.lastInsertRowid), scopedUserId)!
+    RETURNING id, user_id, name, kind, base_url, api_key, created_at, updated_at
+  `).get(scopedUserId, input.name.trim(), normalizeBaseUrl(input.base_url), input.api_key.trim()) as Record<string, unknown>
+  return mapRow(row)
 }
 
 export function updateCustomLLMProvider(id: number, input: {
@@ -122,7 +123,7 @@ export function updateCustomLLMProvider(id: number, input: {
   const existing = getCustomLLMProviderSecretById(id, scopedUserId)
   if (!existing) return undefined
 
-  getDb().prepare(`
+  const row = getDb().prepare(`
     UPDATE custom_llm_providers
     SET
       name = ?,
@@ -130,15 +131,16 @@ export function updateCustomLLMProvider(id: number, input: {
       api_key = ?,
       updated_at = datetime('now')
     WHERE id = ? AND user_id = ?
-  `).run(
+    RETURNING id, user_id, name, kind, base_url, api_key, created_at, updated_at
+  `).get(
     input.name?.trim() || existing.name,
     input.base_url ? normalizeBaseUrl(input.base_url) : existing.base_url,
     input.api_key?.trim() || existing.api_key,
     id,
     scopedUserId,
-  )
+  ) as Record<string, unknown> | undefined
 
-  return getCustomLLMProviderById(id, scopedUserId)
+  return row ? mapRow(row) : undefined
 }
 
 export function deleteCustomLLMProvider(id: number, userId?: number | null): boolean {

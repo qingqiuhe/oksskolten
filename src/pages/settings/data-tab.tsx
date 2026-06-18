@@ -24,8 +24,9 @@ function PlaceholderSection({ titleKey, descKey }: { titleKey: string; descKey: 
   )
 }
 
-export function DataTab() {
-  const { data: me } = useSWR<{ id: number; role?: 'owner' | 'admin' | 'member' }>('/api/me', fetcher)
+export function DataTab({ sharedData }: { sharedData?: { me?: { id?: number; role?: 'owner' | 'admin' | 'member' } } } = {}) {
+  const { data: internalMe } = useSWR<{ id: number; role?: 'owner' | 'admin' | 'member' }>(sharedData ? null : '/api/me', fetcher)
+  const me = sharedData?.me ?? internalMe
   const isAdminLike = me?.role === 'owner' || me?.role === 'admin'
 
   return (

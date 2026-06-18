@@ -26,7 +26,7 @@ function formatRelativeDate(isoDate: string, locale: string): string {
 export function FeedMetricsBar({ feed }: FeedMetricsBarProps) {
   const { t, locale } = useI18n()
   const { data: metrics } = useSWR<{ avg_content_length: number | null }>(
-    `/api/feeds/${feed.id}/metrics`,
+    feed.article_count > 0 ? `/api/feeds/${feed.id}/metrics` : null,
     fetcher,
     { revalidateOnFocus: false },
   )

@@ -5,6 +5,7 @@ import { Fingerprint, Plus, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { useI18n } from '../../lib/i18n'
 import { fetcher, apiDelete } from '../../lib/fetcher'
+import type { SecuritySharedData } from './password-settings'
 
 interface AuthMethods {
   password: { enabled: boolean }
@@ -21,15 +22,17 @@ interface PasskeyItem {
   created_at: string
 }
 
-export function PasskeySettings() {
+export function PasskeySettings({ sharedData }: { sharedData?: SecuritySharedData } = {}) {
   const { t, locale } = useI18n()
   const [registering, setRegistering] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
-  const { data: methods, mutate: mutateMethods } = useSWR<AuthMethods>('/api/auth/methods', fetcher)
+  const { data: internalMethods, mutate: internalMutateMethods } = useSWR<AuthMethods>(sharedData ? null : '/api/auth/methods', fetcher)
   const { data: passkeys, mutate: mutatePasskeys } = useSWR<PasskeyItem[]>('/api/auth/passkeys', fetcher)
+  const methods = sharedData?.methods ?? internalMethods
+  const mutateMethods = sharedData?.mutateMethods ?? internalMutateMethods
 
   const passwordEnabled = methods?.password?.enabled !== false
   const passkeyCount = methods?.passkey?.count ?? 0

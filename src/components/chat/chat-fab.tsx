@@ -25,6 +25,7 @@ export function ChatFab({ articleId, scopeSummary }: ChatFabProps) {
   )
 
   const hasConversations = !!existingConv?.conversations?.length
+  const existingConversationId = existingConv?.conversations?.[0]?.id
 
   // Auto-open panel if article already has conversations (desktop only)
   useEffect(() => {
@@ -54,7 +55,13 @@ export function ChatFab({ articleId, scopeSummary }: ChatFabProps) {
       {/* Floating chat panel — only mount after first open, then use hidden to preserve state */}
       {mounted && (
         <div className={`fixed bottom-[calc(5rem+var(--safe-area-inset-bottom))] left-4 right-4 md:left-auto md:right-6 md:w-[380px] z-50 max-h-[500px] flex flex-col bg-bg-card rounded-xl border border-border shadow-lg ${panelOpen ? '' : 'hidden'}`}>
-          <ChatPanel variant="inline" scope={buildArticleScope(articleId)} scopeSummary={scopeSummary} onClose={() => setPanelOpen(false)} />
+          <ChatPanel
+            variant="inline"
+            scope={buildArticleScope(articleId)}
+            scopeSummary={scopeSummary}
+            conversationId={existingConversationId}
+            onClose={() => setPanelOpen(false)}
+          />
         </div>
       )}
 

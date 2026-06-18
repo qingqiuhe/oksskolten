@@ -1,4 +1,4 @@
-import { getDb, runNamed, allNamed } from './connection.js'
+import { getDb, getNamed, allNamed } from './connection.js'
 import type { Conversation, ChatMessage } from './types.js'
 import { getCurrentUserId } from '../identity.js'
 
@@ -15,9 +15,10 @@ export function createConversation(data: {
   user_id?: number | null
 }): Conversation {
   const scopedUserId = data.user_id ?? resolveUserId()
-  runNamed(`
+  return getNamed<Conversation>(`
     INSERT INTO conversations (id, user_id, title, article_id, scope_type, scope_payload_json)
     VALUES (@id, @user_id, @title, @article_id, @scope_type, @scope_payload_json)
+    RETURNING *
   `, {
     id: data.id,
     user_id: scopedUserId ?? null,
@@ -26,7 +27,6 @@ export function createConversation(data: {
     scope_type: data.scope_type ?? null,
     scope_payload_json: data.scope_payload_json ?? null,
   })
-  return getDb().prepare('SELECT * FROM conversations WHERE id = ?').get(data.id) as Conversation
 }
 
 export function getConversations(opts?: {
@@ -88,8 +88,6 @@ export function updateConversation(
   data: { title?: string },
   userId?: number | null,
 ): Conversation | undefined {
-  const conv = getConversationById(id, userId)
-  if (!conv) return undefined
   const scopedUserId = resolveUserId(userId)
 
   const fields: string[] = ["updated_at = datetime('now')"]
@@ -102,11 +100,9 @@ export function updateConversation(
 
   if (scopedUserId != null) {
     params.user_id = scopedUserId
-    runNamed(`UPDATE conversations SET ${fields.join(', ')} WHERE id = @id AND user_id = @user_id`, params)
-  } else {
-    runNamed(`UPDATE conversations SET ${fields.join(', ')} WHERE id = @id`, params)
+    return getNamed<Conversation>(`UPDATE conversations SET ${fields.join(', ')} WHERE id = @id AND user_id = @user_id RETURNING *`, params)
   }
-  return getDb().prepare('SELECT * FROM conversations WHERE id = ?').get(id) as Conversation
+  return getNamed<Conversation>(`UPDATE conversations SET ${fields.join(', ')} WHERE id = @id RETURNING *`, params)
 }
 
 export function deleteConversation(id: string, userId?: number | null): boolean {
@@ -129,9 +125,10 @@ export function insertChatMessage(data: {
     ?? resolveUserId()
     ?? (getDb().prepare('SELECT user_id FROM conversations WHERE id = ?').get(data.conversation_id) as { user_id: number | null } | undefined)?.user_id
   return getDb().transaction(() => {
-    const info = runNamed(`
+    const message = getNamed<ChatMessage>(`
       INSERT INTO chat_messages (user_id, conversation_id, role, content)
       VALUES (@user_id, @conversation_id, @role, @content)
+      RETURNING *
     `, {
       user_id: scopedUserId ?? null,
       conversation_id: data.conversation_id,
@@ -139,7 +136,7 @@ export function insertChatMessage(data: {
       content: data.content,
     })
     getDb().prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(data.conversation_id)
-    return getDb().prepare('SELECT * FROM chat_messages WHERE id = ?').get(info.lastInsertRowid) as ChatMessage
+    return message
   })()
 }
 
@@ -156,17 +153,15 @@ export function getChatMessages(conversationId: string, userId?: number | null):
 export function deleteChatMessage(id: number, userId?: number | null): boolean {
   const scopedUserId = resolveUserId(userId)
   return getDb().transaction(() => {
-    const message = getDb().prepare(
-      `SELECT conversation_id FROM chat_messages WHERE id = ? ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
+    const deleted = getDb().prepare(
+      `DELETE FROM chat_messages
+       WHERE id = ?
+         ${scopedUserId == null ? '' : 'AND user_id = ?'}
+       RETURNING conversation_id`,
     ).get(...(scopedUserId == null ? [id] : [id, scopedUserId])) as { conversation_id: string } | undefined
-    if (!message) return false
-    const result = getDb().prepare(
-      `DELETE FROM chat_messages WHERE id = ? ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
-    ).run(...(scopedUserId == null ? [id] : [id, scopedUserId]))
-    if (result.changes > 0) {
-      getDb().prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(message.conversation_id)
-    }
-    return result.changes > 0
+    if (!deleted) return false
+    getDb().prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(deleted.conversation_id)
+    return true
   })()
 }
 
@@ -180,17 +175,12 @@ export function replaceChatMessages(
     getDb().prepare(
       `DELETE FROM chat_messages WHERE conversation_id = ? ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
     ).run(...(scopedUserId == null ? [conversationId] : [conversationId, scopedUserId]))
-    const insertSql = `
+    const insertMessage = getDb().prepare(`
       INSERT INTO chat_messages (user_id, conversation_id, role, content)
-      VALUES (@user_id, @conversation_id, @role, @content)
-    `
+      VALUES (?, ?, ?, ?)
+    `)
     for (const message of messages) {
-      runNamed(insertSql, {
-        user_id: scopedUserId ?? null,
-        conversation_id: conversationId,
-        role: message.role,
-        content: message.content,
-      })
+      insertMessage.run(scopedUserId ?? null, conversationId, message.role, message.content)
     }
     getDb().prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(conversationId)
   })

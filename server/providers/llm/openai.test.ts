@@ -55,15 +55,15 @@ describe('openaiProvider.requireKey', () => {
 
   it('does not throw when api key is set', () => {
     mockGetSetting.mockReturnValue('sk-test')
-    expect(() => openaiProvider.requireKey()).not.toThrow()
+    expect(openaiProvider.requireKey()).toBe('sk-test')
   })
 
   it('accepts explicit OpenAI-compatible credentials without a stored key', () => {
     mockGetSetting.mockReturnValue(undefined)
-    expect(() => openaiProvider.requireKey(undefined, {
+    expect(openaiProvider.requireKey(undefined, {
       apiKey: 'sk-custom',
       baseURL: 'https://openrouter.ai/api/v1',
-    })).not.toThrow()
+    })).toBe('sk-custom')
   })
 })
 
@@ -173,6 +173,22 @@ describe('openaiProvider.createMessage', () => {
     expect(result.text).toBe('Hello world')
     expect(result.inputTokens).toBe(10)
     expect(result.outputTokens).toBe(5)
+  })
+
+  it('uses provided API key without reading settings', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'Hello world' } }],
+      usage: {},
+    })
+
+    await openaiProvider.createMessage({
+      model: 'gpt-4',
+      maxTokens: 1024,
+      apiKey: 'checked-openai-key',
+      messages: [{ role: 'user', content: 'Hi' }],
+    })
+
+    expect(mockGetSetting).not.toHaveBeenCalled()
   })
 
   it('includes system instruction as system message', async () => {

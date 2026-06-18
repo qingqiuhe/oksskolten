@@ -10,9 +10,10 @@ import {
 } from '@simplewebauthn/server'
 import type { AuthenticatorTransportFuture, RegistrationResponseJSON, AuthenticationResponseJSON } from '@simplewebauthn/server'
 import { z } from 'zod'
-import { getDb, getOwnerCount, getSetting, getUserById, recordUserLogin, upsertSetting } from './db.js'
+import { getDb, getOwnerCount, getUserById, recordUserLogin, upsertSetting } from './db.js'
 import { requireAuth, getOrigin, getRequestIdentity, getRpID, getCredentialCount, requireRoles } from './auth.js'
-import { isGitHubOAuthEnabled } from './oauthRoutes.js'
+import { getGitHubOAuthSettings, isGitHubOAuthEnabledFromSettings } from './oauthRoutes.js'
+import { invalidatePasswordAuthEnabledCache } from './auth-password-settings.js'
 import { TtlStore } from './lib/ttl-store.js'
 import { logger } from './logger.js'
 
@@ -112,9 +113,10 @@ export async function passkeyRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/auth/methods — public
   app.get('/api/auth/methods', async (_request, reply) => {
     const ownerCount = getOwnerCount()
-    const passwordEnabled = getSetting('auth.password_enabled') !== '0'
     const passkeyCount = getCredentialCount()
-    const githubEnabled = isGitHubOAuthEnabled()
+    const settings = getGitHubOAuthSettings()
+    const passwordEnabled = settings['auth.password_enabled'] !== '0'
+    const githubEnabled = isGitHubOAuthEnabledFromSettings(settings)
     reply.send({
       setup_required: ownerCount === 0,
       password: { enabled: passwordEnabled },
@@ -301,9 +303,10 @@ export async function passkeyRoutes(app: FastifyInstance): Promise<void> {
     const identity = getRequestIdentity(request)
 
     // Lockout prevention: don't delete the last passkey if no other auth method is enabled
-    const passwordEnabled = getSetting('auth.password_enabled') !== '0'
+    const settings = getGitHubOAuthSettings()
+    const passwordEnabled = settings['auth.password_enabled'] !== '0'
     const passkeyCount = getCredentials(identity?.userId).length
-    const githubEnabled = isGitHubOAuthEnabled() && !!getUserById(identity?.userId ?? -1)?.github_login
+    const githubEnabled = isGitHubOAuthEnabledFromSettings(settings) && !!getUserById(identity?.userId ?? -1)?.github_login
 
     if (!passwordEnabled && !githubEnabled && passkeyCount <= 1) {
       return reply.status(400).send({
@@ -329,7 +332,9 @@ export async function passkeyRoutes(app: FastifyInstance): Promise<void> {
     if (!wantEnabled) {
       // Cannot disable password if no other auth method is available
       const passkeyCount = getCredentialCount()
-      const githubEnabled = isGitHubOAuthEnabled()
+      const githubEnabled = passkeyCount > 0
+        ? false
+        : isGitHubOAuthEnabledFromSettings(getGitHubOAuthSettings())
       if (passkeyCount === 0 && !githubEnabled) {
         return reply.status(400).send({
           error: 'Cannot disable password authentication without an alternative login method',
@@ -338,6 +343,7 @@ export async function passkeyRoutes(app: FastifyInstance): Promise<void> {
     }
 
     upsertSetting('auth.password_enabled', wantEnabled ? '1' : '0')
+    invalidatePasswordAuthEnabledCache()
     reply.send({ ok: true, enabled: wantEnabled })
   })
 }

@@ -8,11 +8,11 @@ import {
   getDb,
   getInvitationPreview,
   getOwnerCount,
-  getSetting,
   getUserByEmail,
   recordUserLogin,
   updateUserPassword,
 } from './db.js'
+import { isPasswordAuthEnabled } from './auth-password-settings.js'
 
 const BCRYPT_ROUNDS = process.env.NODE_ENV === 'test' ? 4 : 12
 import { getRequestIdentity, requireAuth, requireJson } from './auth.js'
@@ -65,7 +65,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({ ok: true })
     }
 
-    if (getSetting('auth.password_enabled') === '0') {
+    if (!isPasswordAuthEnabled()) {
       return reply.status(403).send({ error: 'Password authentication is disabled' })
     }
 

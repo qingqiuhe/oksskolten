@@ -2,10 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CommandPalette } from './command-palette'
+import type { FeedWithCounts } from '../../shared/types'
 
 // --- Mocks ---
 
 const mockNavigate = vi.fn()
+const { swrKeys } = vi.hoisted(() => ({
+  swrKeys: [] as Array<string | null>,
+}))
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
   useLocation: () => ({ pathname: '/inbox' }),
@@ -18,7 +22,8 @@ vi.mock('../lib/fetcher', () => ({
 
 vi.mock('swr', () => ({
   __esModule: true,
-  default: (key: string) => {
+  default: (key: string | null) => {
+    swrKeys.push(key)
     if (key === '/api/feeds') {
       return {
         data: {
@@ -68,12 +73,74 @@ describe('CommandPalette', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    swrKeys.length = 0
   })
 
   it('renders navigation items', () => {
     render(<CommandPalette {...defaultProps} />)
     expect(screen.getByText('Inbox')).toBeTruthy()
     expect(screen.getByText('Settings')).toBeTruthy()
+  })
+
+  it('uses shared feed and category data without subscribing to list endpoints', () => {
+    render(
+      <CommandPalette
+        {...defaultProps}
+        feedsData={{
+          feeds: [
+            {
+              id: 3,
+              name: 'Shared Feed',
+              url: 'https://shared.example.com',
+              icon_url: null,
+              rss_url: null,
+              rss_bridge_url: null,
+              view_type: null,
+              category_id: 7,
+              last_error: null,
+              error_count: 0,
+              disabled: 0,
+              requires_js_challenge: 0,
+              type: 'rss',
+              etag: null,
+              last_modified: null,
+              last_content_hash: null,
+              next_check_at: null,
+              check_interval: null,
+              created_at: '2026-01-01',
+              category_name: 'Shared Category',
+              article_count: 1,
+              unread_count: 0,
+              priority_level: 3,
+              articles_per_week: 1,
+              latest_published_at: '2026-01-01T00:00:00.000Z',
+            } satisfies FeedWithCounts,
+          ],
+          bookmark_count: 0,
+          like_count: 0,
+          clip_feed_id: null,
+        }}
+        categoriesData={{
+          categories: [{ id: 7, name: 'Shared Category', sort_order: 0, collapsed: 0, created_at: '2026-01-01' }],
+        }}
+      />,
+    )
+
+    expect(swrKeys).toEqual([null, null])
+    expect(screen.getByText('Inbox')).toBeTruthy()
+  })
+
+  it('does not subscribe to list endpoints while closed without shared data', () => {
+    render(<CommandPalette {...defaultProps} open={false} />)
+
+    expect(swrKeys).toEqual([null, null])
+  })
+
+  it('loads list endpoints when opened without shared data', () => {
+    render(<CommandPalette {...defaultProps} />)
+
+    expect(swrKeys).toContain('/api/feeds')
+    expect(swrKeys).toContain('/api/categories')
   })
 
   it('renders action items', () => {

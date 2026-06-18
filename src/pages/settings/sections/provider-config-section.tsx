@@ -34,8 +34,32 @@ type ProviderDiagnostics = {
   } | null
   error?: string
 }
+type ProviderKeyStatus = Record<string, { configured: boolean }>
+export type ProviderConfigSharedData = {
+  keyStatus?: { keys: ProviderKeyStatus }
+  mutateKeyStatus?: () => unknown
+  claudeCodeStatus?: { loggedIn?: boolean; email?: string; plan?: string; error?: string }
+  prefs?: Prefs
+  mutatePrefs?: (value?: Prefs, shouldRevalidate?: boolean) => unknown
+  customProvidersData?: { providers: CustomLLMProvider[] }
+  mutateCustomProviders?: () => unknown
+}
 
-export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Settings }) {
+export function ProviderConfigSection({ t, settings, sharedData }: { t: TFunc; settings: Settings; sharedData?: ProviderConfigSharedData }) {
+  const { data: internalKeyStatus, mutate: internalMutateKeyStatus } = useSWR<{ keys: ProviderKeyStatus }>(
+    sharedData ? null : '/api/settings/api-keys',
+    fetcher,
+    { revalidateOnFocus: false },
+  )
+  const keyStatus = sharedData?.keyStatus ?? internalKeyStatus
+  const refreshKeyStatus = () => {
+    if (sharedData?.mutateKeyStatus) {
+      void sharedData.mutateKeyStatus()
+      return
+    }
+    void internalMutateKeyStatus()
+  }
+
   return (
     <section className="space-y-6">
       <div>
@@ -43,15 +67,21 @@ export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Set
         <p className="text-xs text-muted mb-4">{t('integration.llmProviderConfigDesc')}</p>
         <div className="space-y-3">
           {LLM_API_PROVIDERS.map(provider => (
-            <ApiProviderCard key={provider} provider={provider} t={t} />
+            <ApiProviderCard
+              key={provider}
+              provider={provider}
+              configured={!!keyStatus?.keys[provider]?.configured}
+              refreshKeyStatus={refreshKeyStatus}
+              t={t}
+            />
           ))}
-          <ClaudeCodeCard t={t} />
-          <OllamaCard t={t} />
+          <ClaudeCodeCard t={t} sharedData={sharedData} />
+          <OllamaCard t={t} sharedData={sharedData} />
         </div>
         <div className="mt-5">
           <h3 className="text-sm font-medium text-text mb-1">{t('integration.customLlmProviders')}</h3>
           <p className="text-xs text-muted mb-3">{t('integration.customLlmProvidersDesc')}</p>
-          <CustomProviderSection t={t} />
+          <CustomProviderSection t={t} sharedData={sharedData} />
         </div>
       </div>
       <div>
@@ -59,7 +89,13 @@ export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Set
         <p className="text-xs text-muted mb-4">{t('integration.translateServiceConfigDesc')}</p>
         <div className="space-y-3">
           {TRANSLATE_SERVICE_PROVIDERS.map(provider => (
-            <ApiProviderCard key={provider} provider={provider} t={t} />
+            <ApiProviderCard
+              key={provider}
+              provider={provider}
+              configured={!!keyStatus?.keys[provider]?.configured}
+              refreshKeyStatus={refreshKeyStatus}
+              t={t}
+            />
           ))}
         </div>
         <div className="mt-4">
@@ -92,13 +128,17 @@ export function ProviderConfigSection({ t, settings }: { t: TFunc; settings: Set
   )
 }
 
-function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
-  const { data: keyStatus, mutate: mutateKeyStatus } = useSWR<{ configured: boolean }>(
-    `/api/settings/api-keys/${provider}`,
-    fetcher,
-    { revalidateOnFocus: false },
-  )
-
+function ApiProviderCard({
+  provider,
+  configured,
+  refreshKeyStatus,
+  t,
+}: {
+  provider: string
+  configured: boolean
+  refreshKeyStatus: () => void
+  t: TFunc
+}) {
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
@@ -131,7 +171,7 @@ function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
     setSaving(true)
     try {
       await apiPost(endpoint, { apiKey: apiKeyInput })
-      void mutateKeyStatus()
+      refreshKeyStatus()
       setApiKeyInput('')
       showMessage(savedMsg, 'success')
     } catch (err: unknown) {
@@ -146,7 +186,7 @@ function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
     setSaving(true)
     try {
       await apiPost(endpoint, { apiKey: '' })
-      void mutateKeyStatus()
+      refreshKeyStatus()
       setApiKeyInput('')
       showMessage(deletedMsg, 'success')
     } catch (err: unknown) {
@@ -156,7 +196,7 @@ function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
     }
   }
 
-  const isConfigured = keyStatus?.configured
+  const isConfigured = configured
 
   return (
     <div className="p-3 rounded-lg bg-bg-card border border-border space-y-2 min-h-[3rem]">
@@ -213,18 +253,21 @@ function ApiProviderCard({ provider, t }: { provider: string; t: TFunc }) {
   )
 }
 
-function CustomProviderSection({ t }: { t: TFunc }) {
-  const { data, mutate } = useSWR<{ providers: CustomLLMProvider[] }>(
-    '/api/settings/custom-llm-providers',
+function CustomProviderSection({ t, sharedData }: { t: TFunc; sharedData?: ProviderConfigSharedData }) {
+  const { data: internalData, mutate: internalMutate } = useSWR<{ providers: CustomLLMProvider[] }>(
+    sharedData ? null : '/api/settings/custom-llm-providers',
     fetcher,
     { revalidateOnFocus: false },
   )
-  const { data: prefs } = useSWR<Prefs>(
-    '/api/settings/preferences',
+  const { data: internalPrefs } = useSWR<Prefs>(
+    sharedData ? null : '/api/settings/preferences',
     fetcher,
     { revalidateOnFocus: false },
   )
 
+  const data = sharedData?.customProvidersData ?? internalData
+  const prefs = sharedData?.prefs ?? internalPrefs
+  const mutate = sharedData?.mutateCustomProviders ?? internalMutate
   const providers = data?.providers || []
 
   return (
@@ -596,12 +639,13 @@ function CustomProviderCard({ provider, prefs, t, onChanged }: {
   )
 }
 
-function ClaudeCodeCard({ t }: { t: TFunc }) {
-  const { data: authStatus } = useSWR<{ loggedIn?: boolean; email?: string; plan?: string; error?: string }>(
-    '/api/chat/claude-code-status',
+function ClaudeCodeCard({ t, sharedData }: { t: TFunc; sharedData?: ProviderConfigSharedData }) {
+  const { data: internalAuthStatus } = useSWR<{ loggedIn?: boolean; email?: string; plan?: string; error?: string }>(
+    sharedData ? null : '/api/chat/claude-code-status',
     fetcher,
     { revalidateOnFocus: false },
   )
+  const authStatus = sharedData?.claudeCodeStatus ?? internalAuthStatus
 
   let statusDot = 'bg-error'
   let statusText: React.ReactNode = '...'
@@ -682,12 +726,14 @@ function ClaudeCodeCard({ t }: { t: TFunc }) {
   )
 }
 
-function OllamaCard({ t }: { t: TFunc }) {
-  const { data: prefs, mutate: mutatePrefs } = useSWR<Record<string, string | null>>(
-    '/api/settings/preferences',
+function OllamaCard({ t, sharedData }: { t: TFunc; sharedData?: ProviderConfigSharedData }) {
+  const { data: internalPrefs, mutate: internalMutatePrefs } = useSWR<Record<string, string | null>>(
+    sharedData ? null : '/api/settings/preferences',
     fetcher,
     { revalidateOnFocus: false },
   )
+  const prefs = sharedData?.prefs ?? internalPrefs
+  const mutatePrefs = sharedData?.mutatePrefs ?? internalMutatePrefs
   const savedBaseUrl = prefs?.['ollama.base_url'] || ''
   const savedHeadersJson = prefs?.['ollama.custom_headers'] || ''
   const [baseUrlInput, setBaseUrlInput] = useState('')

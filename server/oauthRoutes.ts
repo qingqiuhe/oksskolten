@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { GitHub, generateState } from 'arctic'
-import { getSetting, getUserByGithubLogin, recordUserLogin, upsertSetting } from './db.js'
+import { getSettings, getUserByGithubLogin, recordUserLogin, upsertSetting } from './db.js'
 import { requireAuth, getOrigin, getCredentialCount, requireRoles } from './auth.js'
 import { TtlStore } from './lib/ttl-store.js'
 import { parseOrBadRequest } from './lib/validation.js'
@@ -40,15 +40,33 @@ const exchangeCodes = new TtlStore<{ token: string }>(CODE_TTL)
 
 // --- Helpers ---
 
-export function isGitHubOAuthEnabled(): boolean {
-  return getSetting('auth.github_enabled') === '1'
-    && !!getSetting('auth.github_client_id')
-    && !!getSetting('auth.github_client_secret')
+const GITHUB_OAUTH_SETTING_KEYS = [
+  'auth.github_enabled',
+  'auth.github_client_id',
+  'auth.github_client_secret',
+  'auth.github_allowed_users',
+  'auth.password_enabled',
+] as const
+
+export type GitHubOAuthSettings = Record<typeof GITHUB_OAUTH_SETTING_KEYS[number], string | undefined>
+
+export function getGitHubOAuthSettings(): GitHubOAuthSettings {
+  return getSettings(GITHUB_OAUTH_SETTING_KEYS) as GitHubOAuthSettings
 }
 
-function createGitHubClient(redirectURI?: string | null): GitHub | null {
-  const clientId = getSetting('auth.github_client_id')
-  const clientSecret = getSetting('auth.github_client_secret')
+export function isGitHubOAuthEnabledFromSettings(settings: GitHubOAuthSettings): boolean {
+  return settings['auth.github_enabled'] === '1'
+    && !!settings['auth.github_client_id']
+    && !!settings['auth.github_client_secret']
+}
+
+export function isGitHubOAuthEnabled(): boolean {
+  return isGitHubOAuthEnabledFromSettings(getGitHubOAuthSettings())
+}
+
+function createGitHubClient(redirectURI: string | null | undefined, settings: GitHubOAuthSettings): GitHub | null {
+  const clientId = settings['auth.github_client_id']
+  const clientSecret = settings['auth.github_client_secret']
   if (!clientId || !clientSecret) return null
   return new GitHub(clientId, clientSecret, redirectURI ?? null)
 }
@@ -68,7 +86,8 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
   // Frontend sends { origin } so we build the correct callback URL
   // regardless of proxy configuration
   app.post('/api/oauth/github/authorize', async (request, reply) => {
-    if (!isGitHubOAuthEnabled()) {
+    const settings = getGitHubOAuthSettings()
+    if (!isGitHubOAuthEnabledFromSettings(settings)) {
       return reply.status(400).send({ error: 'GitHub OAuth is not enabled' })
     }
 
@@ -76,7 +95,7 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
     if (!body) return
     const origin = body.origin || getOrigin(request)
     const redirectURI = `${origin}/api/oauth/github/callback`
-    const github = createGitHubClient(redirectURI)
+    const github = createGitHubClient(redirectURI, settings)
     if (!github) {
       return reply.status(400).send({ error: 'GitHub OAuth is not configured' })
     }
@@ -105,7 +124,7 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // Reuse the redirect URI from the authorize step to ensure it matches
-    const github = createGitHubClient(stateEntry.redirectURI)
+    const github = createGitHubClient(stateEntry.redirectURI, getGitHubOAuthSettings())
     if (!github) {
       return reply.redirect('/?oauth_error=not_configured')
     }
@@ -162,10 +181,11 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
 
   // GET /api/oauth/github/config — requires auth
   app.get('/api/oauth/github/config', { preHandler: [requireAuth, requireRoles(['owner', 'admin'])] }, async (_request, reply) => {
-    const clientId = getSetting('auth.github_client_id') || ''
-    const clientSecret = getSetting('auth.github_client_secret') || ''
-    const allowedUsers = getSetting('auth.github_allowed_users') || ''
-    const enabled = getSetting('auth.github_enabled') === '1'
+    const settings = getGitHubOAuthSettings()
+    const clientId = settings['auth.github_client_id'] || ''
+    const clientSecret = settings['auth.github_client_secret'] || ''
+    const allowedUsers = settings['auth.github_allowed_users'] || ''
+    const enabled = settings['auth.github_enabled'] === '1'
     const configured = !!clientId && !!clientSecret
 
     reply.send({ enabled, configured, clientId, allowedUsers })
@@ -178,9 +198,10 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
 
     // Lockout prevention: if GitHub OAuth is the only enabled auth method,
     // don't allow breaking changes
-    const passwordEnabled = getSetting('auth.password_enabled') !== '0'
+    const settings = getGitHubOAuthSettings()
+    const passwordEnabled = settings['auth.password_enabled'] !== '0'
     const passkeyCount = getCredentialCount()
-    const isOnlyMethod = isGitHubOAuthEnabled() && !passwordEnabled && passkeyCount === 0
+    const isOnlyMethod = isGitHubOAuthEnabledFromSettings(settings) && !passwordEnabled && passkeyCount === 0
 
     if (isOnlyMethod) {
       if (body.clientId !== undefined && !body.clientId.trim()) {
@@ -202,10 +223,15 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
       upsertSetting('auth.github_allowed_users', body.allowedUsers.trim())
     }
 
-    const clientId = getSetting('auth.github_client_id') || ''
-    const allowedUsers = getSetting('auth.github_allowed_users') || ''
-    const enabled = getSetting('auth.github_enabled') === '1'
-    const configured = !!clientId && !!getSetting('auth.github_client_secret')
+    const clientId = body.clientId !== undefined ? body.clientId.trim() : settings['auth.github_client_id'] || ''
+    const clientSecret = body.clientSecret !== undefined && body.clientSecret !== ''
+      ? body.clientSecret
+      : settings['auth.github_client_secret'] || ''
+    const allowedUsers = body.allowedUsers !== undefined
+      ? body.allowedUsers.trim()
+      : settings['auth.github_allowed_users'] || ''
+    const enabled = settings['auth.github_enabled'] === '1'
+    const configured = !!clientId && !!clientSecret
 
     reply.send({ ok: true, enabled, configured, clientId, allowedUsers })
   })
@@ -218,14 +244,16 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
 
     if (enabled) {
       // Must be configured
-      const clientId = getSetting('auth.github_client_id')
-      const clientSecret = getSetting('auth.github_client_secret')
+      const settings = getGitHubOAuthSettings()
+      const clientId = settings['auth.github_client_id']
+      const clientSecret = settings['auth.github_client_secret']
       if (!clientId || !clientSecret) {
         return reply.status(400).send({ error: 'GitHub OAuth is not configured' })
       }
     } else {
       // Lockout prevention
-      const passwordEnabled = getSetting('auth.password_enabled') !== '0'
+      const settings = getGitHubOAuthSettings()
+      const passwordEnabled = settings['auth.password_enabled'] !== '0'
       const passkeyCount = getCredentialCount()
       if (!passwordEnabled && passkeyCount === 0) {
         return reply.status(400).send({ error: 'Cannot disable GitHub OAuth without an alternative login method' })

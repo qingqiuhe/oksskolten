@@ -17,8 +17,12 @@ function normalizeBaseUrl(baseURL?: string): string {
   return baseURL?.trim().replace(/\/+$/, '') || ''
 }
 
-export function getOpenAIClient(userId?: number | null, openaiConfig?: OpenAICompatibleConfig): OpenAI {
-  const key = openaiConfig?.apiKey?.trim() || getSetting('api_key.openai', userId) || ''
+export function getOpenAIClient(userId?: number | null, openaiConfig?: OpenAICompatibleConfig, apiKey?: string): OpenAI {
+  const key = openaiConfig?.apiKey?.trim() || apiKey || getSetting('api_key.openai', userId) || ''
+  return getOpenAIClientForKey(key, openaiConfig)
+}
+
+function getOpenAIClientForKey(key: string, openaiConfig?: OpenAICompatibleConfig): OpenAI {
   const baseURL = normalizeBaseUrl(openaiConfig?.baseURL)
   if (cachedClient && key === cachedKey && baseURL === cachedBaseUrl) return cachedClient
   cachedKey = key
@@ -100,9 +104,11 @@ export const openaiProvider: LLMProvider = {
   name: 'openai',
 
   requireKey(userId, openaiConfig) {
-    if (!(openaiConfig?.apiKey?.trim() || getSetting('api_key.openai', userId))) {
+    const key = openaiConfig?.apiKey?.trim() || getSetting('api_key.openai', userId)
+    if (!key) {
       throw new Error('OPENAI_KEY_NOT_SET')
     }
+    return key
   },
 
   async createMessage(params: LLMMessageParams): Promise<LLMStreamResult> {
@@ -110,7 +116,9 @@ export const openaiProvider: LLMProvider = {
       return createMessageViaRawFetch(params)
     }
 
-    const client = getOpenAIClient(params.userId, params.openaiConfig)
+    const client = params.apiKey !== undefined
+      ? getOpenAIClientForKey(params.apiKey, params.openaiConfig)
+      : getOpenAIClient(params.userId, params.openaiConfig)
 
     const response = await client.chat.completions.create({
       model: params.model,
@@ -131,7 +139,9 @@ export const openaiProvider: LLMProvider = {
       return streamMessageViaRawFetch(params, onText)
     }
 
-    const client = getOpenAIClient(params.userId, params.openaiConfig)
+    const client = params.apiKey !== undefined
+      ? getOpenAIClientForKey(params.apiKey, params.openaiConfig)
+      : getOpenAIClient(params.userId, params.openaiConfig)
 
     const stream = await client.chat.completions.create({
       model: params.model,

@@ -1,7 +1,34 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
+
+const {
+  mockAddDocuments,
+  mockUpdateDocuments,
+  mockDeleteDocument,
+  mockDeleteDocuments,
+} = vi.hoisted(() => ({
+  mockAddDocuments: vi.fn(() => Promise.resolve({})),
+  mockUpdateDocuments: vi.fn(() => Promise.resolve({})),
+  mockDeleteDocument: vi.fn(() => Promise.resolve({})),
+  mockDeleteDocuments: vi.fn(() => Promise.resolve({})),
+}))
+
+vi.mock('../search/client.js', () => ({
+  ARTICLES_INDEX: 'articles',
+  getSearchClient: () => ({
+    index: () => ({
+      addDocuments: mockAddDocuments,
+      updateDocuments: mockUpdateDocuments,
+      deleteDocument: mockDeleteDocument,
+      deleteDocuments: mockDeleteDocuments,
+    }),
+  }),
+}))
+
 import {
   createFeed,
+  createUser,
+  getDb,
   updateFeed,
   getFeedById,
   getFeeds,
@@ -9,13 +36,20 @@ import {
   insertArticle,
   markArticleSeen,
   createCategory,
+  bulkMoveFeedsToCategory,
+  deleteFeed,
   updateFeedError,
   updateFeedRateLimit,
   updateFeedSchedule,
+  markFeedFetchSuccess,
 } from '../db.js'
 
 beforeEach(() => {
   setupTestDb()
+  mockAddDocuments.mockClear()
+  mockUpdateDocuments.mockClear()
+  mockDeleteDocument.mockClear()
+  mockDeleteDocuments.mockClear()
 })
 
 function seedFeed(overrides: Partial<Parameters<typeof createFeed>[0]> = {}) {
@@ -30,6 +64,15 @@ function seedArticle(feedId: number, overrides: Partial<Parameters<typeof insert
     published_at: '2025-01-01T00:00:00Z',
     ...overrides,
   })
+}
+
+function seedUser(email: string) {
+  return createUser({
+    email,
+    passwordHash: 'hash',
+    role: 'member',
+    status: 'active',
+  }).id
 }
 
 describe('updateFeed category_id', () => {
@@ -58,6 +101,56 @@ describe('updateFeed category_id', () => {
     const updated = getFeedById(feed.id)!
     expect(updated.category_id).toBeNull()
   })
+
+  it('does not sync articles when category_id is unchanged', () => {
+    const cat = createCategory('Tech')
+    const feed = seedFeed({ category_id: cat.id })
+    const articleId = seedArticle(feed.id)
+    mockAddDocuments.mockClear()
+
+    updateFeed(feed.id, { category_id: cat.id })
+
+    expect(getFeedById(feed.id)?.category_id).toBe(cat.id)
+    expect(getDb().prepare('SELECT category_id FROM articles WHERE id = ?').get(articleId)).toMatchObject({ category_id: cat.id })
+    expect(mockAddDocuments).not.toHaveBeenCalled()
+  })
+
+  it('syncs only active articles whose category changed', () => {
+    const sourceCat = createCategory('Source')
+    const targetCat = createCategory('Target')
+    const feed = seedFeed({ category_id: sourceCat.id })
+    const changedId = seedArticle(feed.id, { url: 'https://single-feed-change.example.com/active' })
+    const purgedChangedId = seedArticle(feed.id, { url: 'https://single-feed-change.example.com/purged' })
+    getDb().prepare('UPDATE articles SET purged_at = datetime(\'now\') WHERE id = ?').run(purgedChangedId)
+    mockAddDocuments.mockClear()
+
+    updateFeed(feed.id, { category_id: targetCat.id })
+
+    expect(getFeedById(feed.id)?.category_id).toBe(targetCat.id)
+    expect(mockAddDocuments).toHaveBeenCalledTimes(1)
+    const calls = mockAddDocuments.mock.calls as unknown[][]
+    const docs = calls[0][0] as { id: number; category_id: number | null }[]
+    expect(docs).toEqual([expect.objectContaining({ id: changedId, category_id: targetCat.id })])
+    const rows = getDb().prepare('SELECT id, category_id FROM articles WHERE id IN (?, ?) ORDER BY id').all(changedId, purgedChangedId)
+    expect(rows).toEqual([
+      { id: changedId, category_id: targetCat.id },
+      { id: purgedChangedId, category_id: targetCat.id },
+    ])
+  })
+
+  it('does not update article categories when feed update misses', () => {
+    const sourceCat = createCategory('Source')
+    const targetCat = createCategory('Target')
+    const feed = seedFeed({ category_id: sourceCat.id })
+    const articleId = seedArticle(feed.id)
+    mockAddDocuments.mockClear()
+
+    const result = updateFeed(999_999, { category_id: targetCat.id })
+
+    expect(result).toBeUndefined()
+    expect(getDb().prepare('SELECT category_id FROM articles WHERE id = ?').get(articleId)).toMatchObject({ category_id: sourceCat.id })
+    expect(mockAddDocuments).not.toHaveBeenCalled()
+  })
 })
 
 describe('updateFeed rss_url', () => {
@@ -77,6 +170,23 @@ describe('updateFeed rss_url', () => {
 
     const updated = getFeedById(feed.id)!
     expect(updated.rss_url).toBeNull()
+  })
+
+  it('returns updated feed without a follow-up row query', () => {
+    const feed = seedFeed()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const updated = updateFeed(feed.id, { rss_url: 'https://example.com/returning.xml' })
+
+    expect(updated?.rss_url).toBe('https://example.com/returning.xml')
+    expect(preparedSql.some(sql => sql.includes('UPDATE feeds SET') && sql.includes('RETURNING *'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT * FROM feeds WHERE id = ?'))).toBe(false)
   })
 })
 
@@ -157,6 +267,57 @@ describe('updateFeed no-op', () => {
   })
 })
 
+describe('bulkMoveFeedsToCategory', () => {
+  it('syncs only active articles whose category changed', () => {
+    const sourceCat = createCategory('Source')
+    const targetCat = createCategory('Target')
+    const moveFeed = seedFeed({ url: 'https://bulk-move.example.com/a', category_id: sourceCat.id })
+    const alreadyTargetFeed = seedFeed({ url: 'https://bulk-move.example.com/b', category_id: targetCat.id })
+    const changedId = seedArticle(moveFeed.id, { url: 'https://bulk-move.example.com/a/1' })
+    const purgedChangedId = seedArticle(moveFeed.id, { url: 'https://bulk-move.example.com/a/purged' })
+    const unchangedId = seedArticle(alreadyTargetFeed.id, { url: 'https://bulk-move.example.com/b/1' })
+    getDb().prepare('UPDATE articles SET purged_at = datetime(\'now\') WHERE id = ?').run(purgedChangedId)
+    mockAddDocuments.mockClear()
+
+    bulkMoveFeedsToCategory([moveFeed.id, alreadyTargetFeed.id], targetCat.id)
+
+    expect(getFeedById(moveFeed.id)?.category_id).toBe(targetCat.id)
+    expect(getFeedById(alreadyTargetFeed.id)?.category_id).toBe(targetCat.id)
+    expect(mockAddDocuments).toHaveBeenCalledTimes(1)
+    const calls = mockAddDocuments.mock.calls as unknown[][]
+    const docs = calls[0][0] as { id: number; category_id: number | null }[]
+    expect(docs).toHaveLength(1)
+    expect(docs[0]).toMatchObject({ id: changedId, category_id: targetCat.id })
+    const rows = getDb().prepare('SELECT id, category_id FROM articles WHERE id IN (?, ?, ?) ORDER BY id').all(changedId, purgedChangedId, unchangedId) as { id: number; category_id: number | null }[]
+    expect(rows).toEqual([
+      { id: changedId, category_id: targetCat.id },
+      { id: purgedChangedId, category_id: targetCat.id },
+      { id: unchangedId, category_id: targetCat.id },
+    ])
+  })
+})
+
+describe('deleteFeed', () => {
+  it('deletes articles and removes only those ids from search', () => {
+    const feed = seedFeed({ url: 'https://delete-feed.example.com/feed' })
+    const otherFeed = seedFeed({ url: 'https://delete-feed.example.com/other' })
+    const deletedIdA = seedArticle(feed.id, { url: 'https://delete-feed.example.com/a' })
+    const deletedIdB = seedArticle(feed.id, { url: 'https://delete-feed.example.com/b' })
+    const keptId = seedArticle(otherFeed.id, { url: 'https://delete-feed.example.com/kept' })
+    mockDeleteDocuments.mockClear()
+
+    expect(deleteFeed(feed.id)).toBe(true)
+
+    expect(getFeedById(feed.id)).toBeUndefined()
+    expect(getDb().prepare('SELECT id FROM articles WHERE id = ?').get(deletedIdA)).toBeUndefined()
+    expect(getDb().prepare('SELECT id FROM articles WHERE id = ?').get(deletedIdB)).toBeUndefined()
+    expect(getDb().prepare('SELECT id FROM articles WHERE id = ?').get(keptId)).toBeDefined()
+    expect(mockDeleteDocuments).toHaveBeenCalledTimes(1)
+    const calls = mockDeleteDocuments.mock.calls as unknown[][]
+    expect(calls[0][0]).toEqual({ filter: `id IN [${deletedIdA},${deletedIdB}]` })
+  })
+})
+
 describe('createFeed with all options', () => {
   it('creates feed with rss_url and category', () => {
     const cat = createCategory('Tech')
@@ -178,6 +339,25 @@ describe('createFeed with all options', () => {
     expect(feed.requires_js_challenge).toBe(1)
     expect(feed.type).toBe('rss')
   })
+
+  it('returns the inserted feed without a follow-up row query', () => {
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const feed = createFeed({
+      name: 'Returning Feed',
+      url: 'https://returning-feed.example.com',
+    })
+
+    expect(feed.name).toBe('Returning Feed')
+    expect(preparedSql.some(sql => sql.includes('INSERT INTO feeds') && sql.includes('RETURNING *'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT * FROM feeds WHERE id = ?'))).toBe(false)
+  })
 })
 
 describe('getFeeds articles_per_week', () => {
@@ -192,6 +372,48 @@ describe('getFeeds articles_per_week', () => {
 
     const feeds = getFeeds()
     expect(feeds[0].articles_per_week).toBe(2)
+  })
+})
+
+describe('getFeeds user-scoped aggregation', () => {
+  it('keeps feed counts scoped to the requested user', () => {
+    const userA = seedUser('a@example.com')
+    const userB = seedUser('b@example.com')
+    const feedA = createFeed({ name: 'A Feed', url: 'https://a.example.com/feed' }, userA)
+    const feedB = createFeed({ name: 'B Feed', url: 'https://b.example.com/feed' }, userB)
+
+    seedArticle(feedA.id, { url: 'https://a.example.com/1' })
+    seedArticle(feedA.id, { url: 'https://a.example.com/2' })
+    for (let i = 0; i < 5; i++) {
+      seedArticle(feedB.id, { url: `https://b.example.com/${i}` })
+    }
+
+    const feeds = getFeeds(userA)
+
+    expect(feeds).toHaveLength(1)
+    expect(feeds[0].id).toBe(feedA.id)
+    expect(feeds[0].article_count).toBe(2)
+    expect(feeds[0].unread_count).toBe(2)
+  })
+
+  it('can use the active feed counts covering index for scoped article aggregation', () => {
+    const userA = seedUser('plan-a@example.com')
+    const feedA = createFeed({ name: 'Plan A Feed', url: 'https://plan-a.example.com/feed' }, userA)
+    seedArticle(feedA.id, { url: 'https://plan-a.example.com/1' })
+
+    const plan = getDb().prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT feed_id,
+        COUNT(*) AS article_count,
+        SUM(CASE WHEN seen_at IS NULL THEN 1 ELSE 0 END) AS unread_count,
+        COUNT(CASE WHEN COALESCE(published_at, fetched_at) >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-28 days') THEN 1 END) / 4.0 AS articles_per_week,
+        MAX(COALESCE(published_at, fetched_at)) AS latest_published_at
+      FROM active_articles
+      WHERE user_id = ?
+      GROUP BY feed_id
+    `).all(userA) as { detail: string }[]
+
+    expect(plan.some(row => row.detail.includes('idx_articles_user_active_feed_counts'))).toBe(true)
   })
 })
 
@@ -215,6 +437,23 @@ describe('updateFeedError exponential backoff', () => {
     const updated = getFeedById(feed.id)!
     expect(updated.error_count).toBe(2)
     expect(updated.next_check_at).toBeNull()
+  })
+
+  it('increments error_count without a follow-up count query', () => {
+    const feed = seedFeed()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    updateFeedError(feed.id, 'Error 1')
+
+    expect(getFeedById(feed.id)?.error_count).toBe(1)
+    expect(preparedSql.some(sql => sql.includes('RETURNING error_count'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT error_count FROM feeds'))).toBe(false)
   })
 
   it('sets next_check_at with backoff for errorCount >= 3', () => {
@@ -263,6 +502,37 @@ describe('updateFeedError exponential backoff', () => {
     const updated = getFeedById(feed.id)!
     expect(updated.last_error).toBeNull()
     expect(updated.error_count).toBe(0)
+  })
+
+  it('records successful fetch metadata in one update', () => {
+    const feed = seedFeed()
+    updateFeedError(feed.id, 'Error 1')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    markFeedFetchSuccess(feed.id, {
+      nextCheckAt: '2026-06-10T01:00:00Z',
+      checkInterval: 1800,
+      etag: 'etag-1',
+      lastModified: 'Wed, 10 Jun 2026 00:00:00 GMT',
+      contentHash: 'hash-1',
+    })
+
+    const updated = getFeedById(feed.id)!
+    expect(updated.last_error).toBeNull()
+    expect(updated.error_count).toBe(0)
+    expect(updated.etag).toBe('etag-1')
+    expect(updated.last_modified).toBe('Wed, 10 Jun 2026 00:00:00 GMT')
+    expect(updated.last_content_hash).toBe('hash-1')
+    expect(updated.next_check_at).toBe('2026-06-10T01:00:00Z')
+    expect(updated.check_interval).toBe(1800)
+    const successUpdates = preparedSql.filter(sql => sql.includes('UPDATE feeds') && sql.includes('last_error = NULL'))
+    expect(successUpdates).toHaveLength(1)
   })
 
   it('never disables feeds', () => {

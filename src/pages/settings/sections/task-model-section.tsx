@@ -18,13 +18,21 @@ import type { TranslateFn } from '../../../lib/i18n'
 type TFunc = TranslateFn
 type TaskKey = 'chat' | 'summary' | 'translate'
 
-type Prefs = Record<string, string | null>
-type CustomLLMProvider = {
+export type Prefs = Record<string, string | null>
+export type CustomLLMProvider = {
   id: number
   name: string
   kind: 'openai-compatible'
   base_url: string
   has_api_key: boolean
+}
+export type ProviderKeyStatus = Record<string, { configured: boolean }>
+export type TaskModelSharedData = {
+  keyStatus?: { keys: ProviderKeyStatus }
+  claudeCodeStatus?: { loggedIn?: boolean }
+  prefs?: Prefs
+  mutatePrefs?: (value?: Prefs, shouldRevalidate?: boolean) => unknown
+  customProvidersData?: { providers: CustomLLMProvider[] }
 }
 
 type TaskDraft = {
@@ -42,7 +50,6 @@ type ProviderOption = {
   group: 'builtIn' | 'custom' | 'translate'
   enabled: boolean
 }
-
 const SWR_KEY_OPTS = { revalidateOnFocus: false } as const
 const TASK_DEFAULT_PROVIDER: Record<TaskKey, string> = {
   chat: 'anthropic',
@@ -55,44 +62,41 @@ const TASK_DEFAULT_MODEL: Record<TaskKey, string> = {
   translate: 'claude-sonnet-4-6',
 }
 
-export function TaskModelSection({ settings: _settings, t }: { settings: Settings; t: TFunc }) {
-  const anthropicKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/anthropic`, fetcher, SWR_KEY_OPTS)
-  const geminiKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/gemini`, fetcher, SWR_KEY_OPTS)
-  const openaiKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/openai`, fetcher, SWR_KEY_OPTS)
-  const googleTranslateKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/google-translate`, fetcher, SWR_KEY_OPTS)
-  const deeplKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/deepl`, fetcher, SWR_KEY_OPTS)
-  const { data: claudeCodeStatus } = useSWR<{ loggedIn?: boolean }>(
-    '/api/chat/claude-code-status',
+export function TaskModelSection({ settings: _settings, t, sharedData }: { settings: Settings; t: TFunc; sharedData?: TaskModelSharedData }) {
+  const { data: internalKeyStatus } = useSWR<{ keys: ProviderKeyStatus }>(sharedData ? null : '/api/settings/api-keys', fetcher, SWR_KEY_OPTS)
+  const { data: internalClaudeCodeStatus } = useSWR<{ loggedIn?: boolean }>(
+    sharedData ? null : '/api/chat/claude-code-status',
     fetcher,
     SWR_KEY_OPTS,
   )
-  const { data: prefs, mutate: mutatePrefs } = useSWR<Prefs>(
-    '/api/settings/preferences',
+  const { data: internalPrefs, mutate: internalMutatePrefs } = useSWR<Prefs>(
+    sharedData ? null : '/api/settings/preferences',
     fetcher,
     SWR_KEY_OPTS,
   )
-  const { data: customProvidersData } = useSWR<{ providers: CustomLLMProvider[] }>(
-    '/api/settings/custom-llm-providers',
+  const { data: internalCustomProvidersData } = useSWR<{ providers: CustomLLMProvider[] }>(
+    sharedData ? null : '/api/settings/custom-llm-providers',
     fetcher,
     SWR_KEY_OPTS,
   )
+  const keyStatus = sharedData?.keyStatus ?? internalKeyStatus
+  const claudeCodeStatus = sharedData?.claudeCodeStatus ?? internalClaudeCodeStatus
+  const prefs = sharedData?.prefs ?? internalPrefs
+  const mutatePrefs = sharedData?.mutatePrefs ?? internalMutatePrefs
+  const customProvidersData = sharedData?.customProvidersData ?? internalCustomProvidersData
 
   const customProviders = useMemo(() => customProvidersData?.providers || [], [customProvidersData])
   const configuredKeys = useMemo(() => ({
-    anthropic: !!anthropicKey.data?.configured,
-    gemini: !!geminiKey.data?.configured,
-    openai: !!openaiKey.data?.configured,
+    anthropic: !!keyStatus?.keys.anthropic?.configured,
+    gemini: !!keyStatus?.keys.gemini?.configured,
+    openai: !!keyStatus?.keys.openai?.configured,
     'claude-code': !!claudeCodeStatus?.loggedIn,
     ollama: true,
-    'google-translate': !!googleTranslateKey.data?.configured,
-    deepl: !!deeplKey.data?.configured,
+    'google-translate': !!keyStatus?.keys['google-translate']?.configured,
+    deepl: !!keyStatus?.keys.deepl?.configured,
   }), [
-    anthropicKey.data?.configured,
-    geminiKey.data?.configured,
-    openaiKey.data?.configured,
+    keyStatus,
     claudeCodeStatus?.loggedIn,
-    googleTranslateKey.data?.configured,
-    deeplKey.data?.configured,
   ])
 
   const providerOptions = useMemo(() => {

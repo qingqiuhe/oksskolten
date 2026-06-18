@@ -15,6 +15,7 @@ interface SocialFeedStepProps {
   onCreated: () => void
   onFetchStarted?: (feedId: number) => void
   categories: Category[]
+  rsshubBaseUrl?: string
 }
 
 function localizeSocialFeedError(raw: string, t: ReturnType<typeof useI18n>['t']): string {
@@ -26,9 +27,12 @@ function localizeSocialFeedError(raw: string, t: ReturnType<typeof useI18n>['t']
   return raw
 }
 
-export function SocialFeedStep({ onClose, onCreated, onFetchStarted, categories }: SocialFeedStepProps) {
+export function SocialFeedStep({ onClose, onCreated, onFetchStarted, categories, rsshubBaseUrl: sharedRsshubBaseUrl }: SocialFeedStepProps) {
   const { t } = useI18n()
-  const { data } = useSWR<{ rsshub_base_url: string }>('/api/settings/social-sources', fetcher)
+  const { data } = useSWR<{ rsshub_base_url: string }>(
+    sharedRsshubBaseUrl === undefined ? '/api/settings/social-sources' : null,
+    fetcher,
+  )
   const [input, setInput] = useState('')
   const [name, setName] = useState('')
   const [iconUrl, setIconUrl] = useState('')
@@ -38,7 +42,7 @@ export function SocialFeedStep({ onClose, onCreated, onFetchStarted, categories 
   const [submitting, setSubmitting] = useState(false)
 
   const parsed = useMemo(() => parseXAccountInput(input), [input])
-  const rsshubBaseUrl = data?.rsshub_base_url?.trim() ?? ''
+  const rsshubBaseUrl = (sharedRsshubBaseUrl ?? data?.rsshub_base_url ?? '').trim()
   const canCreate = Boolean(parsed) && Boolean(rsshubBaseUrl) && !submitting
 
   async function handleSubmit(e: React.FormEvent) {

@@ -9,6 +9,64 @@ const log = logger.child('similarity')
 const SIMILARITY_THRESHOLD = 0.4
 const TIME_WINDOW_DAYS = 3
 const MAX_CANDIDATES = 10
+const SIMILARITY_DETECTION_CONCURRENCY = 2
+
+interface SimilarityDetectionTask {
+  articleId: number
+  title: string
+  feedId: number
+  publishedAt: string | null
+}
+
+const pendingSimilarityTasks = new Map<number, SimilarityDetectionTask>()
+const idleResolvers = new Set<() => void>()
+let activeSimilarityTasks = 0
+
+function maybeResolveIdle(): void {
+  if (activeSimilarityTasks !== 0 || pendingSimilarityTasks.size !== 0) return
+  for (const resolve of idleResolvers) resolve()
+  idleResolvers.clear()
+}
+
+function takeNextTask(): SimilarityDetectionTask | undefined {
+  const next = pendingSimilarityTasks.values().next()
+  if (next.done) return undefined
+  pendingSimilarityTasks.delete(next.value.articleId)
+  return next.value
+}
+
+function pumpSimilarityQueue(): void {
+  while (activeSimilarityTasks < SIMILARITY_DETECTION_CONCURRENCY) {
+    const task = takeNextTask()
+    if (!task) break
+    activeSimilarityTasks += 1
+    void detectAndStoreSimilarArticles(task.articleId, task.title, task.feedId, task.publishedAt)
+      .finally(() => {
+        activeSimilarityTasks -= 1
+        pumpSimilarityQueue()
+        maybeResolveIdle()
+      })
+  }
+  maybeResolveIdle()
+}
+
+export function enqueueSimilarityDetection(task: SimilarityDetectionTask): void {
+  pendingSimilarityTasks.set(task.articleId, task)
+  pumpSimilarityQueue()
+}
+
+/** @internal Test-only helper to wait for queued similarity work. */
+export function _awaitSimilarityQueueIdle(): Promise<void> {
+  if (activeSimilarityTasks === 0 && pendingSimilarityTasks.size === 0) return Promise.resolve()
+  return new Promise(resolve => idleResolvers.add(resolve))
+}
+
+/** @internal Test-only helper to clear pending similarity work. */
+export function _resetSimilarityQueueForTests(): void {
+  pendingSimilarityTasks.clear()
+  activeSimilarityTasks = 0
+  idleResolvers.clear()
+}
 
 /**
  * Compute bigram Dice coefficient between two strings.

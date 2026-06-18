@@ -4,6 +4,7 @@ import { AlertTriangle, Copy, Check, Info, ChevronDown, ExternalLink } from 'luc
 import { useI18n } from '../../lib/i18n'
 import { Input } from '../ui/input'
 import { fetcher, apiPost } from '../../lib/fetcher'
+import type { SecuritySharedData } from './password-settings'
 
 interface OAuthConfig {
   enabled: boolean
@@ -18,7 +19,7 @@ interface AuthMethods {
   github?: { enabled: boolean }
 }
 
-export function GitHubOAuthSettings() {
+export function GitHubOAuthSettings({ sharedData }: { sharedData?: SecuritySharedData } = {}) {
   const { t } = useI18n()
   const [guideOpen, setGuideOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -28,7 +29,9 @@ export function GitHubOAuthSettings() {
   const [copied, setCopied] = useState(false)
 
   const { data: config, mutate: mutateConfig } = useSWR<OAuthConfig>('/api/oauth/github/config', fetcher)
-  const { data: methods, mutate: mutateMethods } = useSWR<AuthMethods>('/api/auth/methods', fetcher)
+  const { data: internalMethods, mutate: internalMutateMethods } = useSWR<AuthMethods>(sharedData ? null : '/api/auth/methods', fetcher)
+  const methods = sharedData?.methods ?? internalMethods
+  const mutateMethods = sharedData?.mutateMethods ?? internalMutateMethods
 
   const [clientId, setClientId] = useState<string | null>(null)
   const [clientSecret, setClientSecret] = useState('')

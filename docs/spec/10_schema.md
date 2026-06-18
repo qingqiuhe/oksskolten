@@ -209,7 +209,7 @@ CREATE TABLE api_keys (
   key_hash     TEXT    NOT NULL UNIQUE,             -- SHA-256 hash of the full key (plaintext is never stored)
   key_prefix   TEXT    NOT NULL,                    -- First 11 chars for display: "ok_a1b2c3d4"
   scopes       TEXT    NOT NULL DEFAULT 'read',     -- 'read' | 'read,write'
-  last_used_at TEXT,                                -- Updated on each successful validation
+  last_used_at TEXT,                                -- Updated periodically after successful validation
   created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 

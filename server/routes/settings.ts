@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import {
   getSetting,
+  getSettings,
   upsertSetting,
   deleteSetting,
   listCustomLLMProviders,
@@ -17,6 +18,7 @@ import {
   getDb,
   listNotificationChannels,
   getNotificationChannelById,
+  listNotificationChannelsByIds,
   createNotificationChannel,
   updateNotificationChannel,
   deleteNotificationChannel,
@@ -33,7 +35,7 @@ import { getMonthlyUsage } from '../providers/translate/google-translate.js'
 import { getDeeplMonthlyUsage } from '../providers/translate/deepl.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
 import { sendFeishuTestMessage } from '../notifications/feishu.js'
-import { FETCH_MIN_INTERVAL_SETTING_KEY, getFetchScheduleConfig } from '../fetcher/schedule.js'
+import { FETCH_MIN_INTERVAL_SETTING_KEY, getFetchScheduleConfig, invalidateFetchScheduleConfigCache } from '../fetcher/schedule.js'
 import { isAdminLike, roleCanManage, type UserRole } from '../identity.js'
 import { runOpenAICompatibleDiagnostics } from '../providers/llm/openai-compatible-test.js'
 import {
@@ -53,6 +55,8 @@ import {
   MIN_NOTIFICATION_MAX_TITLE_CHARS,
 } from '../../shared/notification-message.js'
 import { dataPath } from '../paths.js'
+import { invalidateArticleImageStoragePathCache } from '../article-image-storage-path.js'
+import { getSocialRssHubBaseUrl, invalidateSocialRssHubBaseUrlCache } from '../social-feeds.js'
 
 const ProfileBody = z.object({
   account_name: z.string().optional(),
@@ -202,10 +206,77 @@ const PROVIDER_INSTANCE_PAIRS: Array<{ providerKey: PrefKey; providerInstanceKey
   { providerKey: 'translate.provider', providerInstanceKey: 'translate.provider_instance_id' },
 ]
 
-function validateProviderModel(body: Record<string, unknown>, userId: number | null): string | null {
+const PROFILE_SETTING_KEYS = [
+  'profile.account_name',
+  'profile.avatar_seed',
+  'general.language',
+] as const
+
+const IMAGE_STORAGE_KEYS = [
+  'images.enabled',
+  'images.storage',
+  'images.storage_path',
+  'images.max_size_mb',
+  'images.upload_url',
+  'images.upload_headers',
+  'images.upload_field',
+  'images.upload_resp_path',
+  'images.healthcheck_url',
+] as const
+
+const IMAGE_STORAGE_TEST_KEYS = [
+  'images.storage',
+  'images.upload_url',
+  'images.upload_headers',
+  'images.upload_field',
+  'images.upload_resp_path',
+] as const
+
+const RETENTION_SETTING_KEYS = [
+  'retention.enabled',
+  'retention.read_days',
+  'retention.unread_days',
+] as const
+
+function preferenceValue(settings: Record<string, string | undefined>, key: PrefKey): string | undefined {
+  return settings[key]
+}
+
+function buildPreferencesResponse(settings: Record<string, string | undefined>): Record<string, string | null> {
+  const result: Record<string, string | null> = {}
+  for (const key of PREF_KEYS) {
+    result[key] = settings[key] ?? null
+  }
+  return result
+}
+
+function buildProfileResponse(settings: Record<string, string | undefined>, email?: string) {
+  return {
+    account_name: settings['profile.account_name'] ?? '',
+    avatar_seed: settings['profile.avatar_seed'] || null,
+    language: settings['general.language'] ?? null,
+    ...(email !== undefined ? { email } : {}),
+  }
+}
+
+function buildImageStorageResponse(settings: Record<string, string | undefined>) {
+  return {
+    'images.enabled': settings['images.enabled'] ?? null,
+    mode: settings['images.storage'] ?? 'local',
+    url: settings['images.upload_url'] ?? '',
+    headersConfigured: !!settings['images.upload_headers'],
+    fieldName: settings['images.upload_field'] ?? 'image',
+    respPath: settings['images.upload_resp_path'] ?? '',
+    healthcheckUrl: settings['images.healthcheck_url'] ?? '',
+    'images.storage_path': settings['images.storage_path'] ?? null,
+    'images.max_size_mb': settings['images.max_size_mb'] ?? null,
+  }
+}
+
+function validateProviderModel(body: Record<string, unknown>, settings: Record<string, string | undefined>): string | null {
   for (const { providerKey, modelKey } of PROVIDER_MODEL_PAIRS) {
-    const model = body[modelKey] !== undefined ? String(body[modelKey]) : getSetting(modelKey, userId)
-    const provider = body[providerKey] !== undefined ? String(body[providerKey]) : getSetting(providerKey, userId)
+    const model = body[modelKey] !== undefined ? String(body[modelKey]) : preferenceValue(settings, modelKey)
+    const provider = body[providerKey] !== undefined ? String(body[providerKey]) : preferenceValue(settings, providerKey)
     if (!model || !provider) continue
     // google-translate, deepl, ollama, and OpenAI-compatible APIs have no fixed server-side model list
     if (provider === 'google-translate' || provider === 'deepl' || provider === 'ollama' || provider === 'openai') continue
@@ -219,18 +290,18 @@ function validateProviderModel(body: Record<string, unknown>, userId: number | n
   return null
 }
 
-function validateProviderInstanceRefs(body: Record<string, unknown>, userId: number | null): string | null {
+function validateProviderInstanceRefs(body: Record<string, unknown>, userId: number | null, settings: Record<string, string | undefined>): string | null {
   for (const { providerKey, providerInstanceKey } of PROVIDER_INSTANCE_PAIRS) {
     const providerInstanceRaw = body[providerInstanceKey] !== undefined
       ? body[providerInstanceKey]
-      : getSetting(providerInstanceKey, userId)
+      : preferenceValue(settings, providerInstanceKey)
     if (providerInstanceRaw === undefined || providerInstanceRaw === null || String(providerInstanceRaw).trim() === '') {
       continue
     }
 
     const provider = body[providerKey] !== undefined
       ? String(body[providerKey])
-      : getSetting(providerKey, userId)
+      : preferenceValue(settings, providerKey)
     if (provider !== 'openai') {
       return `${providerInstanceKey} can only be set when ${providerKey} is openai`
     }
@@ -295,14 +366,12 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
   api.get('/api/settings/profile', async (request, reply) => {
     const authEmail = getAuthUser(request) ?? 'localhost'
     const userId = getRequestUserId(request)
-    let accountName = getSetting('profile.account_name', userId)
-    if (!accountName) {
-      accountName = authEmail
-      upsertSetting('profile.account_name', accountName, userId)
+    const settings = getSettings(PROFILE_SETTING_KEYS, userId)
+    if (!settings['profile.account_name']) {
+      settings['profile.account_name'] = authEmail
+      upsertSetting('profile.account_name', settings['profile.account_name'], userId)
     }
-    const avatarSeed = getSetting('profile.avatar_seed', userId) || null
-    const language = getSetting('general.language', userId) ?? null
-    reply.send({ account_name: accountName, avatar_seed: avatarSeed, language, email: authEmail })
+    reply.send(buildProfileResponse(settings, authEmail))
   })
 
   api.patch(
@@ -330,10 +399,7 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
       if (body.language !== undefined) {
         upsertSetting('general.language', body.language, userId)
       }
-      const accountName = getSetting('profile.account_name', userId)!
-      const avatarSeed = getSetting('profile.avatar_seed', userId) || null
-      const language = getSetting('general.language', userId) ?? null
-      reply.send({ account_name: accountName, avatar_seed: avatarSeed, language })
+      reply.send(buildProfileResponse(getSettings(PROFILE_SETTING_KEYS, userId)))
     },
   )
 
@@ -341,24 +407,21 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
 
   api.get('/api/settings/preferences', async (request, reply) => {
     const userId = getRequestUserId(request)
-    const result: Record<string, string | null> = {}
-    for (const key of PREF_KEYS) {
-      result[key] = getSetting(key, userId) ?? null
-    }
-    reply.send(result)
+    reply.send(buildPreferencesResponse(getSettings(PREF_KEYS, userId)))
   })
 
   const handlePrefsUpdate = async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as Record<string, unknown> // dynamic keys, validated per-field below
     const userId = getRequestUserId(request)
+    const currentPrefs = getSettings(PREF_KEYS, userId)
 
     // Validate provider-model consistency before saving
-    const validationError = validateProviderModel(body, userId)
+    const validationError = validateProviderModel(body, currentPrefs)
     if (validationError) {
       reply.status(400).send({ error: validationError })
       return
     }
-    const providerInstanceError = validateProviderInstanceRefs(body, userId)
+    const providerInstanceError = validateProviderInstanceRefs(body, userId, currentPrefs)
     if (providerInstanceError) {
       reply.status(400).send({ error: providerInstanceError })
       return
@@ -415,7 +478,7 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
         if (modelKeyPair) {
           const provider = body[modelKeyPair.providerKey] !== undefined
             ? String(body[modelKeyPair.providerKey])
-            : getSetting(modelKeyPair.providerKey, userId)
+            : preferenceValue(currentPrefs, modelKeyPair.providerKey)
           if (provider === 'ollama' || provider === 'openai') {
             upsertSetting(key, value, userId)
             updated = true
@@ -440,11 +503,7 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
       reply.status(400).send({ error: 'No valid fields to update' })
       return
     }
-    const result: Record<string, string | null> = {}
-    for (const key of PREF_KEYS) {
-      result[key] = getSetting(key, userId) ?? null
-    }
-    reply.send(result)
+    reply.send(buildPreferencesResponse(getSettings(PREF_KEYS, userId)))
   }
 
   api.patch('/api/settings/preferences', { preHandler: [requireJson] }, handlePrefsUpdate)
@@ -679,12 +738,23 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
       }
     }
 
+    let nextChannels = task.channels
     if (body.channel_ids !== undefined) {
-      const channels = body.channel_ids.map(channelId => getNotificationChannelById(channelId, getRequestUserId(request)))
-      if (channels.some(channel => !channel || channel.enabled !== 1)) {
+      const channelsById = new Map(
+        listNotificationChannelsByIds(body.channel_ids, getRequestUserId(request))
+          .filter(channel => channel.enabled === 1)
+          .map(channel => [channel.id, channel]),
+      )
+      const channels = body.channel_ids.map(channelId => channelsById.get(channelId))
+      if (channels.some(channel => !channel)) {
         reply.status(400).send({ error: 'Invalid notification channel' })
         return
       }
+      nextChannels = channels.map(channel => ({
+        id: channel!.id,
+        name: channel!.name,
+        enabled: channel!.enabled,
+      }))
     }
     const nextDeliveryMode = body.delivery_mode ?? task.delivery_mode
     if (nextDeliveryMode === 'digest' && body.check_interval_minutes === undefined && task.check_interval_minutes == null) {
@@ -698,7 +768,20 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
       return
     }
 
-    reply.send(getNotificationTaskById(params.id))
+    reply.send({
+      ...task,
+      enabled: updated.enabled,
+      delivery_mode: updated.delivery_mode,
+      content_mode: updated.content_mode,
+      translate_enabled: updated.translate_enabled,
+      check_interval_minutes: updated.check_interval_minutes,
+      max_articles_per_message: updated.max_articles_per_message,
+      max_title_chars: updated.max_title_chars,
+      max_body_chars: updated.max_body_chars,
+      next_check_at: updated.next_check_at,
+      last_checked_at: updated.last_checked_at,
+      channels: nextChannels,
+    })
   })
 
   api.delete('/api/settings/notification-tasks/:id', async (request, reply) => {
@@ -749,13 +832,14 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
     if (!body) return
 
     upsertSetting(FETCH_MIN_INTERVAL_SETTING_KEY, String(body.min_interval_minutes))
+    invalidateFetchScheduleConfigCache()
     reply.send({ min_interval_minutes: getFetchScheduleConfig().minIntervalMinutes })
   })
 
   // --- Social source settings ---
 
   api.get('/api/settings/social-sources', async (_request, reply) => {
-    reply.send({ rsshub_base_url: getSetting('social.rsshub_base_url') ?? '' })
+    reply.send({ rsshub_base_url: getSocialRssHubBaseUrl() ?? '' })
   })
 
   api.patch('/api/settings/social-sources', {
@@ -767,6 +851,7 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
     const trimmed = body.rsshub_base_url.trim()
     if (!trimmed) {
       deleteSetting('social.rsshub_base_url')
+      invalidateSocialRssHubBaseUrlCache()
       reply.send({ rsshub_base_url: '' })
       return
     }
@@ -789,6 +874,7 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
     parsed.pathname = parsed.pathname.replace(/\/+$/, '')
     const normalized = parsed.toString().replace(/\/+$/, '')
     upsertSetting('social.rsshub_base_url', normalized)
+    invalidateSocialRssHubBaseUrlCache()
 
     reply.send({ rsshub_base_url: normalized })
   })
@@ -796,26 +882,7 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
   // --- Image storage settings ---
 
   api.get('/api/settings/image-storage', async (_request, reply) => {
-    const enabled = getSetting('images.enabled') ?? null
-    const mode = getSetting('images.storage') ?? 'local'
-    const storagePath = getSetting('images.storage_path') ?? null
-    const maxSizeMb = getSetting('images.max_size_mb') ?? null
-    const url = getSetting('images.upload_url') ?? ''
-    const headersRaw = getSetting('images.upload_headers')
-    const fieldName = getSetting('images.upload_field') ?? 'image'
-    const respPath = getSetting('images.upload_resp_path') ?? ''
-    const healthcheckUrl = getSetting('images.healthcheck_url') ?? ''
-    reply.send({
-      'images.enabled': enabled,
-      mode,
-      url,
-      headersConfigured: !!headersRaw,
-      fieldName,
-      respPath,
-      healthcheckUrl,
-      'images.storage_path': storagePath,
-      'images.max_size_mb': maxSizeMb,
-    })
+    reply.send(buildImageStorageResponse(getSettings(IMAGE_STORAGE_KEYS)))
   })
 
   api.patch(
@@ -834,6 +901,7 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
         const val = String(body['images.storage_path']).trim()
         if (val === '') deleteSetting('images.storage_path')
         else upsertSetting('images.storage_path', val)
+        invalidateArticleImageStoragePathCache()
       }
       if (body['images.max_size_mb'] !== undefined) {
         const val = String(body['images.max_size_mb']).trim()
@@ -914,43 +982,24 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
         }
       }
 
-      // Return current state
-      const enabled = getSetting('images.enabled') ?? null
-      const mode = getSetting('images.storage') ?? 'local'
-      const storagePath = getSetting('images.storage_path') ?? null
-      const maxSizeMb = getSetting('images.max_size_mb') ?? null
-      const url = getSetting('images.upload_url') ?? ''
-      const headersRaw = getSetting('images.upload_headers')
-      const fieldName = getSetting('images.upload_field') ?? 'image'
-      const respPath = getSetting('images.upload_resp_path') ?? ''
-      const healthcheckUrl = getSetting('images.healthcheck_url') ?? ''
-      reply.send({
-        'images.enabled': enabled,
-        mode,
-        url,
-        headersConfigured: !!headersRaw,
-        fieldName,
-        respPath,
-        healthcheckUrl,
-        'images.storage_path': storagePath,
-        'images.max_size_mb': maxSizeMb,
-      })
+      reply.send(buildImageStorageResponse(getSettings(IMAGE_STORAGE_KEYS)))
     },
   )
 
   // --- Image storage test upload ---
 
   api.post('/api/settings/image-storage/test', async (_request, reply) => {
-    const mode = getSetting('images.storage')
+    const settings = getSettings(IMAGE_STORAGE_TEST_KEYS)
+    const mode = settings['images.storage']
     if (mode !== 'remote') {
       reply.status(400).send({ error: 'Image storage mode is not set to remote' })
       return
     }
 
-    const uploadUrl = getSetting('images.upload_url')
-    const headersRaw = getSetting('images.upload_headers')
-    const fieldName = getSetting('images.upload_field') ?? 'image'
-    const respPath = getSetting('images.upload_resp_path')
+    const uploadUrl = settings['images.upload_url']
+    const headersRaw = settings['images.upload_headers']
+    const fieldName = settings['images.upload_field'] ?? 'image'
+    const respPath = settings['images.upload_resp_path']
 
     if (!uploadUrl || !respPath) {
       reply.status(400).send({ error: 'Remote upload settings are incomplete' })
@@ -1047,16 +1096,16 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
 
   // --- Retention policy ---
 
-  function getRetentionDays(): { readDays: number; unreadDays: number } | null {
-    const readDays = Number(getSetting('retention.read_days'))
-    const unreadDays = Number(getSetting('retention.unread_days'))
+  function getRetentionDays(settings: Record<string, string | undefined>): { readDays: number; unreadDays: number } | null {
+    const readDays = Number(settings['retention.read_days'])
+    const unreadDays = Number(settings['retention.unread_days'])
     if (isNaN(readDays) || isNaN(unreadDays) || readDays < 1 || unreadDays < 1) return null
     return { readDays, unreadDays }
   }
 
   api.get('/api/settings/retention/stats', async (_request, reply) => {
     const databaseBytes = getRssDatabaseBytes()
-    const days = getRetentionDays()
+    const days = getRetentionDays(getSettings(RETENTION_SETTING_KEYS))
     if (!days) {
       reply.send({ readDays: 0, unreadDays: 0, readEligible: 0, unreadEligible: 0, databaseBytes })
       return
@@ -1066,11 +1115,12 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
   })
 
   api.post('/api/settings/retention/purge', async (_request, reply) => {
-    if (getSetting('retention.enabled') !== 'on') {
+    const settings = getSettings(RETENTION_SETTING_KEYS)
+    if (settings['retention.enabled'] !== 'on') {
       reply.status(400).send({ error: 'Retention policy is not enabled' })
       return
     }
-    const days = getRetentionDays()
+    const days = getRetentionDays(settings)
     if (!days) {
       reply.send({ purged: 0 })
       return
@@ -1096,6 +1146,20 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
     'google-translate': 'api_key.google_translate',
     deepl: 'api_key.deepl',
   }
+
+  function buildProviderKeyStatus(settings: Record<string, string | undefined>) {
+    return Object.fromEntries(
+      Object.entries(PROVIDER_KEY_MAP).map(([provider, settingKey]) => [
+        provider,
+        { configured: !!settings[settingKey] },
+      ]),
+    )
+  }
+
+  api.get('/api/settings/api-keys', async (request, reply) => {
+    const userId = getRequestUserId(request)
+    reply.send({ keys: buildProviderKeyStatus(getSettings(Object.values(PROVIDER_KEY_MAP), userId)) })
+  })
 
   api.get('/api/settings/api-keys/:provider', async (request, reply) => {
     const { provider } = ProviderParams.parse(request.params)
@@ -1138,11 +1202,23 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
 
   // --- Ollama endpoints ---
 
-  async function ollamaFetch(path: string): Promise<Response> {
-    const { getOllamaBaseUrl, getOllamaCustomHeaders } = await import('../providers/llm/ollama.js')
-    const baseUrl = getOllamaBaseUrl().replace(/\/+$/, '')
-    const headers = getOllamaCustomHeaders()
-    return fetch(`${baseUrl}${path}`, { headers, signal: AbortSignal.timeout(5_000) })
+  interface OllamaRouteConnectionConfig {
+    baseUrl: string
+    headers: Record<string, string>
+  }
+
+  async function getOllamaRouteConnectionConfig(): Promise<OllamaRouteConnectionConfig> {
+    const { getOllamaConnectionConfig } = await import('../providers/llm/ollama.js')
+    const config = getOllamaConnectionConfig()
+    return {
+      baseUrl: config.baseUrl.replace(/\/+$/, ''),
+      headers: config.headers,
+    }
+  }
+
+  async function ollamaFetch(path: string, config?: OllamaRouteConnectionConfig): Promise<Response> {
+    const resolvedConfig = config ?? await getOllamaRouteConnectionConfig()
+    return fetch(`${resolvedConfig.baseUrl}${path}`, { headers: resolvedConfig.headers, signal: AbortSignal.timeout(5_000) })
   }
 
   api.get('/api/settings/ollama/models', async (_request, reply) => {
@@ -1166,9 +1242,10 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
 
   api.get('/api/settings/ollama/status', async (_request, reply) => {
     try {
+      const config = await getOllamaRouteConnectionConfig()
       const [versionRes, tagsRes] = await Promise.all([
-        ollamaFetch('/api/version'),
-        ollamaFetch('/api/tags'),
+        ollamaFetch('/api/version', config),
+        ollamaFetch('/api/tags', config),
       ])
       if (!versionRes.ok || !tagsRes.ok) {
         reply.send({ ok: false, error: `HTTP ${versionRes.status}` })

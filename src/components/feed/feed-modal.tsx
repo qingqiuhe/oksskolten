@@ -20,6 +20,7 @@ interface FeedModalProps {
   categories?: Category[]
   canUseJsonApi?: boolean
   canUseSocial?: boolean
+  rsshubBaseUrl?: string
 }
 
 type ModalStep = 'select' | 'feed' | 'folder' | 'article' | 'jsonApi' | 'social' | 'socialX'
@@ -32,7 +33,7 @@ function BackButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarted, onArticleCreated, categories = [], canUseJsonApi = false, canUseSocial = true }: FeedModalProps) {
+export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarted, onArticleCreated, categories = [], canUseJsonApi = false, canUseSocial = true, rsshubBaseUrl }: FeedModalProps) {
   const { t } = useI18n()
   const [step, setStep] = useState<ModalStep>('select')
 
@@ -213,6 +214,7 @@ export function FeedModal({ onClose, onCreated, onCategoryCreated, onFetchStarte
             onCreated={onCreated}
             onFetchStarted={onFetchStarted}
             categories={categories}
+            rsshubBaseUrl={rsshubBaseUrl}
           />
         </>
       )}

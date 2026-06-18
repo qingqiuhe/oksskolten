@@ -91,6 +91,29 @@ describe('POST /api/users import subscriptions', () => {
     expect(mockFetchSingleFeed).toHaveBeenCalledTimes(3)
   })
 
+  it('limits background fetch fan-out for imported feeds', async () => {
+    const feeds = Array.from({ length: 8 }, (_, index) => createFeed({
+      name: `Feed ${index}`,
+      url: `https://feed-${index}.example.com`,
+      rss_url: `https://feed-${index}.example.com/rss`,
+    }))
+    mockFetchSingleFeed.mockImplementation(() => new Promise(() => {}))
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      headers: json,
+      payload: {
+        email: 'invitee2@example.com',
+        role: 'member',
+        import_feed_ids: feeds.map(feed => feed.id),
+      },
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(mockFetchSingleFeed).toHaveBeenCalledTimes(5)
+  })
+
   it('rejects feeds outside the inviter scope', async () => {
     createFeed({ name: 'Allowed', url: 'https://allowed.example.com', rss_url: 'https://allowed.example.com/rss' })
     const foreignFeedId = 9999

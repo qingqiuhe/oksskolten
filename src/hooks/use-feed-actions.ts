@@ -16,6 +16,29 @@ type ConfirmState =
   | { type: 'delete-feed' | 'enable-feed' | 'delete-category'; feed?: FeedWithCounts; category?: Category }
   | null
 
+const CATEGORY_FETCH_CONCURRENCY = 4
+
+async function mapLimited<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = []
+  let nextIndex = 0
+  const workerCount = Math.min(concurrency, items.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= items.length) return
+      results[index] = await worker(items[index])
+    }
+  }))
+
+  return results
+}
+
 interface UseFeedActionsOpts {
   categorized: Map<number, FeedWithCounts[]>
   mutateFeeds: KeyedMutator<{ feeds: FeedWithCounts[]; bookmark_count: number; like_count: number; clip_feed_id: number | null }>
@@ -152,8 +175,10 @@ export function useFeedActions({
 
   async function handleFetchCategory(category: Category) {
     const categoryFeeds = categorized.get(category.id) ?? []
-    const results = await Promise.all(
-      categoryFeeds.filter(f => !f.disabled).map(f => startFeedFetch(f.id))
+    const results = await mapLimited(
+      categoryFeeds.filter(f => !f.disabled),
+      CATEGORY_FETCH_CONCURRENCY,
+      feed => startFeedFetch(feed.id),
     )
     const combined: FetchResult = {
       totalNew: results.reduce((s, r) => s + r.totalNew, 0),

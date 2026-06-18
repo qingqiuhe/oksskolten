@@ -3,26 +3,43 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { safeFetch } from './ssrf.js'
 import { USER_AGENT } from './http.js'
-import { getSetting } from '../db/settings.js'
+import { getSetting, getSettings } from '../db/settings.js'
 import { updateArticleContent, markImagesArchived, clearImagesArchived } from '../db/articles.js'
 import { logger } from '../logger.js'
 import { dataPath } from '../paths.js'
 
 const log = logger.child('fetcher')
 
+const ARTICLE_IMAGE_SETTING_KEYS = [
+  'images.enabled',
+  'images.storage_path',
+  'images.max_size_mb',
+  'images.storage',
+  'images.upload_url',
+  'images.upload_resp_path',
+  'images.upload_field',
+  'images.upload_headers',
+] as const
+type ArticleImageSettingKey = typeof ARTICLE_IMAGE_SETTING_KEYS[number]
+type ArticleImageSettings = Record<ArticleImageSettingKey, string | undefined>
+
+export function getArticleImageSettings(): ArticleImageSettings {
+  return getSettings(ARTICLE_IMAGE_SETTING_KEYS) as ArticleImageSettings
+}
+
 // Default images directory, can be overridden by settings
-function getImagesDir(): string {
-  const custom = getSetting('images.storage_path')
+function getImagesDir(settings?: Pick<ArticleImageSettings, 'images.storage_path'>): string {
+  const custom = settings?.['images.storage_path'] ?? getSetting('images.storage_path')
   return custom || dataPath('articles', 'images')
 }
 
-function getMaxSizeBytes(): number {
-  const val = getSetting('images.max_size_mb')
+function getMaxSizeBytes(settings?: Pick<ArticleImageSettings, 'images.max_size_mb'>): number {
+  const val = settings?.['images.max_size_mb'] ?? getSetting('images.max_size_mb')
   return (val ? Number(val) : 10) * 1024 * 1024
 }
 
-export function isImageArchivingEnabled(): boolean {
-  const enabled = getSetting('images.enabled')
+export function isImageArchivingEnabled(settings?: Pick<ArticleImageSettings, 'images.enabled'>): boolean {
+  const enabled = settings?.['images.enabled'] ?? getSetting('images.enabled')
   return enabled === '1' || enabled === 'true'
 }
 
@@ -33,17 +50,17 @@ export interface RemoteUploadConfig {
   respPath: string
 }
 
-export function getRemoteConfig(): RemoteUploadConfig | null {
-  const mode = getSetting('images.storage')
+export function getRemoteConfig(settings: ArticleImageSettings = getArticleImageSettings()): RemoteUploadConfig | null {
+  const mode = settings['images.storage']
   if (mode !== 'remote') return null
 
-  const uploadUrl = getSetting('images.upload_url')
-  const respPath = getSetting('images.upload_resp_path')
+  const uploadUrl = settings['images.upload_url']
+  const respPath = settings['images.upload_resp_path']
   if (!uploadUrl || !respPath) return null
 
-  const fieldName = getSetting('images.upload_field') ?? 'image'
+  const fieldName = settings['images.upload_field'] ?? 'image'
   let headers: Record<string, string> = {}
-  const headersRaw = getSetting('images.upload_headers')
+  const headersRaw = settings['images.upload_headers']
   if (headersRaw) {
     try {
       headers = JSON.parse(headersRaw)
@@ -125,10 +142,12 @@ async function uploadImageToRemote(
 export async function archiveArticleImages(
   articleId: number,
   fullText: string,
+  settings: ArticleImageSettings = getArticleImageSettings(),
 ): Promise<{ rewrittenText: string; downloaded: number; errors: number }> {
-  const maxSize = getMaxSizeBytes()
-  const remoteConfig = getRemoteConfig()
-  const isRemoteMode = getSetting('images.storage') === 'remote'
+  const maxSize = getMaxSizeBytes(settings)
+  const remoteConfig = getRemoteConfig(settings)
+  const isRemoteMode = settings['images.storage'] === 'remote'
+  const imagesDir = isRemoteMode ? null : getImagesDir(settings)
 
   // Remote mode but config is incomplete → skip
   if (isRemoteMode && !remoteConfig) {
@@ -136,8 +155,7 @@ export async function archiveArticleImages(
     return { rewrittenText: fullText, downloaded: 0, errors: 0 }
   }
 
-  if (!isRemoteMode) {
-    const imagesDir = getImagesDir()
+  if (imagesDir) {
     fs.mkdirSync(imagesDir, { recursive: true })
   }
 
@@ -192,8 +210,7 @@ export async function archiveArticleImages(
         // If upload fails, keep original URL
       } else {
         // Local mode
-        const imagesDir = getImagesDir()
-        const filepath = path.join(imagesDir, filename)
+        const filepath = path.join(imagesDir!, filename)
         fs.writeFileSync(filepath, buffer)
         downloaded++
         const localUrl = `/api/articles/images/${filename}`

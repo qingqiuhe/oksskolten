@@ -74,7 +74,7 @@ import {
 } from './db.js'
 import { runChatTurn } from './chat/adapter.js'
 import { repairStoredConversation } from './chat/history.js'
-import { buildSystemPrompt, appendArticleContext } from './chat/system-prompt.js'
+import { buildSystemPrompt, appendArticleContext, getUserLanguage } from './chat/system-prompt.js'
 import { generateConversationTitle } from './chat/title-generator.js'
 import { generateSuggestions } from './chat/suggestions.js'
 import { resolveLLMTaskConfig } from './llm-task-config.js'
@@ -159,7 +159,8 @@ export function registerChatApi(app: FastifyInstance): void {
       })
 
       // Build system prompt, optionally with article context
-      let systemPrompt = buildSystemPrompt(scope)
+      const userLanguage = getUserLanguage()
+      let systemPrompt = buildSystemPrompt(scope, userLanguage)
       if (scope.type === 'article') {
         systemPrompt = appendArticleContext(systemPrompt, scope.article_id)
       }
@@ -192,6 +193,7 @@ export function registerChatApi(app: FastifyInstance): void {
           openaiConfig: resolvedTask.openaiConfig,
           timeZone: body.timeZone,
           scope,
+          userLanguage,
           debugCollector,
           onEvent: (event) => {
             if (event.type === 'done') {

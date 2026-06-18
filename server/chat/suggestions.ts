@@ -23,31 +23,34 @@ export function generateSuggestions(): Suggestion[] {
     suggestions.push({ key: 'suggestion.evening.review' })
   }
 
-  // Unread count suggestion
-  const unreadRow = db.prepare(`
-    SELECT COUNT(*) AS cnt FROM active_articles a
-    JOIN feeds f ON a.feed_id = f.id
-    WHERE a.seen_at IS NULL AND f.type != 'clip'
-  `).get() as { cnt: number }
-  if (unreadRow.cnt > 50) {
-    suggestions.push({ key: 'suggestion.unreadMany', params: { count: unreadRow.cnt } })
-  } else if (unreadRow.cnt > 0) {
+  const stats = db.prepare(`
+    SELECT
+      (
+        SELECT COUNT(*)
+        FROM active_articles a
+        JOIN feeds f ON a.feed_id = f.id
+        WHERE a.seen_at IS NULL AND f.type != 'clip'
+      ) AS unread_count,
+      (
+        SELECT c.name
+        FROM active_articles a
+        JOIN feeds f ON a.feed_id = f.id
+        JOIN categories c ON f.category_id = c.id
+        WHERE a.read_at IS NOT NULL AND f.type != 'clip'
+        GROUP BY c.id
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+      ) AS top_category_name
+  `).get() as { unread_count: number; top_category_name: string | null }
+
+  if (stats.unread_count > 50) {
+    suggestions.push({ key: 'suggestion.unreadMany', params: { count: stats.unread_count } })
+  } else if (stats.unread_count > 0) {
     suggestions.push({ key: 'suggestion.unreadSome' })
   }
 
-  // Top category suggestion
-  const topCategory = db.prepare(`
-    SELECT c.name
-    FROM active_articles a
-    JOIN feeds f ON a.feed_id = f.id
-    JOIN categories c ON f.category_id = c.id
-    WHERE a.read_at IS NOT NULL AND f.type != 'clip'
-    GROUP BY c.id
-    ORDER BY COUNT(*) DESC
-    LIMIT 1
-  `).get() as { name: string } | undefined
-  if (topCategory) {
-    suggestions.push({ key: 'suggestion.topCategory', params: { category: topCategory.name } })
+  if (stats.top_category_name) {
+    suggestions.push({ key: 'suggestion.topCategory', params: { category: stats.top_category_name } })
   }
 
   // Generic suggestions

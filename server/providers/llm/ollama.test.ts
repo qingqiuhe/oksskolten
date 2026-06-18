@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../../db.js', () => ({
   getSetting: vi.fn(),
+  getSettings: vi.fn(),
 }))
 
-import { getSetting } from '../../db.js'
+import { getSetting, getSettings } from '../../db.js'
 
 const mockGetSetting = vi.mocked(getSetting)
+const mockGetSettings = vi.mocked(getSettings)
 
 async function freshImport() {
   vi.resetModules()
@@ -42,6 +44,7 @@ describe('ollamaProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockGetSetting.mockReturnValue(null as any)
+    mockGetSettings.mockReturnValue({})
   })
 
   it('requireKey does not throw', async () => {
@@ -53,24 +56,26 @@ describe('ollamaProvider', () => {
 describe('getOllamaClient', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockGetSettings.mockReturnValue({})
   })
 
   it('uses default base URL when setting is absent', async () => {
     mockGetSetting.mockReturnValue(null as any)
+    mockGetSettings.mockReturnValue({})
     const { getOllamaClient } = await freshImport()
     const client = getOllamaClient()
     expect((client as any).baseURL).toBe('http://localhost:11434/v1')
   })
 
   it('uses configured base URL from settings', async () => {
-    mockGetSetting.mockReturnValue('http://myserver:11434')
+    mockGetSettings.mockReturnValue({ 'ollama.base_url': 'http://myserver:11434' })
     const { getOllamaClient } = await freshImport()
     const client = getOllamaClient()
     expect((client as any).baseURL).toBe('http://myserver:11434/v1')
   })
 
   it('caches client when base URL has not changed', async () => {
-    mockGetSetting.mockReturnValue('http://myserver:11434')
+    mockGetSettings.mockReturnValue({ 'ollama.base_url': 'http://myserver:11434' })
     const { getOllamaClient } = await freshImport()
     const client1 = getOllamaClient()
     const client2 = getOllamaClient()
@@ -84,32 +89,54 @@ describe('getOllamaClient', () => {
       if (key === 'ollama.custom_headers') return callCount === 0 ? '' : '{"X-Auth":"token"}'
       return undefined
     })
+    mockGetSettings.mockImplementation(() => ({
+      'ollama.custom_headers': callCount === 0 ? '' : '{"X-Auth":"token"}',
+    }))
     const { getOllamaClient } = await freshImport()
     const client1 = getOllamaClient()
     callCount = 1
     const client2 = getOllamaClient()
     expect(client1).not.toBe(client2)
   })
+
+  it('reads base URL and custom headers once when creating a client', async () => {
+    mockGetSettings.mockReturnValue({
+      'ollama.base_url': 'http://myserver:11434',
+      'ollama.custom_headers': '{"X-Auth":"token"}',
+    })
+    const { getOllamaClient } = await freshImport()
+
+    const client = getOllamaClient()
+
+    expect((client as any).baseURL).toBe('http://myserver:11434/v1')
+    expect(mockGetSettings).toHaveBeenCalledTimes(1)
+    expect(mockGetSettings).toHaveBeenCalledWith(['ollama.base_url', 'ollama.custom_headers'], undefined)
+    expect(mockGetSetting).not.toHaveBeenCalled()
+  })
 })
 
 describe('getOllamaCustomHeaders', () => {
   it('returns empty object when no headers configured', async () => {
-    mockGetSetting.mockReturnValue(null as any)
+    mockGetSettings.mockReturnValue({})
     const { getOllamaCustomHeaders } = await freshImport()
     expect(getOllamaCustomHeaders()).toEqual({})
   })
 
   it('parses JSON headers from settings', async () => {
-    mockGetSetting.mockReturnValue('{"CF-Access-Client-Id":"abc","CF-Access-Client-Secret":"xyz"}')
+    mockGetSettings.mockReturnValue({
+      'ollama.custom_headers': '{"CF-Access-Client-Id":"abc","CF-Access-Client-Secret":"xyz"}',
+    })
     const { getOllamaCustomHeaders } = await freshImport()
     expect(getOllamaCustomHeaders()).toEqual({
       'CF-Access-Client-Id': 'abc',
       'CF-Access-Client-Secret': 'xyz',
     })
+    expect(mockGetSettings).toHaveBeenCalledWith(['ollama.base_url', 'ollama.custom_headers'], undefined)
+    expect(mockGetSetting).not.toHaveBeenCalled()
   })
 
   it('returns empty object on invalid JSON', async () => {
-    mockGetSetting.mockReturnValue('not json')
+    mockGetSettings.mockReturnValue({ 'ollama.custom_headers': 'not json' })
     const { getOllamaCustomHeaders } = await freshImport()
     expect(getOllamaCustomHeaders()).toEqual({})
   })
@@ -118,6 +145,7 @@ describe('getOllamaCustomHeaders', () => {
 describe('ollamaProvider.createMessage', () => {
   it('returns text and token counts', async () => {
     mockGetSetting.mockReturnValue(null as any)
+    mockGetSettings.mockReturnValue({})
     const { ollamaProvider, getOllamaClient } = await freshImport()
 
     const mockCreate = makeCreateMock('Hello from Ollama', 10, 5)
@@ -143,6 +171,7 @@ describe('ollamaProvider.createMessage', () => {
 
   it('records zero tokens when usage is missing', async () => {
     mockGetSetting.mockReturnValue(null as any)
+    mockGetSettings.mockReturnValue({})
     const { ollamaProvider, getOllamaClient } = await freshImport()
 
     const mockCreate = vi.fn().mockResolvedValue({
@@ -166,6 +195,7 @@ describe('ollamaProvider.createMessage', () => {
 describe('ollamaProvider.streamMessage', () => {
   it('accumulates streamed deltas and returns full text', async () => {
     mockGetSetting.mockReturnValue(null as any)
+    mockGetSettings.mockReturnValue({})
     const { ollamaProvider, getOllamaClient } = await freshImport()
 
     const mockCreate = makeStreamMock(['Hello', ' from', ' Ollama'], 15, 8)

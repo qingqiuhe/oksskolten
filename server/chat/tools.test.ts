@@ -11,18 +11,23 @@ import {
   getDb,
 } from '../db.js'
 
-// Mock fetcher AI calls
-vi.mock('../fetcher.js', () => ({
-  summarizeArticle: vi.fn().mockResolvedValue({
+const { mockSummarizeArticle, mockTranslateArticle } = vi.hoisted(() => ({
+  mockSummarizeArticle: vi.fn().mockResolvedValue({
     summary: 'Mocked summary',
     inputTokens: 100,
     outputTokens: 50,
   }),
-  translateArticle: vi.fn().mockResolvedValue({
+  mockTranslateArticle: vi.fn().mockResolvedValue({
     fullTextTranslated: 'モック翻訳テキスト',
     inputTokens: 200,
     outputTokens: 150,
   }),
+}))
+
+// Mock fetcher AI calls
+vi.mock('../fetcher.js', () => ({
+  summarizeArticle: mockSummarizeArticle,
+  translateArticle: mockTranslateArticle,
 }))
 
 import { TOOLS, toAnthropicTools, executeTool } from './tools.js'
@@ -30,6 +35,8 @@ import { CHAT_SCOPE_OUT_OF_SCOPE_ERROR } from './scope.js'
 
 beforeEach(() => {
   setupTestDb()
+  mockSummarizeArticle.mockClear()
+  mockTranslateArticle.mockClear()
 })
 
 function seedFeed(overrides: Partial<Parameters<typeof createFeed>[0]> = {}) {
@@ -501,6 +508,24 @@ describe('summarize_article', () => {
     expect(article.summary).toBe('Mocked summary')
   })
 
+  it('passes context userLanguage without reading settings', async () => {
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, { full_text: 'Some article text' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const result = JSON.parse(await executeTool('summarize_article', { article_id: id }, { userLanguage: 'zh' }))
+
+    expect(result.summary).toBe('Mocked summary')
+    expect(mockSummarizeArticle).toHaveBeenCalledWith('Some article text', 'zh')
+    expect(preparedSql.filter(sql => sql.includes('general.language'))).toHaveLength(0)
+  })
+
   it('returns error when no full_text', async () => {
     const feed = seedFeed()
     const id = seedArticle(feed.id, { full_text: undefined })
@@ -519,6 +544,25 @@ describe('translate_article', () => {
     const result = JSON.parse(await executeTool('translate_article', { article_id: id }))
     expect(result.full_text_translated).toBe('Existing translation')
     expect(result.cached).toBe(true)
+  })
+
+  it('uses context userLanguage without reading settings', async () => {
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, { full_text: 'texte', lang: 'fr' })
+    updateArticleContent(id, { full_text_translated: 'Existing French translation', translated_lang: 'fr' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const result = JSON.parse(await executeTool('translate_article', { article_id: id }, { userLanguage: 'fr' }))
+
+    expect(result.full_text_translated).toBe('Existing French translation')
+    expect(result.cached).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('general.language'))).toHaveLength(0)
   })
 
   it('does not cache when translated_lang differs from user language', async () => {
@@ -581,8 +625,10 @@ describe('get_user_preferences', () => {
     const feed = seedFeed({ category_id: cat.id })
     // Create articles within last 30 days
     const now = new Date().toISOString()
-    seedArticle(feed.id, { url: 'https://example.com/p1', published_at: now })
+    const readId = seedArticle(feed.id, { url: 'https://example.com/p1', published_at: now })
     seedArticle(feed.id, { url: 'https://example.com/p2', published_at: now })
+    markArticleSeen(readId, true)
+    getDb().prepare("UPDATE articles SET read_at = datetime('now') WHERE id = ?").run(readId)
 
     const result = JSON.parse(await executeTool('get_user_preferences', {}))
     expect(result).toHaveProperty('category_read_rates')
@@ -593,7 +639,54 @@ describe('get_user_preferences', () => {
     const tech = result.category_read_rates.find((c: any) => c.name === 'Tech')
     expect(tech).toBeDefined()
     expect(tech.total).toBe(2)
-    expect(tech.read_rate).toBe(0)
+    expect(tech.read_rate).toBe(0.5)
+    expect(result.top_categories).toEqual([
+      expect.objectContaining({ name: 'Tech', read_count: 1 }),
+    ])
+  })
+
+  it('loads recent likes and bookmarks with one collection query', async () => {
+    const feed = seedFeed()
+    const likedId = seedArticle(feed.id, { title: 'Liked Article', summary: 'Liked summary' })
+    const bookmarkedId = seedArticle(feed.id, { title: 'Bookmarked Article' })
+    const { markArticleLiked, markArticleBookmarked } = await import('../db.js')
+    markArticleLiked(likedId, true)
+    markArticleBookmarked(bookmarkedId, true)
+    const now = new Date().toISOString()
+    for (let i = 0; i < 11; i++) {
+      seedArticle(feed.id, {
+        title: `Unread ${i}`,
+        url: `https://example.com/unread-${i}`,
+        published_at: now,
+      })
+    }
+
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const result = JSON.parse(await executeTool('get_user_preferences', {}))
+
+    expect(result.recent_likes).toEqual([
+      expect.objectContaining({ title: 'Liked Article', summary: 'Liked summary' }),
+    ])
+    expect(result.recent_bookmarks).toEqual([
+      expect.objectContaining({ title: 'Bookmarked Article' }),
+    ])
+    expect(result.top_feeds).toEqual([
+      expect.objectContaining({ name: 'Test Feed', like_count: 1, bookmark_count: 1 }),
+    ])
+    expect(result.ignored_feeds).toEqual([
+      expect.objectContaining({ name: 'Test Feed', unread_articles: 11 }),
+    ])
+    expect(preparedSql).toHaveLength(3)
+    expect(preparedSql.filter(sql => sql.includes('recent_unread_count'))).toHaveLength(1)
+    expect(preparedSql.filter(sql => sql.includes('UNION ALL') && sql.includes('collection_type'))).toHaveLength(1)
+    expect(preparedSql.filter(sql => sql.includes('recent_total') && sql.includes('recent_read_count'))).toHaveLength(1)
   })
 })
 

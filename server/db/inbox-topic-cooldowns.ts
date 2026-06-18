@@ -1,4 +1,4 @@
-import { getDb, runNamed } from './connection.js'
+import { getDb } from './connection.js'
 import { getCurrentUserId } from '../identity.js'
 
 export interface InboxTopicCooldown {
@@ -55,45 +55,27 @@ export function upsertInboxTopicCooldown(anchorArticleId: number, userId?: numbe
       `).get(anchorArticleId) as InboxTopicCooldown | undefined
 
       if (existing) {
-        getDb().prepare('UPDATE inbox_topic_cooldowns SET expires_at = ? WHERE id = ?').run(expiresAt, existing.id)
         return getDb().prepare(`
-          SELECT id, user_id, anchor_article_id, created_at, expires_at
-          FROM inbox_topic_cooldowns
+          UPDATE inbox_topic_cooldowns
+          SET expires_at = ?
           WHERE id = ?
-        `).get(existing.id) as InboxTopicCooldown
+          RETURNING id, user_id, anchor_article_id, created_at, expires_at
+        `).get(expiresAt, existing.id) as InboxTopicCooldown
       }
 
-      const info = runNamed(`
-        INSERT INTO inbox_topic_cooldowns (user_id, anchor_article_id, expires_at)
-        VALUES (@user_id, @anchor_article_id, @expires_at)
-      `, {
-        user_id: null,
-        anchor_article_id: anchorArticleId,
-        expires_at: expiresAt,
-      })
-
       return getDb().prepare(`
-        SELECT id, user_id, anchor_article_id, created_at, expires_at
-        FROM inbox_topic_cooldowns
-        WHERE id = ?
-      `).get(info.lastInsertRowid) as InboxTopicCooldown
+        INSERT INTO inbox_topic_cooldowns (user_id, anchor_article_id, expires_at)
+        VALUES (NULL, ?, ?)
+        RETURNING id, user_id, anchor_article_id, created_at, expires_at
+      `).get(anchorArticleId, expiresAt) as InboxTopicCooldown
     })()
   }
 
-  runNamed(`
+  return getDb().prepare(`
     INSERT INTO inbox_topic_cooldowns (user_id, anchor_article_id, expires_at)
-    VALUES (@user_id, @anchor_article_id, @expires_at)
+    VALUES (?, ?, ?)
     ON CONFLICT(user_id, anchor_article_id)
     DO UPDATE SET expires_at = excluded.expires_at
-  `, {
-    user_id: scopedUserId,
-    anchor_article_id: anchorArticleId,
-    expires_at: expiresAt,
-  })
-
-  return getDb().prepare(`
-    SELECT id, user_id, anchor_article_id, created_at, expires_at
-    FROM inbox_topic_cooldowns
-    WHERE user_id = ? AND anchor_article_id = ?
-  `).get(scopedUserId, anchorArticleId) as InboxTopicCooldown
+    RETURNING id, user_id, anchor_article_id, created_at, expires_at
+  `).get(scopedUserId, anchorArticleId, expiresAt) as InboxTopicCooldown
 }

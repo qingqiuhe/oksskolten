@@ -1,21 +1,24 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { buildApp } from '../__tests__/helpers/buildApp.js'
-import { createFeed, insertArticle, ensureClipFeed, getArticleById, markImagesArchived, markArticleSeen, upsertSetting } from '../db.js'
+import { createFeed, insertArticle, ensureClipFeed, getArticleById, markImagesArchived, markArticleSeen, upsertSetting, getDb } from '../db.js'
 import type { FastifyInstance } from 'fastify'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
+import { invalidateArticleImageStoragePathCache } from '../article-image-storage-path.js'
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
-const { mockArchiveArticleImages, mockIsImageArchivingEnabled, mockDeleteArticleImages, mockFetchArticleContent } = vi.hoisted(() => ({
+const { mockArchiveArticleImages, mockGetArticleImageSettings, mockIsImageArchivingEnabled, mockDeleteArticleImages, mockFetchArticleContent, mockAddDocuments } = vi.hoisted(() => ({
   mockArchiveArticleImages: vi.fn(),
+  mockGetArticleImageSettings: vi.fn(),
   mockIsImageArchivingEnabled: vi.fn(),
   mockDeleteArticleImages: vi.fn(),
   mockFetchArticleContent: vi.fn(),
+  mockAddDocuments: vi.fn(() => Promise.resolve({})),
 }))
 
 vi.mock('../fetcher.js', async () => {
@@ -40,8 +43,18 @@ vi.mock('../anthropic.js', () => ({
 
 vi.mock('../fetcher/article-images.js', () => ({
   archiveArticleImages: (...args: unknown[]) => mockArchiveArticleImages(...args),
+  getArticleImageSettings: (...args: unknown[]) => mockGetArticleImageSettings(...args),
   isImageArchivingEnabled: (...args: unknown[]) => mockIsImageArchivingEnabled(...args),
   deleteArticleImages: (...args: unknown[]) => mockDeleteArticleImages(...args),
+}))
+
+vi.mock('../search/client.js', () => ({
+  ARTICLES_INDEX: 'articles',
+  getSearchClient: () => ({
+    index: () => ({
+      addDocuments: mockAddDocuments,
+    }),
+  }),
 }))
 
 // ---------------------------------------------------------------------------
@@ -67,6 +80,8 @@ function seedArticle(feedId: number, overrides: Partial<Parameters<typeof insert
 
 beforeEach(async () => {
   setupTestDb()
+  invalidateArticleImageStoragePathCache()
+  mockGetArticleImageSettings.mockReturnValue({})
   app = await buildApp()
   vi.clearAllMocks()
   mockFetchArticleContent.mockResolvedValue({
@@ -80,6 +95,7 @@ beforeEach(async () => {
   mockIsImageArchivingEnabled.mockReturnValue(false)
   mockArchiveArticleImages.mockResolvedValue({ rewrittenText: '', downloaded: 0, errors: 0 })
   mockDeleteArticleImages.mockReturnValue(0)
+  mockAddDocuments.mockClear()
 })
 
 // ---------------------------------------------------------------------------
@@ -235,6 +251,31 @@ describe('POST /api/articles/from-url', () => {
     expect(moved!.feed_type).toBe('clip')
   })
 
+  it('syncs force-moved clip article from update returning without a follow-up doc query', async () => {
+    ensureClipFeed()
+    const rssFeed = seedFeed()
+    const artId = seedArticle(rssFeed.id, { url: 'https://blog.example.com/returning-move' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/articles/from-url',
+      headers: json,
+      payload: { url: 'https://blog.example.com/returning-move', force: true },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(preparedSql.some(sql => sql.includes('UPDATE articles') && sql.includes('RETURNING id, user_id, feed_id'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('FROM active_articles WHERE id = ?'))).toBe(false)
+    expect(mockAddDocuments).toHaveBeenCalledWith([expect.objectContaining({ id: artId })])
+  })
+
   it('500: force-move fails when clip feed not found', async () => {
     // Create RSS feed and article but no clip feed
     const rssFeed = seedFeed()
@@ -328,6 +369,8 @@ describe('POST /api/articles/:id/archive-images', () => {
   it('202: accepted', async () => {
     const feed = seedFeed()
     const artId = seedArticle(feed.id, { full_text: 'Article with ![img](https://example.com/image.png)' })
+    const imageSettings = { 'images.enabled': '1' }
+    mockGetArticleImageSettings.mockReturnValue(imageSettings)
     mockIsImageArchivingEnabled.mockReturnValue(true)
 
     const res = await app.inject({
@@ -337,6 +380,8 @@ describe('POST /api/articles/:id/archive-images', () => {
 
     expect(res.statusCode).toBe(202)
     expect(res.json().status).toBe('accepted')
+    expect(mockIsImageArchivingEnabled).toHaveBeenCalledWith(imageSettings)
+    expect(mockArchiveArticleImages).toHaveBeenCalledWith(artId, 'Article with ![img](https://example.com/image.png)', imageSettings)
   })
 
   it('400: no full_text', async () => {
@@ -416,6 +461,30 @@ describe('GET /api/articles/images/:filename', () => {
     expect(res.statusCode).toBe(200)
     expect(res.headers['content-type']).toBe('image/png')
     expect(res.headers['cache-control']).toMatch(/immutable/)
+  })
+
+  it('reuses cached storage path for consecutive image requests', async () => {
+    const filenames = ['1_cached_a.png', '1_cached_b.png']
+    for (const filename of filenames) {
+      fs.writeFileSync(path.join(tmpDir, filename), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    }
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    for (const filename of filenames) {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/articles/images/${filename}`,
+      })
+      expect(res.statusCode).toBe(200)
+    }
+
+    expect(preparedSql.filter(sql => sql.includes('FROM instance_settings') && sql.includes('WHERE key = ?'))).toHaveLength(1)
   })
 
   it('400: path traversal attempt with ..', async () => {

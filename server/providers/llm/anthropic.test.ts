@@ -20,6 +20,7 @@ vi.mock('@anthropic-ai/sdk', () => {
 let anthropicProvider: typeof import('./anthropic.js')['anthropicProvider']
 let getAnthropicClient: typeof import('./anthropic.js')['getAnthropicClient']
 let upsertSettingFresh: typeof import('../../db.js')['upsertSetting']
+let getDbFresh: typeof import('../../db.js')['getDb']
 
 beforeEach(async () => {
   mockCreate.mockReset()
@@ -32,6 +33,7 @@ beforeEach(async () => {
   _resetDb(':memory:')
   runMigrations()
   upsertSettingFresh = dbMod.upsertSetting
+  getDbFresh = dbMod.getDb
 
   const mod = await import('./anthropic.js')
   anthropicProvider = mod.anthropicProvider
@@ -46,7 +48,7 @@ describe('anthropicProvider', () => {
 
     it('does not throw when API key is set', () => {
       upsertSettingFresh('api_key.anthropic', 'sk-ant-test')
-      expect(() => anthropicProvider.requireKey()).not.toThrow()
+      expect(anthropicProvider.requireKey()).toBe('sk-ant-test')
     })
   })
 
@@ -82,6 +84,29 @@ describe('anthropicProvider', () => {
         system: 'Be helpful',
         messages: [{ role: 'user', content: 'Hi' }],
       }))
+    })
+
+    it('uses provided API key without reading settings', async () => {
+      const db = getDbFresh()
+      const originalPrepare = db.prepare.bind(db)
+      const preparedSql: string[] = []
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        preparedSql.push(sql)
+        return originalPrepare(sql)
+      })
+      mockCreate.mockResolvedValue({
+        content: [{ type: 'text', text: 'Hello from Claude' }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      })
+
+      await anthropicProvider.createMessage({
+        model: 'claude-haiku-4-5-20251001',
+        maxTokens: 1024,
+        apiKey: 'checked-anthropic-key',
+        messages: [{ role: 'user', content: 'Hi' }],
+      })
+
+      expect(preparedSql.filter(sql => sql.includes('api_key.anthropic'))).toHaveLength(0)
     })
 
     it('omits system when not provided', async () => {

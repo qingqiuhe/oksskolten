@@ -1,26 +1,61 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
+
+const {
+  mockAddDocuments,
+  mockUpdateDocuments,
+  mockDeleteDocument,
+  mockDeleteDocuments,
+} = vi.hoisted(() => ({
+  mockAddDocuments: vi.fn(() => Promise.resolve({})),
+  mockUpdateDocuments: vi.fn(() => Promise.resolve({})),
+  mockDeleteDocument: vi.fn(() => Promise.resolve({})),
+  mockDeleteDocuments: vi.fn(() => Promise.resolve({})),
+}))
+
+vi.mock('../search/client.js', () => ({
+  ARTICLES_INDEX: 'articles',
+  ARTICLES_STAGING_INDEX: 'articles_staging',
+  getSearchClient: () => ({
+    index: () => ({
+      addDocuments: mockAddDocuments,
+      updateDocuments: mockUpdateDocuments,
+      deleteDocument: mockDeleteDocument,
+      deleteDocuments: mockDeleteDocuments,
+    }),
+  }),
+}))
+
 import {
   getArticles,
+  getInboxSummary,
   getArticleById,
   insertArticle,
   getReadingStats,
   searchArticles,
   markArticleSeen,
+  markArticlesSeen,
+  markAllSeenByFeed,
   markArticleBookmarked,
   markArticleLiked,
   recordArticleRead,
+  getHighValueInbox,
   updateArticleContent,
   recalculateScores,
   getRetryArticles,
   getRetryStats,
   backfillLegacyXArticleKinds,
   updateArticleKindIfMissing,
+  updateArticleKindsIfMissing,
 } from '../db.js'
-import { createFeed, createCategory, getDb } from '../db.js'
+import { createFeed, createCategory, createUser, getDb } from '../db.js'
 
 beforeEach(() => {
   setupTestDb()
+  mockAddDocuments.mockClear()
+  mockUpdateDocuments.mockClear()
+  mockDeleteDocument.mockClear()
+  mockDeleteDocuments.mockClear()
 })
 
 function seedFeed(overrides: Partial<Parameters<typeof createFeed>[0]> = {}) {
@@ -37,6 +72,15 @@ function seedArticle(feedId: number, overrides: Partial<Parameters<typeof insert
   })
 }
 
+function seedUser(email: string) {
+  return createUser({
+    email,
+    passwordHash: 'hash',
+    role: 'member',
+    status: 'active',
+  }).id
+}
+
 function hoursAgo(hours: number): string {
   return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()
 }
@@ -48,6 +92,108 @@ function daysAgo(days: number): string {
 // --- getArticles: read filter and ordering ---
 
 describe('getArticles read filter', () => {
+  it('syncs only actually changed ids when marking a batch as seen', () => {
+    const feed = seedFeed()
+    const id1 = seedArticle(feed.id, { url: 'https://example.com/batch-seen-1' })
+    const id2 = seedArticle(feed.id, { url: 'https://example.com/batch-seen-2' })
+    const id3 = seedArticle(feed.id, { url: 'https://example.com/batch-seen-3' })
+    markArticleSeen(id2, true)
+    mockUpdateDocuments.mockClear()
+
+    const result = markArticlesSeen([id1, id2, id3, 999_999])
+
+    expect(result.updated).toBe(2)
+    expect(getArticleById(id1)?.seen_at).not.toBeNull()
+    expect(getArticleById(id2)?.seen_at).not.toBeNull()
+    expect(getArticleById(id3)?.seen_at).not.toBeNull()
+    expect(mockUpdateDocuments).toHaveBeenCalledTimes(1)
+    const calls = mockUpdateDocuments.mock.calls as unknown[][]
+    const docs = calls[0][0] as { id: number; is_unread: boolean }[]
+    expect(docs).toHaveLength(2)
+    expect(docs.map(doc => doc.id).sort((left, right) => left - right)).toEqual([id1, id3])
+    expect(docs.every(doc => doc.is_unread === false)).toBe(true)
+  })
+
+  it('syncs only actually changed feed ids when marking a feed as seen', () => {
+    const feed = seedFeed({ url: 'https://example.com/feed-seen' })
+    const otherFeed = seedFeed({ url: 'https://example.com/other-feed-seen' })
+    const id1 = seedArticle(feed.id, { url: 'https://example.com/feed-seen-1' })
+    const id2 = seedArticle(feed.id, { url: 'https://example.com/feed-seen-2' })
+    const id3 = seedArticle(feed.id, { url: 'https://example.com/feed-seen-3' })
+    seedArticle(otherFeed.id, { url: 'https://example.com/feed-seen-other' })
+    markArticleSeen(id2, true)
+    mockUpdateDocuments.mockClear()
+
+    const result = markAllSeenByFeed(feed.id)
+
+    expect(result.updated).toBe(2)
+    expect(mockUpdateDocuments).toHaveBeenCalledTimes(1)
+    const calls = mockUpdateDocuments.mock.calls as unknown[][]
+    const docs = calls[0][0] as { id: number; is_unread: boolean }[]
+    expect(docs).toHaveLength(2)
+    expect(docs.map(doc => doc.id).sort((left, right) => left - right)).toEqual([id1, id3])
+    expect(docs.every(doc => doc.is_unread === false)).toBe(true)
+  })
+
+  it('does not sync article filters when single-article actions are no-ops', () => {
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, { url: 'https://example.com/noop-actions' })
+
+    markArticleSeen(id, true)
+    markArticleLiked(id, true)
+    markArticleBookmarked(id, true)
+    mockUpdateDocuments.mockClear()
+
+    expect(markArticleSeen(id, true)?.seen_at).not.toBeNull()
+    expect(markArticleLiked(id, true)?.liked_at).not.toBeNull()
+    expect(markArticleBookmarked(id, true)?.bookmarked_at).not.toBeNull()
+
+    expect(mockUpdateDocuments).not.toHaveBeenCalled()
+  })
+
+  it('records article reads with a single update-returning statement', () => {
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, { url: 'https://example.com/read-returning' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const result = recordArticleRead(id)
+
+    expect(result?.seen_at).not.toBeNull()
+    expect(result?.read_at).not.toBeNull()
+    expect(preparedSql.some(sql => sql.includes('RETURNING seen_at, read_at'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT seen_at, read_at'))).toBe(false)
+  })
+
+  it('syncs inserted articles from the insert returning row without a follow-up doc lookup', () => {
+    const feed = seedFeed()
+    mockAddDocuments.mockClear()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const id = seedArticle(feed.id, {
+      title: 'Inserted returning doc',
+      url: 'https://example.com/insert-returning',
+      full_text: 'Inserted body',
+    })
+
+    expect(preparedSql.some(sql => sql.includes('RETURNING'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('FROM articles WHERE id = ?'))).toBe(false)
+    expect(mockAddDocuments).toHaveBeenCalledTimes(1)
+    const docs = (mockAddDocuments.mock.calls as unknown[][])[0][0] as { id: number; title: string; full_text: string }[]
+    expect(docs[0]).toMatchObject({ id, title: 'Inserted returning doc', full_text: 'Inserted body' })
+  })
+
   it('filters by read (read_at IS NOT NULL)', () => {
     const feed = seedFeed()
     const id1 = seedArticle(feed.id, { url: 'https://example.com/1' })
@@ -107,6 +253,112 @@ describe('getArticles read filter', () => {
 
     const { articles } = getArticles({ feedId: feed.id, limit: 100, offset: 0 })
     expect(articles[0].has_video).toBe(true)
+  })
+
+  it('uses a scoped feed/published index for feed latest-page queries', () => {
+    const userId = seedUser('feed-latest-plan@example.com')
+    const feed = createFeed({ name: 'Plan Feed', url: 'https://plan.example.com/feed' }, userId)
+    seedArticle(feed.id, {
+      user_id: userId,
+      url: 'https://plan.example.com/1',
+      published_at: '2026-01-01T00:00:00Z',
+    })
+
+    const plan = getDb().prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT a.id
+      FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
+      WHERE a.feed_id = ?
+        AND a.user_id = ?
+        AND f.type != 'clip'
+      ORDER BY a.published_at DESC
+      LIMIT 20
+    `).all(feed.id, userId) as { detail: string }[]
+
+    expect(plan.some(row => row.detail.includes('idx_articles_user_feed_published'))).toBe(true)
+  })
+
+  it('uses an active unread index for scoped unread latest-page queries', () => {
+    const userId = seedUser('unread-latest-plan@example.com')
+    const feed = createFeed({ name: 'Unread Plan Feed', url: 'https://unread-plan.example.com/feed' }, userId)
+    seedArticle(feed.id, {
+      user_id: userId,
+      url: 'https://unread-plan.example.com/1',
+      published_at: '2026-01-01T00:00:00Z',
+    })
+
+    const plan = getDb().prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT a.id
+      FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
+      WHERE a.user_id = ?
+        AND a.seen_at IS NULL
+        AND f.type != 'clip'
+      ORDER BY a.published_at DESC
+      LIMIT 20
+    `).all(userId) as { detail: string }[]
+
+    expect(plan.some(row => row.detail.includes('idx_articles_user_unread_published_active'))).toBe(true)
+  })
+
+  it('uses an active unread oldest index for scoped oldest-unread queries', () => {
+    const userId = seedUser('unread-oldest-plan@example.com')
+    const feed = createFeed({ name: 'Oldest Plan Feed', url: 'https://oldest-plan.example.com/feed' }, userId)
+    seedArticle(feed.id, {
+      user_id: userId,
+      url: 'https://oldest-plan.example.com/1',
+      published_at: '2026-01-01T00:00:00Z',
+    })
+
+    const result = getArticles({ unread: true, sort: 'oldest_unread', limit: 20, offset: 0, userId })
+    expect(result.articles).toHaveLength(1)
+
+    const plan = getDb().prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT a.id
+      FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
+      WHERE a.user_id = ?
+        AND a.seen_at IS NULL
+        AND f.type != 'clip'
+      ORDER BY COALESCE(a.published_at, a.fetched_at) ASC
+      LIMIT 20
+    `).all(userId) as { detail: string }[]
+
+    expect(plan.some(row => row.detail.includes('idx_articles_user_unread_oldest_active'))).toBe(true)
+  })
+
+  it('uses the active unread index for scoped inbox summary aggregation', () => {
+    const userId = seedUser('inbox-summary-plan@example.com')
+    const feed = createFeed({ name: 'Inbox Plan Feed', url: 'https://inbox-plan.example.com/feed' }, userId)
+    seedArticle(feed.id, {
+      user_id: userId,
+      url: 'https://inbox-plan.example.com/1',
+      published_at: '2026-01-01T00:00:00Z',
+    })
+
+    const summary = getInboxSummary(userId)
+    expect(summary.unread_total).toBe(1)
+    expect(summary.source_feed_count).toBe(1)
+
+    const plan = getDb().prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT
+        COUNT(*) AS unread_total,
+        COUNT(CASE WHEN a.published_at >= date('now', 'start of day') THEN 1 END) AS new_today,
+        MIN(a.published_at) AS oldest_unread_at,
+        COUNT(DISTINCT a.feed_id) AS source_feed_count
+      FROM articles a INDEXED BY idx_articles_user_unread_published_active
+      JOIN feeds f ON a.feed_id = f.id
+      WHERE a.purged_at IS NULL
+        AND a.seen_at IS NULL
+        AND f.type != 'clip'
+        AND a.user_id = ?
+    `).all(userId) as { detail: string }[]
+
+    expect(plan.some(row => row.detail.includes('idx_articles_user_unread_published_active'))).toBe(true)
   })
 
   it('resolves feed_view_type from feed metadata', () => {
@@ -289,6 +541,36 @@ describe('article kind persistence', () => {
     expect(updateArticleKindIfMissing(id, 'repost')).toBe(true)
     expect(updateArticleKindIfMissing(id, 'quote')).toBe(false)
     expect(getArticleById(id)?.article_kind).toBe('repost')
+  })
+
+  it('batch fills missing article_kind by kind', () => {
+    const feed = seedFeed()
+    const id1 = seedArticle(feed.id, { url: 'https://example.com/kind-batch-1', article_kind: null })
+    const id2 = seedArticle(feed.id, { url: 'https://example.com/kind-batch-2', article_kind: null })
+    const id3 = seedArticle(feed.id, { url: 'https://example.com/kind-batch-3', article_kind: null })
+    const existing = seedArticle(feed.id, { url: 'https://example.com/kind-batch-existing', article_kind: 'original' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const updated = updateArticleKindsIfMissing([
+      { id: id1, articleKind: 'repost' },
+      { id: id2, articleKind: 'repost' },
+      { id: id3, articleKind: 'quote' },
+      { id: existing, articleKind: 'quote' },
+    ])
+
+    expect(updated).toBe(3)
+    expect(getArticleById(id1)?.article_kind).toBe('repost')
+    expect(getArticleById(id2)?.article_kind).toBe('repost')
+    expect(getArticleById(id3)?.article_kind).toBe('quote')
+    expect(getArticleById(existing)?.article_kind).toBe('original')
+    const updateStatements = preparedSql.filter(sql => sql.includes('UPDATE articles SET article_kind = ?'))
+    expect(updateStatements).toHaveLength(2)
   })
 
   it('backfills legacy X reposts and quotes conservatively', () => {
@@ -522,6 +804,36 @@ describe('getReadingStats', () => {
     expect(stats.total).toBe(1)
   })
 
+  it('can use the active feed counts covering index for scoped by-feed stats', () => {
+    const userId = seedUser('reading-stats-plan@example.com')
+    const feed = createFeed({ name: 'Stats Plan Feed', url: 'https://stats-plan.example.com/feed' }, userId)
+    seedArticle(feed.id, {
+      user_id: userId,
+      url: 'https://stats-plan.example.com/1',
+    })
+
+    const stats = getReadingStats({ userId })
+    expect(stats.total).toBe(1)
+    expect(stats.by_feed).toHaveLength(1)
+
+    const plan = getDb().prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT
+        a.feed_id,
+        f.name AS feed_name,
+        COUNT(*) AS total,
+        SUM(CASE WHEN a.seen_at IS NOT NULL THEN 1 ELSE 0 END) AS read,
+        SUM(CASE WHEN a.seen_at IS NULL THEN 1 ELSE 0 END) AS unread
+      FROM active_articles a
+      JOIN feeds f ON a.feed_id = f.id
+      WHERE a.user_id = ?
+      GROUP BY a.feed_id
+      ORDER BY total DESC
+    `).all(userId) as { detail: string }[]
+
+    expect(plan.some(row => row.detail.includes('idx_articles_user_active_feed_counts'))).toBe(true)
+  })
+
   it('returns zeros/nulls when no articles', () => {
     const stats = getReadingStats()
     expect(stats.total).toBe(0)
@@ -555,6 +867,84 @@ describe('updateArticleContent edge cases', () => {
     expect(article.full_text).toBe('original')
     expect(article.summary).toBe('new summary')
   })
+
+  it('syncs updated content from the update returning row without a follow-up doc lookup', () => {
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, { full_text: 'original' })
+    mockAddDocuments.mockClear()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    updateArticleContent(id, { full_text: 'updated body' })
+
+    expect(preparedSql.some(sql => sql.includes('RETURNING'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('FROM articles WHERE id = ?'))).toBe(false)
+    expect(mockAddDocuments).toHaveBeenCalledTimes(1)
+    const docs = (mockAddDocuments.mock.calls as unknown[][])[0][0] as { id: number; full_text: string }[]
+    expect(docs[0]).toMatchObject({ id, full_text: 'updated body' })
+  })
+
+  it('does not sync content updates when the scoped article update misses', () => {
+    const ownerId = seedUser('content-owner@example.com')
+    const otherUserId = seedUser('content-other@example.com')
+    const feed = createFeed({ name: 'Scoped Content Feed', url: 'https://content-scope.example.com/feed' }, ownerId)
+    const id = seedArticle(feed.id, {
+      user_id: ownerId,
+      url: 'https://content-scope.example.com/article',
+      full_text: 'original',
+    })
+    mockAddDocuments.mockClear()
+
+    updateArticleContent(id, { full_text: 'wrong user update' }, otherUserId)
+
+    expect(getArticleById(id, ownerId)?.full_text).toBe('original')
+    expect(mockAddDocuments).not.toHaveBeenCalled()
+  })
+
+  it('does not sync search docs for retry-only metadata updates', () => {
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, {
+      url: 'https://example.com/retry-metadata-only',
+      last_error: 'fetch failed',
+    })
+    mockAddDocuments.mockClear()
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    updateArticleContent(id, {
+      last_error: 'still failed',
+      retry_count: 2,
+      last_retry_at: '2999-06-10T00:00:00Z',
+    })
+
+    expect(getRetryArticles(5, 10).some(article => article.id === id)).toBe(false)
+    expect(preparedSql.some(sql => sql.includes('RETURNING'))).toBe(false)
+    expect(mockAddDocuments).not.toHaveBeenCalled()
+  })
+
+  it('does not sync search docs for article-kind-only updates', () => {
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, {
+      url: 'https://example.com/article-kind-only',
+      article_kind: null,
+    })
+    mockAddDocuments.mockClear()
+
+    updateArticleContent(id, { article_kind: 'quote' })
+
+    expect(getArticleById(id)?.article_kind).toBe('quote')
+    expect(mockAddDocuments).not.toHaveBeenCalled()
+  })
 })
 
 // --- Score persistence (Phase 2) ---
@@ -567,9 +957,13 @@ describe('score persistence', () => {
 
     markArticleLiked(id1, true)
 
-    const { updated } = recalculateScores()
+    const { updated, ids, scoreUpdates } = recalculateScores()
     // id1 has engagement (liked), id2 has no engagement, old date, and score=0 → not updated
     expect(updated).toBe(1)
+    expect(ids).toEqual([id1])
+    expect(scoreUpdates).toHaveLength(1)
+    expect(scoreUpdates[0].id).toBe(id1)
+    expect(scoreUpdates[0].score).toBeGreaterThan(0)
 
     const { articles } = getArticles({ sort: 'score', limit: 100, offset: 0 })
     expect(articles[0].url).toBe('https://example.com/s1')
@@ -584,14 +978,36 @@ describe('score persistence', () => {
     // without any current engagement
     getDb().prepare('UPDATE articles SET score = 5.0 WHERE id = ?').run(id1)
 
-    const { updated } = recalculateScores()
+    const { updated, ids } = recalculateScores()
     // Should be picked up by OR score > 0 clause and recalculated to ~0
     expect(updated).toBe(1)
+    expect(ids).toEqual([id1])
 
     const { articles } = getArticles({ limit: 100, offset: 0 })
     const article = articles.find(a => a.id === id1)!
     // After recalculation with no engagement and old date, score should be near 0
     expect(article.score).toBeLessThan(1)
+  })
+
+  it('recalculates scores with one statement per batch', () => {
+    const feed = seedFeed()
+    for (let i = 0; i < 1001; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://example.com/batched-score-${i}`,
+        published_at: '2025-01-01T00:00:00Z',
+      })
+      getDb().prepare("UPDATE articles SET liked_at = datetime('now') WHERE id = ?").run(id)
+    }
+    const perfStats = { queryCount: 0 }
+
+    const result = recalculateScores({ perfStats })
+
+    expect(result.updated).toBe(1001)
+    expect(result.ids).toHaveLength(1001)
+    expect(result.scoreUpdates).toHaveLength(1001)
+    expect(result.ids).toEqual([...result.ids].sort((left, right) => left - right))
+    expect(result.scoreUpdates.map(update => update.id)).toEqual(result.ids)
+    expect(perfStats.queryCount).toBe(4)
   })
 
   it('updateScore updates a single article immediately', () => {
@@ -607,6 +1023,24 @@ describe('score persistence', () => {
     // score updated by markArticleLiked -> updateScore
     const after = getArticles({ limit: 100, offset: 0 })
     expect(after.articles[0].score).toBeGreaterThan(0)
+  })
+
+  it('syncs single article score from update returning without a follow-up score query', () => {
+    const feed = seedFeed()
+    const id = seedArticle(feed.id, { url: 'https://example.com/score-returning' })
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    markArticleLiked(id, true)
+
+    expect(mockUpdateDocuments).toHaveBeenCalledWith([{ id, score: expect.any(Number) }])
+    expect(preparedSql.some(sql => sql.includes('UPDATE articles SET score') && sql.includes('RETURNING score'))).toBe(true)
+    expect(preparedSql.some(sql => sql.includes('SELECT score FROM articles WHERE id = ?'))).toBe(false)
   })
 
   it('engaged article has higher persisted score', () => {
@@ -775,6 +1209,36 @@ describe('inbox_score sorting', () => {
     expect(articles[0].inbox_score).toBeGreaterThan(articles[1].inbox_score!)
   })
 
+  it('uses indexed similar article counts in inbox_score sorting', () => {
+    const feed = seedFeed()
+    const boostedId = seedArticle(feed.id, {
+      title: 'Similar boosted unread',
+      url: 'https://example.com/similar-boosted-unread',
+      published_at: hoursAgo(30),
+    })
+    seedArticle(feed.id, {
+      title: 'Plain same-age unread',
+      url: 'https://example.com/plain-same-age-unread',
+      published_at: hoursAgo(30),
+    })
+
+    for (let i = 0; i < 3; i++) {
+      const similarId = seedArticle(feed.id, {
+        title: `Seen similar ${i}`,
+        url: `https://example.com/seen-similar-${i}`,
+        published_at: hoursAgo(30),
+      })
+      markArticleSeen(similarId, true)
+      getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(boostedId, similarId, 0.9)
+    }
+
+    const { articles } = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0 })
+
+    expect(articles[0].title).toBe('Similar boosted unread')
+    expect(articles[0].similar_count).toBe(3)
+    expect(articles[0].inbox_score).toBeGreaterThan(articles[1].inbox_score!)
+  })
+
   it('falls back to published_at DESC when inbox scores tie', () => {
     const olderFeed = seedFeed({ name: 'Older Feed', url: 'https://older.example.com' })
     const newerFeed = seedFeed({ name: 'Newer Feed', url: 'https://newer.example.com' })
@@ -794,6 +1258,232 @@ describe('inbox_score sorting', () => {
 
     expect(articles[0].title).toBe('Newer same-score')
     expect(articles[0].inbox_score).toBe(articles[1].inbox_score)
+  })
+
+  it('reuses inbox history metadata for repeated inbox_score requests', () => {
+    const preferredFeed = seedFeed({ name: 'Preferred Cached', url: 'https://preferred-cache.example.com' })
+    const otherFeed = seedFeed({ name: 'Other Cached', url: 'https://other-cache.example.com' })
+
+    for (let i = 0; i < 6; i++) {
+      const id = seedArticle(preferredFeed.id, {
+        url: `https://preferred-cache.example.com/read-${i}`,
+        published_at: daysAgo(10 + i),
+      })
+      recordArticleRead(id)
+    }
+    seedArticle(preferredFeed.id, {
+      title: 'Preferred cached unread',
+      url: 'https://preferred-cache.example.com/unread',
+      published_at: hoursAgo(36),
+    })
+    seedArticle(otherFeed.id, {
+      title: 'Other cached unread',
+      url: 'https://other-cache.example.com/unread',
+      published_at: hoursAgo(6),
+    })
+
+    const firstStats = { queryCount: 0 }
+    const secondStats = { queryCount: 0 }
+    const first = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0, perfStats: firstStats })
+    const second = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0, perfStats: secondStats })
+
+    expect(first.articles[0].title).toBe('Preferred cached unread')
+    expect(second.articles[0].title).toBe('Preferred cached unread')
+    expect(firstStats.queryCount).toBe(4)
+    expect(secondStats.queryCount).toBe(2)
+  })
+
+  it('invalidates cached inbox history when read history changes', () => {
+    const preferredFeed = seedFeed({ name: 'Preferred Invalidated', url: 'https://preferred-invalidate.example.com' })
+    const otherFeed = seedFeed({ name: 'Other Invalidated', url: 'https://other-invalidate.example.com' })
+    const historyIds: number[] = []
+
+    for (let i = 0; i < 6; i++) {
+      const id = seedArticle(preferredFeed.id, {
+        url: `https://preferred-invalidate.example.com/history-${i}`,
+        published_at: daysAgo(10 + i),
+      })
+      markArticleSeen(id, true)
+      historyIds.push(id)
+    }
+    seedArticle(preferredFeed.id, {
+      title: 'Preferred after read history',
+      url: 'https://preferred-invalidate.example.com/unread',
+      published_at: hoursAgo(30),
+    })
+    seedArticle(otherFeed.id, {
+      title: 'Other before read history',
+      url: 'https://other-invalidate.example.com/unread',
+      published_at: hoursAgo(6),
+    })
+
+    const before = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0 })
+    expect(before.articles[0].title).toBe('Other before read history')
+
+    for (const id of historyIds) recordArticleRead(id)
+
+    const after = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0 })
+    expect(after.articles[0].title).toBe('Preferred after read history')
+  })
+
+  it('can build high-value inbox results after inbox history metadata is cached', () => {
+    const preferredFeed = seedFeed({ name: 'Preferred High Value', url: 'https://preferred-high-value.example.com' })
+    const otherFeed = seedFeed({ name: 'Other High Value', url: 'https://other-high-value.example.com' })
+
+    for (let i = 0; i < 6; i++) {
+      const id = seedArticle(preferredFeed.id, {
+        url: `https://preferred-high-value.example.com/read-${i}`,
+        published_at: daysAgo(10 + i),
+      })
+      recordArticleRead(id)
+    }
+    seedArticle(preferredFeed.id, {
+      title: 'Preferred high value unread',
+      url: 'https://preferred-high-value.example.com/unread',
+      published_at: hoursAgo(30),
+    })
+    seedArticle(otherFeed.id, {
+      title: 'Other high value unread',
+      url: 'https://other-high-value.example.com/unread',
+      published_at: hoursAgo(6),
+    })
+
+    const cachedList = getArticles({ unread: true, sort: 'inbox_score', limit: 10, offset: 0 })
+    expect(cachedList.articles).toHaveLength(2)
+
+    const result = getHighValueInbox({ limit: 2 })
+    const titles = result.items.flatMap(item => item.kind === 'group'
+      ? [item.display_article.title, ...item.members.map(member => member.title)]
+      : [item.display_article.title])
+
+    expect(titles).toEqual(expect.arrayContaining([
+      'Preferred high value unread',
+      'Other high value unread',
+    ]))
+  })
+
+  it('reuses high-value frequency and history metadata for repeated requests', () => {
+    const feed = seedFeed({ name: 'Cached High Value', url: 'https://cached-high-value.example.com' })
+    for (let i = 0; i < 6; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://cached-high-value.example.com/read-${i}`,
+        published_at: daysAgo(10 + i),
+      })
+      recordArticleRead(id)
+    }
+    seedArticle(feed.id, {
+      title: 'Cached high value unread',
+      url: 'https://cached-high-value.example.com/unread',
+      published_at: hoursAgo(6),
+    })
+
+    const firstStats = { queryCount: 0 }
+    const secondStats = { queryCount: 0 }
+    const first = getHighValueInbox({ limit: 1, perfStats: firstStats })
+    const second = getHighValueInbox({ limit: 1, perfStats: secondStats })
+
+    expect(first.items).toHaveLength(1)
+    expect(second.items).toHaveLength(1)
+    expect(firstStats.queryCount).toBe(5)
+    expect(secondStats.queryCount).toBe(2)
+  })
+
+  it('invalidates high-value frequency metadata when articles are inserted', () => {
+    const feed = seedFeed({ name: 'Invalidated Frequency', url: 'https://invalidated-frequency.example.com' })
+    seedArticle(feed.id, {
+      title: 'Initial high value unread',
+      url: 'https://invalidated-frequency.example.com/initial',
+      published_at: hoursAgo(6),
+    })
+
+    const warmStats = { queryCount: 0 }
+    getHighValueInbox({ limit: 1, perfStats: warmStats })
+    expect(warmStats.queryCount).toBe(5)
+
+    seedArticle(feed.id, {
+      title: 'Inserted high value unread',
+      url: 'https://invalidated-frequency.example.com/inserted',
+      published_at: hoursAgo(5),
+    })
+
+    const afterInsertStats = { queryCount: 0 }
+    getHighValueInbox({ limit: 1, perfStats: afterInsertStats })
+    expect(afterInsertStats.queryCount).toBe(5)
+  })
+
+  it('keeps high-value read-similar topic signals', () => {
+    const feed = seedFeed({ name: 'Read Similar High Value', url: 'https://read-similar-high-value.example.com' })
+    const candidateId = seedArticle(feed.id, {
+      title: 'Unread with read similar',
+      url: 'https://read-similar-high-value.example.com/unread',
+      published_at: hoursAgo(6),
+    })
+    const readSimilarId = seedArticle(feed.id, {
+      title: 'Already read similar',
+      url: 'https://read-similar-high-value.example.com/read',
+      published_at: hoursAgo(12),
+    })
+    recordArticleRead(readSimilarId)
+    getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(candidateId, readSimilarId, 0.92)
+
+    const result = getHighValueInbox({ limit: 1 })
+    const firstItem = result.items[0]
+
+    expect(firstItem?.kind).toBe('article')
+    if (firstItem?.kind !== 'article') throw new Error('Expected first high-value item to be an article')
+    expect(firstItem.display_article.title).toBe('Unread with read similar')
+    expect(firstItem.display_article.inbox_reason_codes).toContain('topic_already_covered')
+  })
+
+  it('keeps null-published recent fetched articles in high-value candidates', () => {
+    const feed = seedFeed({ name: 'Fetched Fallback High Value', url: 'https://fetched-fallback-high-value.example.com' })
+    const recentFallbackId = seedArticle(feed.id, {
+      title: 'Recent fetched fallback',
+      url: 'https://fetched-fallback-high-value.example.com/recent',
+      published_at: null as unknown as string,
+    })
+    getDb().prepare('UPDATE articles SET fetched_at = ? WHERE id = ?').run(hoursAgo(2), recentFallbackId)
+    const oldFallbackId = seedArticle(feed.id, {
+      title: 'Old fetched fallback',
+      url: 'https://fetched-fallback-high-value.example.com/old',
+      published_at: null as unknown as string,
+    })
+    getDb().prepare('UPDATE articles SET fetched_at = ? WHERE id = ?').run(daysAgo(10), oldFallbackId)
+
+    const result = getHighValueInbox({ limit: 3 })
+    const titles = result.items.flatMap(item => item.kind === 'group'
+      ? [item.display_article.title, ...item.members.map(member => member.title)]
+      : [item.display_article.title])
+
+    expect(titles).toContain('Recent fetched fallback')
+    expect(titles).not.toContain('Old fetched fallback')
+  })
+
+  it('uses the active unread index for high-value published candidates', () => {
+    const userId = seedUser('high-value-plan@example.com')
+    const feed = createFeed({ name: 'High Value Plan Feed', url: 'https://high-value-plan.example.com/feed' }, userId)
+    seedArticle(feed.id, {
+      user_id: userId,
+      url: 'https://high-value-plan.example.com/1',
+      published_at: hoursAgo(2),
+    })
+
+    const plan = getDb().prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT a.id
+      FROM articles a INDEXED BY idx_articles_user_unread_published_active
+      JOIN feeds f ON a.feed_id = f.id
+      WHERE a.purged_at IS NULL
+        AND a.seen_at IS NULL
+        AND a.published_at IS NOT NULL
+        AND a.published_at >= ?
+        AND f.type != 'clip'
+        AND a.user_id = ?
+      ORDER BY a.published_at DESC, a.id DESC
+      LIMIT 60
+    `).all(daysAgo(7), userId) as { detail: string }[]
+
+    expect(plan.some(row => row.detail.includes('idx_articles_user_unread_published_active'))).toBe(true)
   })
 })
 
@@ -934,6 +1624,122 @@ describe('getArticles smartFloor', () => {
     // smartFloor limits the result, totalWithoutFloor shows the real count
     expect(result.total).toBeLessThan(25)
     expect(result.totalWithoutFloor).toBe(25)
+  })
+
+  it('can skip totalWithoutFloor when caller only needs page data', () => {
+    const feed = seedFeed()
+    for (let i = 0; i < 5; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://example.com/skip-twf-recent-${i}`,
+        published_at: daysAgo(i),
+      })
+      markArticleSeen(id, true)
+    }
+    for (let i = 0; i < 20; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://example.com/skip-twf-old-${i}`,
+        published_at: daysAgo(30 + i),
+      })
+      markArticleSeen(id, true)
+    }
+
+    const result = getArticles({
+      feedId: feed.id,
+      smartFloor: true,
+      limit: 10,
+      offset: 10,
+      includeTotalWithoutFloor: false,
+    })
+
+    expect(result.articles).toHaveLength(10)
+    expect(result.total).toBeLessThan(25)
+    expect(result.totalWithoutFloor).toBeUndefined()
+  })
+
+  it('can skip total count and probe hasMore with one extra row', () => {
+    const feed = seedFeed()
+    for (let i = 0; i < 25; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://example.com/no-total-${i}`,
+        published_at: daysAgo(i),
+      })
+      markArticleSeen(id, true)
+    }
+    const perfStats = { queryCount: 0 }
+
+    const result = getArticles({
+      feedId: feed.id,
+      limit: 10,
+      offset: 10,
+      includeTotal: false,
+      perfStats,
+    })
+
+    expect(result.articles).toHaveLength(10)
+    expect(result.hasMore).toBe(true)
+    expect(result.total).toBe(21)
+    expect(perfStats.queryCount).toBe(1)
+  })
+
+  it('reuses smartFloor metadata for repeated requests in the same scope', () => {
+    const feed = seedFeed()
+    for (let i = 0; i < 5; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://example.com/cached-floor-recent-${i}`,
+        published_at: daysAgo(i),
+      })
+      markArticleSeen(id, true)
+    }
+    for (let i = 0; i < 20; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://example.com/cached-floor-old-${i}`,
+        published_at: daysAgo(30 + i),
+      })
+      markArticleSeen(id, true)
+    }
+
+    const firstStats = { queryCount: 0 }
+    const secondStats = { queryCount: 0 }
+
+    const first = getArticles({
+      feedId: feed.id,
+      smartFloor: true,
+      limit: 10,
+      offset: 0,
+      includeTotalWithoutFloor: false,
+      perfStats: firstStats,
+    })
+    const second = getArticles({
+      feedId: feed.id,
+      smartFloor: true,
+      limit: 10,
+      offset: 10,
+      includeTotalWithoutFloor: false,
+      perfStats: secondStats,
+    })
+
+    expect(first.articles).toHaveLength(10)
+    expect(second.articles).toHaveLength(10)
+    expect(firstStats.queryCount).toBe(4)
+    expect(secondStats.queryCount).toBe(2)
+  })
+
+  it('skips the page query when limit is zero', () => {
+    const feed = seedFeed()
+    seedArticle(feed.id, { url: 'https://example.com/total-only-1' })
+    seedArticle(feed.id, { url: 'https://example.com/total-only-2' })
+    const perfStats = { queryCount: 0 }
+
+    const result = getArticles({
+      feedId: feed.id,
+      limit: 0,
+      offset: 0,
+      includeTotalWithoutFloor: false,
+      perfStats,
+    })
+
+    expect(result).toEqual({ articles: [], total: 2 })
+    expect(perfStats.queryCount).toBe(1)
   })
 
   it('does not return totalWithoutFloor when no articles are hidden', () => {
@@ -1077,6 +1883,28 @@ describe('getRetryArticles', () => {
       'https://example.com/r1', // retry_count=1
       'https://example.com/r2', // retry_count=2
     ])
+  })
+
+  it('uses the retry queue index for eligible retry batches', () => {
+    const feed = seedFeed()
+    seedArticle(feed.id, { url: 'https://example.com/retry-plan', last_error: 'fail' })
+
+    const plan = getDb().prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT id
+      FROM active_articles
+      WHERE last_error IS NOT NULL
+        AND full_text IS NULL
+        AND retry_count < ?
+        AND (
+          last_retry_at IS NULL
+          OR datetime(last_retry_at, '+' || (30 * (1 << MIN(retry_count, 6))) || ' minutes') <= datetime('now')
+        )
+      ORDER BY retry_count ASC, last_retry_at ASC
+      LIMIT ?
+    `).all(5, 3) as { detail: string }[]
+
+    expect(plan.some(row => row.detail.includes('idx_articles_retry_queue_active'))).toBe(true)
   })
 })
 

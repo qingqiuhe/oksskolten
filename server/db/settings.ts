@@ -79,6 +79,68 @@ export function getSetting(key: string, userId?: number | null): string | undefi
   return getLegacySetting(key)
 }
 
+export function getSettings(keys: readonly string[], userId?: number | null): Record<string, string | undefined> {
+  const result: Record<string, string | undefined> = Object.fromEntries(keys.map(key => [key, undefined]))
+  const uniqueKeys = [...new Set(keys)]
+  if (uniqueKeys.length === 0) return result
+
+  const instanceKeys = uniqueKeys.filter(isInstanceSetting)
+  if (instanceKeys.length > 0) {
+    const placeholders = instanceKeys.map(() => '?').join(', ')
+    const instanceRows = getDb().prepare(`
+      SELECT key, value
+      FROM instance_settings
+      WHERE key IN (${placeholders})
+    `).all(...instanceKeys) as Array<{ key: string; value: string }>
+    for (const row of instanceRows) result[row.key] = row.value
+
+    const missingInstanceKeys = instanceKeys.filter(key => result[key] === undefined)
+    if (missingInstanceKeys.length > 0) {
+      const legacyPlaceholders = missingInstanceKeys.map(() => '?').join(', ')
+      const legacyRows = getDb().prepare(`
+        SELECT key, value
+        FROM settings
+        WHERE key IN (${legacyPlaceholders})
+      `).all(...missingInstanceKeys) as Array<{ key: string; value: string }>
+      for (const row of legacyRows) result[row.key] = row.value
+    }
+  }
+
+  const regularKeys = uniqueKeys.filter(key => !isInstanceSetting(key))
+  if (regularKeys.length === 0) return result
+
+  const scopedUserId = resolveUserId(userId)
+  const placeholders = regularKeys.map(() => '?').join(', ')
+  if (scopedUserId != null) {
+    const userRows = getDb().prepare(`
+      SELECT key, value
+      FROM user_settings
+      WHERE user_id = ? AND key IN (${placeholders})
+    `).all(scopedUserId, ...regularKeys) as Array<{ key: string; value: string }>
+    for (const row of userRows) result[row.key] = row.value
+
+    const fallbackKeys = regularKeys.filter(key => result[key] === undefined && shouldFallbackToLegacyForUserScopedKey(key))
+    if (fallbackKeys.length > 0) {
+      const fallbackPlaceholders = fallbackKeys.map(() => '?').join(', ')
+      const legacyRows = getDb().prepare(`
+        SELECT key, value
+        FROM settings
+        WHERE key IN (${fallbackPlaceholders})
+      `).all(...fallbackKeys) as Array<{ key: string; value: string }>
+      for (const row of legacyRows) result[row.key] = row.value
+    }
+    return result
+  }
+
+  const legacyRows = getDb().prepare(`
+    SELECT key, value
+    FROM settings
+    WHERE key IN (${placeholders})
+  `).all(...regularKeys) as Array<{ key: string; value: string }>
+  for (const row of legacyRows) result[row.key] = row.value
+  return result
+}
+
 export function upsertSetting(key: string, value: string, userId?: number | null): void {
   if (isInstanceSetting(key)) {
     upsertInstanceSetting(key, value)

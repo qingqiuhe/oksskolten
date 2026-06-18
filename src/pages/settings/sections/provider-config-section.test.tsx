@@ -15,12 +15,16 @@ vi.mock('../../../lib/fetcher', () => ({
 }))
 
 let swrData: Record<string, unknown> = {}
+let swrKeys: Array<string | null> = []
 
 vi.mock('swr', () => ({
-  default: (key: string | null) => ({
-    data: key ? swrData[key] : undefined,
-    mutate: vi.fn(async (value?: unknown) => value ?? (key ? swrData[key] : undefined)),
-  }),
+  default: (key: string | null) => {
+    swrKeys.push(key)
+    return {
+      data: key ? swrData[key] : undefined,
+      mutate: vi.fn(async (value?: unknown) => value ?? (key ? swrData[key] : undefined)),
+    }
+  },
 }))
 
 function t(key: string) {
@@ -105,12 +109,17 @@ function t(key: string) {
 describe('ProviderConfigSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    swrKeys = []
     swrData = {
-      '/api/settings/api-keys/anthropic': { configured: false },
-      '/api/settings/api-keys/gemini': { configured: false },
-      '/api/settings/api-keys/openai': { configured: false },
-      '/api/settings/api-keys/google-translate': { configured: false },
-      '/api/settings/api-keys/deepl': { configured: false },
+      '/api/settings/api-keys': {
+        keys: {
+          anthropic: { configured: false },
+          gemini: { configured: false },
+          openai: { configured: false },
+          'google-translate': { configured: false },
+          deepl: { configured: false },
+        },
+      },
       '/api/settings/preferences': {
         'ollama.base_url': '',
         'ollama.custom_headers': '',
@@ -134,6 +143,21 @@ describe('ProviderConfigSection', () => {
     mockApiPost.mockResolvedValue({})
     mockApiPatch.mockResolvedValue({})
     mockApiDelete.mockResolvedValue({ ok: true })
+  })
+
+  it('uses one batched API-key status request', () => {
+    render(
+      <ProviderConfigSection
+        t={t}
+        settings={{
+          translateTargetLang: '',
+          setTranslateTargetLang: vi.fn(),
+        } as any}
+      />,
+    )
+
+    expect(swrKeys).toContain('/api/settings/api-keys')
+    expect(swrKeys.filter(key => key?.startsWith('/api/settings/api-keys/'))).toHaveLength(0)
   })
 
   it('saves the built-in OpenAI API key without patching preferences', async () => {

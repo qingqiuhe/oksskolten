@@ -79,12 +79,13 @@ function convertMessagesToGemini(messages: Message[]): Content[] {
 }
 
 export async function runGeminiTurn(params: ChatTurnParams): Promise<RunChatTurnResult> {
-  if (!getSetting('api_key.gemini', params.userId)) {
+  const apiKey = getSetting('api_key.gemini', params.userId)
+  if (!apiKey) {
     throw new Error('GEMINI_KEY_NOT_SET')
   }
 
   const { system, model, debugCollector } = params
-  const ai = getGeminiClient(params.userId)
+  const ai = getGeminiClient(params.userId, apiKey)
   const tools = toGeminiTools()
 
   return runToolLoop(params, async (allMessages, onEvent) => {

@@ -8,8 +8,12 @@ import type { ArticleListItem, HighValueResponse } from '../../../shared/types'
 import { toast } from 'sonner'
 
 // --- Mocks ---
-const { mockApiPost } = vi.hoisted(() => ({
-  mockApiPost: vi.fn(() => Promise.resolve({ translated_titles: {} })),
+const { mockApiPost, mockUseKeyboardNavigation } = vi.hoisted(() => ({
+  mockApiPost: vi.fn((_url: string, _body?: unknown) => Promise.resolve({ translated_titles: {} as Record<number, string> })),
+  mockUseKeyboardNavigation: vi.fn(),
+}))
+const { mockStartFeedFetch } = vi.hoisted(() => ({
+  mockStartFeedFetch: vi.fn(() => Promise.resolve({ totalNew: 0 })),
 }))
 
 // Control useSWRInfinite return value per test
@@ -93,7 +97,7 @@ vi.mock('../layout/pull-to-refresh', () => ({
 vi.mock('../../contexts/fetch-progress-context', () => ({
   useFetchProgressContext: () => ({
     progress: new Map(),
-    startFeedFetch: vi.fn(() => Promise.resolve({ totalNew: 0 })),
+    startFeedFetch: mockStartFeedFetch,
     subscribeFeedFetch: vi.fn(),
   }),
 }))
@@ -104,6 +108,10 @@ vi.mock('../../contexts/keyboard-navigation-context', () => ({
     focusedItemId: null,
     setFocusedItemId: noopSetFocusedItemId,
   }),
+}))
+
+vi.mock('../../hooks/use-keyboard-navigation', () => ({
+  useKeyboardNavigation: mockUseKeyboardNavigation,
 }))
 
 vi.mock('../ui/mascot', () => ({
@@ -303,6 +311,9 @@ describe('ArticleList', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    mockUseKeyboardNavigation.mockClear()
+    mockStartFeedFetch.mockClear()
+    mockStartFeedFetch.mockResolvedValue({ totalNew: 0 })
     mockApiPost.mockReset()
     mockApiPost.mockResolvedValue({ translated_titles: {} })
     swrFeedsData = undefined
@@ -666,6 +677,56 @@ describe('ArticleList', () => {
     expect(screen.getAllByText('Chat').length).toBeGreaterThan(0)
   })
 
+  it('limits fetch-all inbox feed refresh concurrency', async () => {
+    swrFeedsData = {
+      feeds: Array.from({ length: 8 }, (_, index) => ({
+        id: index + 1,
+        name: `Feed ${index + 1}`,
+        type: 'rss',
+        disabled: false,
+      })),
+    }
+    swrInfiniteReturn = {
+      data: [{ articles: [], total: 0, total_all: 8, has_more: false }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    let activeFetches = 0
+    let maxActiveFetches = 0
+    const resolvers: Array<() => void> = []
+    mockStartFeedFetch.mockImplementation(async () => {
+      activeFetches += 1
+      maxActiveFetches = Math.max(maxActiveFetches, activeFetches)
+      await new Promise<void>(resolve => resolvers.push(resolve))
+      activeFetches -= 1
+      return { totalNew: 1 }
+    })
+
+    renderArticleList()
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch updates' }))
+
+    for (let attempts = 0; attempts < 20 && mockStartFeedFetch.mock.calls.length < 4; attempts += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    expect(mockStartFeedFetch).toHaveBeenCalledTimes(4)
+    expect(maxActiveFetches).toBe(4)
+
+    resolvers.splice(0).forEach(resolve => resolve())
+    for (let attempts = 0; attempts < 20 && mockStartFeedFetch.mock.calls.length < 8; attempts += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    expect(mockStartFeedFetch).toHaveBeenCalledTimes(8)
+    expect(maxActiveFetches).toBe(4)
+
+    resolvers.splice(0).forEach(resolve => resolve())
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Inbox: Fetched 8 new articles'))
+  })
+
   it('groups inbox articles by feed when grouping mode changes', () => {
     swrInboxSummaryData = {
       unread_total: 3,
@@ -865,6 +926,73 @@ describe('ArticleList', () => {
     renderArticleList()
     expect(screen.getByText('Page 1')).toBeTruthy()
     expect(screen.getByText('Page 2')).toBeTruthy()
+  })
+
+  it('caps rendered article DOM while keeping the full loaded chat scope', () => {
+    const articles = Array.from({ length: 130 }, (_, index) => (
+      makeArticle({ id: index + 1, title: `Loaded Article ${index + 1}`, lang: 'fr' })
+    ))
+    swrInfiniteReturn = {
+      data: [{ articles, total: 130, has_more: false }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+
+    renderArticleList('/feeds/1')
+
+    expect(screen.getByTestId('article-render-window-placeholder')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show earlier loaded articles (10)' })).toBeTruthy()
+    expect(document.querySelector('[data-article-id="1"]')).toBeNull()
+    expect(document.querySelector('[data-article-id="10"]')).toBeNull()
+    expect(document.querySelector('[data-article-id="11"]')).toBeTruthy()
+    expect(document.querySelector('[data-article-id="130"]')).toBeTruthy()
+    expect(screen.getByTestId('list-chat-fab').getAttribute('data-article-count')).toBe('130')
+    const keyboardOptions = mockUseKeyboardNavigation.mock.calls[mockUseKeyboardNavigation.mock.calls.length - 1]?.[0] as { items: string[] }
+    expect(keyboardOptions.items).toHaveLength(120)
+    expect(keyboardOptions.items[0]).toBe('11')
+    expect(keyboardOptions.items).not.toContain('1')
+    expect(keyboardOptions.items[119]).toBe('130')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier loaded articles (10)' }))
+
+    expect(screen.queryByTestId('article-render-window-placeholder')).toBeNull()
+    expect(document.querySelector('[data-article-id="1"]')).toBeTruthy()
+  })
+
+  it('translates only the rendered article window', async () => {
+    const articles = Array.from({ length: 121 }, (_, index) => (
+      makeArticle({ id: index + 1, title: `Loaded Article ${index + 1}`, lang: 'fr' })
+    ))
+    swrInfiniteReturn = {
+      data: [{ articles, total: 121, has_more: false }],
+      error: undefined,
+      size: 1,
+      setSize: vi.fn(),
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    }
+    mockApiPost.mockImplementation((_url: string, payload: unknown) => {
+      const ids = (payload as { ids: number[] }).ids
+      return Promise.resolve({
+        translated_titles: Object.fromEntries(ids.map(id => [id, `Translated ${id}`])),
+      })
+    })
+
+    renderArticleList('/feeds/1')
+
+    fireEvent.click(getTopTranslateButton('Translate'))
+
+    await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(3))
+    const requestedIds = mockApiPost.mock.calls.flatMap(([, payload]) => (payload as { ids: number[] }).ids)
+    expect(requestedIds).toHaveLength(120)
+    expect(requestedIds[0]).toBe(2)
+    expect(requestedIds).not.toContain(1)
+    expect(requestedIds[119]).toBe(121)
   })
 
   it('renders FeedMetricsBar for current feed', () => {

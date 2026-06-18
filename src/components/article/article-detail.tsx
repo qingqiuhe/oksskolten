@@ -23,6 +23,7 @@ import { Skeleton } from '../ui/skeleton'
 import { Callout } from '../ui/callout'
 import { rewriteBlockedXVideos } from '../../lib/x-video-fallback'
 import { buildArticleScope, summarizeScope } from '../../lib/chat-scope'
+import { applyFeedsCachePatch, type FeedsCacheData } from '../../lib/feeds-cache'
 import { ArticleToolbar } from './article-toolbar'
 import { ArticleSummarySection } from './article-summary-section'
 import { ArticleTranslationBanner } from './article-translation-banner'
@@ -63,7 +64,7 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
     isBookmarked, isLiked, archivingImages, deleteConfirmOpen, setDeleteConfirmOpen,
     toggleBookmark, toggleLike, handleArchiveImages, handleDelete,
   } = useArticleActions(article, articleKey)
-  const chat = useChatInline(article?.id ?? 0)
+  const chat = useChatInline(article?.id ?? 0, chatPosition === 'inline')
   const autoTranslateRequested = useMemo(() => new URLSearchParams(location.search).get('translate') === '1', [location.search])
   const autoTranslateRef = useRef<string | null>(null)
 
@@ -119,7 +120,16 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
         trackRead(article.id)
       }
       apiPost(`/api/articles/${article.id}/read`)
-        .then(() => globalMutate((key: string) => typeof key === 'string' && key.startsWith('/api/feeds')))
+        .then(() => {
+          if (!isFirstSeen) return
+          void globalMutate(
+            '/api/feeds',
+            (current: FeedsCacheData | undefined) => applyFeedsCachePatch(current, {
+              feedDeltas: [{ feedId: article.feed_id, unreadDelta: -1 }],
+            }),
+            { revalidate: false },
+          )
+        })
         .catch(async () => {
           if (isFirstSeen) {
             await queueSeenIds([article.id])
@@ -301,7 +311,12 @@ export function ArticleDetail({ articleUrl }: ArticleDetailProps) {
 
       {/* Inline Chat Panel */}
       {chatPosition === 'inline' && chat.open && (
-        <ChatInlinePanel articleId={article.id} onClose={chat.close} scopeSummary={articleScopeSummary} />
+        <ChatInlinePanel
+          articleId={article.id}
+          conversationId={chat.conversationId}
+          onClose={chat.close}
+          scopeSummary={articleScopeSummary}
+        />
       )}
 
       {/* Summary */}

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { buildApp } from '../__tests__/helpers/buildApp.js'
-import { upsertSetting, getSetting } from '../db.js'
+import { getDb, upsertSetting, getSetting } from '../db.js'
 import type { FastifyInstance } from 'fastify'
 
 // ---------------------------------------------------------------------------
@@ -69,6 +69,29 @@ describe('GET /api/settings/image-storage', () => {
     expect(body.headersConfigured).toBe(false)
     expect(body.fieldName).toBe('image')
     expect(body.respPath).toBe('')
+  })
+
+  it('reads image storage settings with a batched query', async () => {
+    upsertSetting('images.storage', 'remote')
+    upsertSetting('images.upload_url', 'https://upload.example.com')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/settings/image-storage',
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().mode).toBe('remote')
+    expect(res.json().url).toBe('https://upload.example.com')
+    expect(preparedSql.some(sql => sql.includes('FROM instance_settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM instance_settings WHERE key = ?'))).toHaveLength(0)
   })
 
   it('returns stored values after PATCH', async () => {
@@ -302,5 +325,25 @@ describe('POST /api/settings/image-storage/test', () => {
 
     expect(res.statusCode).toBe(400)
     expect(res.json().error).toMatch(/incomplete/i)
+  })
+
+  it('reads remote upload test settings with a batched query', async () => {
+    upsertSetting('images.storage', 'remote')
+    const db = getDb()
+    const originalPrepare = db.prepare.bind(db)
+    const preparedSql: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      preparedSql.push(sql)
+      return originalPrepare(sql)
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/settings/image-storage/test',
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(preparedSql.some(sql => sql.includes('FROM instance_settings') && sql.includes('key IN'))).toBe(true)
+    expect(preparedSql.filter(sql => sql.includes('SELECT value FROM instance_settings WHERE key = ?'))).toHaveLength(0)
   })
 })

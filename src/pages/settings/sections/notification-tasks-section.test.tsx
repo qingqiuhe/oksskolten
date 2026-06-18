@@ -13,13 +13,17 @@ vi.mock('../../../lib/fetcher', () => ({
 }))
 
 let swrData: Record<string, unknown> = {}
+let swrKeys: Array<string | null> = []
 const mockMutate = vi.fn(async () => undefined)
 
 vi.mock('swr', () => ({
-  default: (key: string) => ({
-    data: swrData[key],
-    mutate: mockMutate,
-  }),
+  default: (key: string | null) => {
+    swrKeys.push(key)
+    return {
+      data: key ? swrData[key] : undefined,
+      mutate: mockMutate,
+    }
+  },
 }))
 
 describe('NotificationTasksSection', () => {
@@ -28,6 +32,7 @@ describe('NotificationTasksSection', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    swrKeys = []
     swrData = {
       '/api/me': { id: 1, role: 'admin' },
       '/api/settings/notification-channels': {
@@ -111,6 +116,16 @@ describe('NotificationTasksSection', () => {
       expect(screen.getByText(/Owner: admin@example.com/)).toBeTruthy()
       expect(screen.getByText(/Owner: member@example.com/)).toBeTruthy()
     })
+  })
+
+  it('starts shared admin view on all scope without requesting self first', () => {
+    render(<NotificationTasksSection sharedData={{
+      me: { id: 1, role: 'admin' },
+      channelData: swrData['/api/settings/notification-channels'] as { channels: [] },
+    }} />)
+
+    expect(swrKeys).toContain('/api/settings/notification-tasks?scope=all')
+    expect(swrKeys).not.toContain('/api/settings/notification-tasks?scope=self')
   })
 
   it('allows editing channels for own task', async () => {

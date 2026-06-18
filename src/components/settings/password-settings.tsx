@@ -13,8 +13,14 @@ interface AuthMethods {
   passkey: { enabled: boolean; count: number }
   github?: { enabled: boolean }
 }
+export type SecuritySharedData = {
+  methods?: AuthMethods
+  mutateMethods?: () => unknown
+  me?: { email: string }
+  mutateMe?: () => unknown
+}
 
-export function PasswordSettings() {
+export function PasswordSettings({ sharedData }: { sharedData?: SecuritySharedData } = {}) {
   const { t } = useI18n()
   const [toggling, setToggling] = useState(false)
   const [currentPassword, setCurrentPassword] = useState('')
@@ -33,11 +39,15 @@ export function PasswordSettings() {
   const [editingEmail, setEditingEmail] = useState(false)
   const [editingPassword, setEditingPassword] = useState(false)
 
-  const { data: methods, mutate: mutateMethods } = useSWR<AuthMethods>('/api/auth/methods', fetcher)
-  const { data: me, mutate: mutateMe } = useSWR<{ email: string }>('/api/me', (url: string) => {
+  const { data: internalMethods, mutate: internalMutateMethods } = useSWR<AuthMethods>(sharedData ? null : '/api/auth/methods', fetcher)
+  const { data: internalMe, mutate: internalMutateMe } = useSWR<{ email: string }>(sharedData ? null : '/api/me', (url: string) => {
     const token = getAuthToken()
     return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.ok ? r.json() : Promise.reject())
   })
+  const methods = sharedData?.methods ?? internalMethods
+  const me = sharedData?.me ?? internalMe
+  const mutateMethods = sharedData?.mutateMethods ?? internalMutateMethods
+  const mutateMe = sharedData?.mutateMe ?? internalMutateMe
 
   const passwordEnabled = methods?.password?.enabled !== false
   const passkeyCount = methods?.passkey?.count ?? 0
