@@ -133,3 +133,33 @@ export async function streamPostChat(
 
   await parseSSEStream<import('./api-base').ChatSSEEvent>(res, onEvent)
 }
+
+export type SettingsTransferSummary = Record<
+  'instanceSettings' | 'userSettings' | 'customLlmProviders' | 'notificationChannels',
+  { created: number; updated: number; skipped: number }
+>
+
+export type SettingsTransferResult = {
+  ok: boolean
+  summary: SettingsTransferSummary
+  warnings: string[]
+  errors: string[]
+}
+
+export async function fetchSettingsExportBlob(includeSecrets: boolean): Promise<Blob> {
+  const query = includeSecrets ? '?includeSecrets=1' : ''
+  const res = await fetch(`/api/settings/export${query}`, {
+    headers: authHeaders(),
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+  })
+  if (!res.ok) return handleResponseError(res, '/api/settings/export')
+  return res.blob()
+}
+
+export async function previewSettingsImport(bundle: unknown): Promise<SettingsTransferResult> {
+  return apiPost('/api/settings/import/preview', bundle) as Promise<SettingsTransferResult>
+}
+
+export async function importSettingsBundle(bundle: unknown): Promise<SettingsTransferResult> {
+  return apiPost('/api/settings/import', bundle) as Promise<SettingsTransferResult>
+}

@@ -57,6 +57,11 @@ import {
 import { dataPath } from '../paths.js'
 import { invalidateArticleImageStoragePathCache } from '../article-image-storage-path.js'
 import { getSocialRssHubBaseUrl, invalidateSocialRssHubBaseUrlCache } from '../social-feeds.js'
+import {
+  buildSettingsExportBundle,
+  importSettingsBundle,
+  previewSettingsImport,
+} from '../settings-transfer.js'
 
 const ProfileBody = z.object({
   account_name: z.string().optional(),
@@ -363,6 +368,44 @@ function getRssDatabaseBytes(): number {
 }
 
 export async function settingsRoutes(api: FastifyInstance): Promise<void> {
+  api.get('/api/settings/export', {
+    preHandler: [requireRoles(['owner', 'admin'])],
+  }, async (request, reply) => {
+    const userId = getRequestUserId(request)
+    const includeSecrets = request.query && typeof request.query === 'object' && 'includeSecrets' in request.query
+      ? ['1', 'true', 'yes'].includes(String((request.query as Record<string, unknown>).includeSecrets))
+      : false
+    const bundle = buildSettingsExportBundle(userId, includeSecrets)
+    const date = new Date().toISOString().slice(0, 10)
+    reply.header('Content-Type', 'application/json')
+    reply.header('Content-Disposition', `attachment; filename="oksskolten-settings-${date}.json"`)
+    reply.send(bundle)
+  })
+
+  api.post('/api/settings/import/preview', {
+    preHandler: [requireJson, requireRoles(['owner', 'admin'])],
+  }, async (request, reply) => {
+    const userId = getRequestUserId(request)
+    const result = await previewSettingsImport(request.body, userId)
+    if (!result.ok) {
+      reply.status(400).send(result)
+      return
+    }
+    reply.send(result)
+  })
+
+  api.post('/api/settings/import', {
+    preHandler: [requireJson, requireRoles(['owner', 'admin'])],
+  }, async (request, reply) => {
+    const userId = getRequestUserId(request)
+    const result = await importSettingsBundle(request.body, userId)
+    if (!result.ok) {
+      reply.status(400).send(result)
+      return
+    }
+    reply.send(result)
+  })
+
   api.get('/api/settings/profile', async (request, reply) => {
     const authEmail = getAuthUser(request) ?? 'localhost'
     const userId = getRequestUserId(request)

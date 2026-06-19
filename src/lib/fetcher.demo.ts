@@ -42,3 +42,23 @@ export async function streamPostChat(
 ): Promise<void> {
   return demoStreamPostChat(url, body, onEvent)
 }
+
+export async function fetchSettingsExportBlob(): Promise<Blob> {
+  return new Blob([JSON.stringify({ app: 'oksskolten', version: 1, includeSecrets: false }, null, 2)], { type: 'application/json' })
+}
+
+export async function previewSettingsImport(): Promise<import('./fetcher').SettingsTransferResult> {
+  return {
+    ok: true,
+    summary: {
+      instanceSettings: { created: 0, updated: 0, skipped: 0 },
+      userSettings: { created: 0, updated: 0, skipped: 0 },
+      customLlmProviders: { created: 0, updated: 0, skipped: 0 },
+      notificationChannels: { created: 0, updated: 0, skipped: 0 },
+    },
+    warnings: [],
+    errors: [],
+  }
+}
+
+export const importSettingsBundle = previewSettingsImport

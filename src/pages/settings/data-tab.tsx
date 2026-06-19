@@ -6,6 +6,7 @@ import { FetchScheduleSection } from './sections/fetch-schedule-section'
 import { SocialSourcesSection } from './sections/social-sources-section'
 import { RetentionSection } from './sections/retention-section'
 import { Separator } from '@/components/ui/separator'
+import { SettingsTransferSection } from './sections/settings-transfer-section'
 import { fetcher } from '../../lib/fetcher'
 
 function PlaceholderSection({ titleKey, descKey }: { titleKey: string; descKey: string }) {
@@ -35,6 +36,8 @@ export function DataTab({ sharedData }: { sharedData?: { me?: { id?: number; rol
       <Separator />
       {isAdminLike && (
         <>
+          <SettingsTransferSection />
+          <Separator />
           <SocialSourcesSection />
           <Separator />
         </>
