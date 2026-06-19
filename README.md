@@ -189,7 +189,7 @@ Runs anywhere Docker runs — a home NAS, a Raspberry Pi, or a cloud VM.
 
 ### Using pre-built images
 
-Pre-built multi-architecture Docker images (amd64/arm64) are published to GHCR on every release, and `main` also publishes an auto-deployable candidate image for `mangu`:
+Pre-built multi-architecture Docker images (amd64/arm64) are published to GHCR on every release, and `main` publishes an immutable image digest that can be handed to a protected production deploy endpoint:
 
 ```bash
 docker pull ghcr.io/qingqiuhe/oksskolten:latest
@@ -211,24 +211,20 @@ docker compose -f compose.yaml -f compose.prod.yaml up -d
 ```
 
 The production compose file includes a `cloudflared` sidecar that exposes the app via Cloudflare Tunnel — no port forwarding or static IP required.
+In production, the app port is bound to `127.0.0.1` and the tunnel sidecar uses host networking, so Cloudflare routes should target host-local services rather than a public VM port.
 
-### Automatic deploy to `mangu`
+### Automatic production deploy
 
-`main` now publishes a candidate image to GHCR and triggers an automatic deploy workflow for `mangu`. Configure the following GitHub Actions settings before enabling it:
+`main` publishes a candidate image to GHCR and triggers a protected deployment webhook. The public repository does not contain the production host, login user, or deploy directory. Configure the following GitHub Actions settings before enabling it:
 
 - Repository / environment variables:
-  - `REMOTE_HOST` (recommended: `admin@47.81.56.131`, not a local SSH alias)
-  - `REMOTE_PORT`
-  - `REMOTE_DIR`
-  - `PROJECT_NAME`
-  - `DATA_DIR`
   - `PUBLIC_URL`
-  - `GHCR_USERNAME` (optional; only if the remote host needs GHCR auth)
 - Repository / environment secrets:
-  - `MANGU_SSH_PRIVATE_KEY`
-  - `MEILI_MASTER_KEY`
-  - `TUNNEL_TOKEN`
-  - `GHCR_TOKEN` (optional; only if the remote host needs GHCR auth)
+  - `PRODUCTION_DEPLOY_WEBHOOK_URL`
+  - `PRODUCTION_DEPLOY_WEBHOOK_SECRET`
+  - `PRODUCTION_DEPLOY_ACCESS_CLIENT_ID` and `PRODUCTION_DEPLOY_ACCESS_CLIENT_SECRET` when the webhook is behind Cloudflare Access
+
+The server-side deploy endpoint should invoke [`scripts/production-deploy-agent.sh`](scripts/production-deploy-agent.sh) with local configuration stored outside the repository. That local config owns the deploy directory, compose project name, Cloudflare Tunnel token, MeiliSearch key, optional registry credentials, and the shared webhook secret. The protected tunnel route should point at the host-local webhook adapter, not at a public VM port. The agent only accepts immutable `@sha256:` image references, updates the `server` service, ensures `cloudflared` is running without restarting a healthy tunnel, validates local and public `/api/health`, and rolls back to the previous image on failure.
 
 ### Deployment Notes
 
@@ -250,7 +246,7 @@ docker exec oksskolten-server-1 curl --fail http://127.0.0.1:3000/api/health
 docker compose -f compose.yaml -f compose.prod.yaml restart cloudflared
 ```
 
-The helper script [`scripts/deploy-mangu.sh`](scripts/deploy-mangu.sh) now deploys a published image digest to `mangu`, updates the remote `.env`, validates `/api/health`, and refreshes `cloudflared` only after the app is healthy. A separate [`scripts/deploy-mangu-source.sh`](scripts/deploy-mangu-source.sh) remains available as an emergency source-build fallback.
+The GitHub-side helper [`scripts/trigger-production-deploy.sh`](scripts/trigger-production-deploy.sh) signs publish metadata and posts it to the protected deploy endpoint. It does not know how to log in to the production server and does not contain a production target.
 
 ## License
 

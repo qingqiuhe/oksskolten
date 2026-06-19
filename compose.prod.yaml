@@ -10,7 +10,7 @@ services:
     volumes: !override
       - ${DATA_DIR:-./data}:/data
     ports: !override
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     expose:
       - "3000"
 
@@ -36,6 +36,6 @@ services:
     command: tunnel --protocol http2 run
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN}
-    networks:
-      - internal
+    network_mode: host
+    networks: !reset []
     restart: unless-stopped

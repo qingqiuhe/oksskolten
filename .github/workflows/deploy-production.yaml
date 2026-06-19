@@ -1,0 +1,58 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows: [Publish Docker image]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Download publish metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" --jq '.artifacts[] | select(.name=="publish-metadata") | .id' | head -n 1)"
+          if [[ -z "$artifact_id" ]]; then
+            echo "Error: publish-metadata artifact not found for run ${RUN_ID}" >&2
+            exit 1
+          fi
+
+          gh api -H "Accept: application/vnd.github+json" "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > /tmp/publish-metadata.zip
+          unzip -p /tmp/publish-metadata.zip publish-metadata.json > /tmp/publish-metadata.json
+          jq . /tmp/publish-metadata.json
+
+      - name: Trigger protected production deploy
+        shell: bash
+        env:
+          PRODUCTION_DEPLOY_WEBHOOK_URL: ${{ secrets.PRODUCTION_DEPLOY_WEBHOOK_URL }}
+          PRODUCTION_DEPLOY_WEBHOOK_SECRET: ${{ secrets.PRODUCTION_DEPLOY_WEBHOOK_SECRET }}
+          PRODUCTION_DEPLOY_ACCESS_CLIENT_ID: ${{ secrets.PRODUCTION_DEPLOY_ACCESS_CLIENT_ID }}
+          PRODUCTION_DEPLOY_ACCESS_CLIENT_SECRET: ${{ secrets.PRODUCTION_DEPLOY_ACCESS_CLIENT_SECRET }}
+          PUBLISH_METADATA_PATH: /tmp/publish-metadata.json
+        run: bash scripts/trigger-production-deploy.sh
