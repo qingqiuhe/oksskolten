@@ -1,4 +1,4 @@
-# Secure Production Deploy
+# Securing Production Deploy
 
 This project uses a restricted deploy model for production:
 
