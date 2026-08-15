@@ -642,6 +642,27 @@ export interface ArticleScoreUpdate {
   score: number
 }
 
+// --- Dirty score tracking (Issue #9) ---
+const dirtyScoreArticleIds = new Set<number>()
+
+export function markScoreDirty(articleId: number | number[]): void {
+  if (Array.isArray(articleId)) {
+    for (const id of articleId) {
+      if (id > 0) dirtyScoreArticleIds.add(id)
+    }
+  } else if (articleId > 0) {
+    dirtyScoreArticleIds.add(articleId)
+  }
+}
+
+export function getDirtyScoreArticleIds(): number[] {
+  return [...dirtyScoreArticleIds]
+}
+
+export function clearDirtyScoreArticleIds(): void {
+  dirtyScoreArticleIds.clear()
+}
+
 /** Update score in DB and sync to search. Call within a transaction for atomicity. */
 function updateScoreDb(id: number): number | undefined {
   const row = getDb().prepare(`UPDATE articles SET score = (${scoreExpr('')}) WHERE id = ? RETURNING score`).get(id) as { score: number } | undefined
@@ -653,14 +674,42 @@ export function updateScore(id: number): void {
   if (score !== undefined) syncArticleScoreToSearch(id, score)
 }
 
-export function recalculateScores(opts?: { perfStats?: { queryCount: number } }): { updated: number; ids: number[]; scoreUpdates: ArticleScoreUpdate[] } {
+export function recalculateScores(opts?: { dirtyIds?: number[]; forceAll?: boolean; perfStats?: { queryCount: number } }): { updated: number; ids: number[]; scoreUpdates: ArticleScoreUpdate[] } {
+  const countQuery = () => {
+    if (opts?.perfStats) opts.perfStats.queryCount += 1
+  }
+
+  // If specific dirty IDs passed, process only those IDs matching qualifying criteria
+  if (opts?.dirtyIds && opts.dirtyIds.length > 0) {
+    const uniqueIds = [...new Set(opts.dirtyIds)]
+    const scoreUpdates: ArticleScoreUpdate[] = []
+    const updatedIds: number[] = []
+
+    for (let i = 0; i < uniqueIds.length; i += SCORE_RECALC_BATCH_SIZE) {
+      countQuery()
+      const chunk = uniqueIds.slice(i, i + SCORE_RECALC_BATCH_SIZE)
+      const placeholders = chunk.map(() => '?').join(', ')
+      const batch = getDb().prepare(`
+        UPDATE articles SET score = (${scoreExpr('')})
+        WHERE id IN (
+          SELECT id FROM active_articles
+          WHERE id IN (${placeholders}) AND ${SCORED_ARTICLES_WHERE}
+        )
+        RETURNING id, score
+      `).all(...chunk) as ArticleScoreUpdate[]
+      batch.sort((left, right) => left.id - right.id)
+      for (const row of batch) {
+        updatedIds.push(row.id)
+        scoreUpdates.push(row)
+      }
+    }
+    return { updated: updatedIds.length, ids: updatedIds, scoreUpdates }
+  }
+
   let lastId = 0
   let updated = 0
   const ids: number[] = []
   const scoreUpdates: ArticleScoreUpdate[] = []
-  const countQuery = () => {
-    if (opts?.perfStats) opts.perfStats.queryCount += 1
-  }
 
   while (true) {
     countQuery()
@@ -1315,6 +1364,7 @@ export function markArticleSeen(
   ).get(...args) as { seen_at: string | null; read_at: string | null } | undefined
   if (!row) return undefined
   if (!changedRow) return { seen_at: row.seen_at, read_at: row.read_at }
+  markScoreDirty(id)
   if (!seen) {
     invalidateInboxRankingCaches(scopedUserId)
     updateScore(id)
@@ -1335,6 +1385,8 @@ export function markArticlesSeen(ids: number[], userId?: number | null): { updat
      RETURNING id`,
   ).all(...ids, ...(scopedUserId == null ? [] : [scopedUserId])) as { id: number }[]
   if (updatedRows.length > 0) {
+    const updatedIds = updatedRows.map(row => row.id)
+    markScoreDirty(updatedIds)
     syncArticleFiltersToSearch(updatedRows.map(row => ({ id: row.id, is_unread: false })))
   }
   return { updated: updatedRows.length }
@@ -1352,6 +1404,7 @@ export function markAllSeenByFeed(feedId: number, userId?: number | null): { upd
     RETURNING id
   `).all(...(scopedUserId == null ? [feedId] : [feedId, scopedUserId])) as { id: number }[]
   if (updatedRows.length > 0) {
+    markScoreDirty(updatedRows.map(row => row.id))
     syncArticleFiltersToSearch(updatedRows.map(row => ({ id: row.id, is_unread: false })))
   }
   return { updated: updatedRows.length }
@@ -1383,6 +1436,7 @@ export function markArticleLiked(
   ).get(...args) as { liked_at: string | null } | undefined
   if (!row) return undefined
   if (!changedRow) return { liked_at: row.liked_at }
+  markScoreDirty(id)
   invalidateInboxRankingCaches(scopedUserId)
   updateScore(id)
   syncArticleFiltersToSearch([{ id, is_liked: liked }])
@@ -1442,6 +1496,7 @@ export function markArticleBookmarked(
   ).get(...args) as { bookmarked_at: string | null } | undefined
   if (!row) return undefined
   if (!changedRow) return { bookmarked_at: row.bookmarked_at }
+  markScoreDirty(id)
   invalidateInboxRankingCaches(scopedUserId)
   updateScore(id)
   syncArticleFiltersToSearch([{ id, is_bookmarked: bookmarked }])
@@ -1472,6 +1527,7 @@ export function recordArticleRead(
      RETURNING seen_at, read_at`,
   ).get(...(scopedUserId == null ? [id] : [id, scopedUserId])) as { seen_at: string | null; read_at: string | null } | undefined
   if (!row) return undefined
+  markScoreDirty(id)
   invalidateInboxRankingCaches(scopedUserId)
   updateScore(id)
   syncArticleFiltersToSearch([{ id, is_unread: false }])
@@ -1532,6 +1588,7 @@ export function insertArticle(data: {
     last_error: data.last_error ?? null,
   })
   invalidateInboxRankingCaches(inferredUserId ?? null)
+  markScoreDirty(doc.id)
   syncArticleToSearch(doc)
   return doc.id
 }
@@ -1577,6 +1634,7 @@ export function updateArticleContent(
     SET ${fields.join(', ')}
     WHERE id = @id ${scopedUserId == null ? '' : 'AND user_id = @user_id'}
   `
+  markScoreDirty(articleId)
   if (!affectsSearchDocument) {
     runNamed(baseSql, params)
     return

@@ -12,6 +12,7 @@ const {
   mockCreateIndex,
   mockDeleteIndex,
   mockSwapIndexes,
+  mockGetStats,
 } = vi.hoisted(() => {
   const mockWaitTask = vi.fn().mockResolvedValue({})
   const taskResult = () => Object.assign(Promise.resolve({}), { waitTask: mockWaitTask })
@@ -24,6 +25,7 @@ const {
     mockCreateIndex: vi.fn(() => taskResult()),
     mockDeleteIndex: vi.fn(() => taskResult()),
     mockSwapIndexes: vi.fn(() => taskResult()),
+    mockGetStats: vi.fn().mockResolvedValue({ numberOfDocuments: 0 }),
   }
 })
 
@@ -37,13 +39,23 @@ vi.mock('./client.js', () => ({
       updateDocuments: mockUpdateDocuments,
       addDocuments: mockAddDocuments,
       updateSettings: mockUpdateSettings,
+      getStats: mockGetStats,
     }),
   }),
   ARTICLES_INDEX: 'articles',
   ARTICLES_STAGING_INDEX: 'articles_staging',
 }))
 
-import { rebuildSearchIndex, syncAllScoredArticlesToSearch, syncArticleScoresToSearch, syncArticleScoreUpdatesToSearch, _setRebuilding } from './sync.js'
+import {
+  rebuildSearchIndex,
+  syncAllScoredArticlesToSearch,
+  syncArticleScoresToSearch,
+  syncArticleScoreUpdatesToSearch,
+  getSearchSyncMetrics,
+  resetSearchSyncMetricsForTest,
+  checkSearchIndexHealth,
+  _setRebuilding,
+} from './sync.js'
 
 function seedFeed(): number {
   return getDb().prepare(
@@ -64,6 +76,7 @@ function mockArg<T>(calls: unknown[][], callIndex = 0, argIndex = 0): T {
 describe('syncAllScoredArticlesToSearch', () => {
   beforeEach(() => {
     setupTestDb()
+    resetSearchSyncMetricsForTest()
     mockUpdateDocuments.mockClear()
     mockAddDocuments.mockClear()
     mockUpdateSettings.mockClear()
@@ -328,5 +341,48 @@ describe('rebuildSearchIndex', () => {
     expect(typeof firstDoc.is_bookmarked).toBe('boolean')
     expect(mockUpdateSettings).toHaveBeenCalledTimes(1)
     expect(mockSwapIndexes).toHaveBeenCalledTimes(1)
+
+    const metrics = getSearchSyncMetrics()
+    expect(metrics.lastRebuildDurationMs).toBeGreaterThanOrEqual(0)
+    expect(metrics.lastRebuildPeakRssMb).toBeGreaterThan(0)
+    expect(metrics.lastRebuildAt).not.toBeNull()
+  })
+})
+
+describe('checkSearchIndexHealth', () => {
+  beforeEach(() => {
+    setupTestDb()
+    mockGetStats.mockClear()
+  })
+
+  it('returns healthy when document counts match closely', async () => {
+    const feedId = seedFeed()
+    seedArticle(feedId, { url: 'https://example.com/health-1' })
+    mockGetStats.mockResolvedValue({ numberOfDocuments: 1 })
+
+    const health = await checkSearchIndexHealth()
+    expect(health.healthy).toBe(true)
+    expect(health.dbCount).toBe(1)
+    expect(health.searchCount).toBe(1)
+  })
+
+  it('detects significant desync between SQLite and Meilisearch', async () => {
+    const feedId = seedFeed()
+    for (let i = 0; i < 60; i++) {
+      seedArticle(feedId, { url: `https://example.com/desync-${i}` })
+    }
+    mockGetStats.mockResolvedValue({ numberOfDocuments: 0 })
+
+    const health = await checkSearchIndexHealth()
+    expect(health.healthy).toBe(false)
+    expect(health.reason).toContain('Document count mismatch')
+  })
+
+  it('returns unhealthy when Meilisearch stats call throws', async () => {
+    mockGetStats.mockRejectedValue(new Error('Connection refused'))
+
+    const health = await checkSearchIndexHealth()
+    expect(health.healthy).toBe(false)
+    expect(health.reason).toBe('Connection refused')
   })
 })
