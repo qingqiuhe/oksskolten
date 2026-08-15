@@ -33,6 +33,7 @@ import type { ArticleListItem, HighValueArticle, HighValueResponse, InboxSummary
 import type { LayoutName } from '../../data/layouts'
 import { isXFeedSource, type ArticleKind, type FeedViewType } from '../../../shared/article-kind'
 import { InboxHeader, type InboxSort, type InboxViewFilter } from './inbox-header'
+import { InboxFilterBar, DEFAULT_INBOX_FILTERS, type InboxFilters } from './inbox-filter-bar'
 import { ArticleInlineActions } from './article-inline-actions'
 import { InboxGroupHeader } from './inbox-group-header'
 import { HighValueSection } from './high-value-section'
@@ -51,6 +52,7 @@ const ARTICLE_RENDER_WINDOW_SIZE = 120
 const ARTICLE_RENDER_WINDOW_STEP = 60
 const INBOX_SORT_STORAGE_KEY = 'oksskolten.inbox.sort'
 const INBOX_GROUP_STORAGE_KEY = 'oksskolten.inbox.group'
+const INBOX_FILTERS_STORAGE_KEY = 'oksskolten.inbox.filters'
 const TITLE_TRANSLATE_BATCH_SIZE = 50
 const FEED_FETCH_CONCURRENCY = 4
 type TranslateTitlesStatus = 'idle' | 'loading' | 'active' | 'error'
@@ -64,6 +66,16 @@ export interface ArticleListHandle {
 
 interface ArticleListProps {
   listLabel: string
+}
+
+function readStoredInboxFilters(): InboxFilters {
+  if (typeof window === 'undefined') return DEFAULT_INBOX_FILTERS
+  try {
+    const raw = window.localStorage.getItem(INBOX_FILTERS_STORAGE_KEY)
+    return raw ? { ...DEFAULT_INBOX_FILTERS, ...JSON.parse(raw) } : DEFAULT_INBOX_FILTERS
+  } catch {
+    return DEFAULT_INBOX_FILTERS
+  }
 }
 
 function readStoredInboxSort(): InboxSort {
@@ -201,6 +213,28 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     if (feedId) params.set('feed_id', String(feedId))
     if (categoryId) params.set('category_id', String(categoryId))
     if (isInbox && inboxViewFilter !== 'all') params.set('feed_view_type', inboxViewFilter)
+    if (isInbox) {
+      if (inboxFilters.feedIds.length > 0) {
+        params.set('feed_ids', inboxFilters.feedIds.join(','))
+      }
+      if (inboxFilters.timeRange === 'today') {
+        const d = new Date()
+        d.setHours(0, 0, 0, 0)
+        params.set('since', d.toISOString())
+      } else if (inboxFilters.timeRange === '3days') {
+        const d = new Date(Date.now() - 3 * 86_400_000)
+        params.set('since', d.toISOString())
+      } else if (inboxFilters.timeRange === 'week') {
+        const d = new Date(Date.now() - 7 * 86_400_000)
+        params.set('since', d.toISOString())
+      }
+      if (inboxFilters.includeBookmarked) {
+        params.set('bookmarked', '1')
+      }
+      if (inboxFilters.includeLiked) {
+        params.set('liked', '1')
+      }
+    }
     if (articleKindFilter !== 'all') params.set('article_kind', articleKindFilter)
     if (unreadOnly) params.set('unread', '1')
     if (bookmarkedOnly) params.set('bookmarked', '1')
@@ -237,6 +271,14 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
 
   const articles = useMemo(() => data ? data.flatMap(page => page.articles) : [], [data])
   const [renderWindowExtra, setRenderWindowExtra] = useState(0)
+  const [inboxFilters, setInboxFilters] = useState<InboxFilters>(readStoredInboxFilters)
+
+  useEffect(() => {
+    if (!isInbox || typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(INBOX_FILTERS_STORAGE_KEY, JSON.stringify(inboxFilters))
+    } catch {}
+  }, [inboxFilters, isInbox])
   const [translateTitlesEnabled, setTranslateTitlesEnabled] = useState(false)
   const [translateTitlesStatus, setTranslateTitlesStatus] = useState<TranslateTitlesStatus>('idle')
   const [translatedTitles, setTranslatedTitles] = useState<Record<number, string>>({})
@@ -967,6 +1009,17 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
             viewAll: t('articleKind.all'),
             viewArticle: t('feeds.viewType.article'),
             viewSocial: t('feeds.viewType.social'),
+          }}
+        />
+      )}
+
+      {isInbox && (
+        <InboxFilterBar
+          feeds={feedsData?.feeds ?? []}
+          filters={inboxFilters}
+          onChange={(nextFilters) => {
+            setInboxFilters(nextFilters)
+            void setSize(1)
           }}
         />
       )}

@@ -244,6 +244,23 @@ describe('getArticles read filter', () => {
     expect(articles[0].article_kind).toBe('repost')
   })
 
+  it('filters by multiple feedIds', () => {
+    const feed1 = seedFeed()
+    const feed2 = seedFeed()
+    const feed3 = seedFeed()
+    seedArticle(feed1.id, { url: 'https://example.com/f1' })
+    seedArticle(feed2.id, { url: 'https://example.com/f2' })
+    seedArticle(feed3.id, { url: 'https://example.com/f3' })
+
+    const { articles, total } = getArticles({ feedIds: [feed1.id, feed2.id], limit: 100, offset: 0 })
+    expect(total).toBe(2)
+    expect(articles).toHaveLength(2)
+    const returnedFeedIds = articles.map(a => a.feed_id)
+    expect(returnedFeedIds).toContain(feed1.id)
+    expect(returnedFeedIds).toContain(feed2.id)
+    expect(returnedFeedIds).not.toContain(feed3.id)
+  })
+
   it('derives has_video from full_text in list queries', () => {
     const feed = seedFeed()
     seedArticle(feed.id, {

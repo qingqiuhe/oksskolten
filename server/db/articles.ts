@@ -731,6 +731,7 @@ function writeSmartFloorCache(key: string, floor: string | null): void {
 
 export function getArticles(opts: {
   feedId?: number
+  feedIds?: number[]
   categoryId?: number
   feedViewType?: FeedViewType
   articleKind?: ArticleKind
@@ -765,6 +766,13 @@ export function getArticles(opts: {
   if (opts.feedId) {
     conditions.push('a.feed_id = @feedId')
     params.feedId = opts.feedId
+  }
+  if (opts.feedIds?.length) {
+    const placeholders = opts.feedIds.map((_, index) => `@feedId_${index}`).join(', ')
+    conditions.push(`a.feed_id IN (${placeholders})`)
+    opts.feedIds.forEach((id, index) => {
+      params[`feedId_${index}`] = id
+    })
   }
   if (opts.categoryId) {
     conditions.push('a.category_id = @categoryId')

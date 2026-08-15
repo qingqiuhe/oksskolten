@@ -741,6 +741,29 @@ describe('GET /api/articles smart floor metadata', () => {
     expect(secondPage.json().articles).toHaveLength(10)
     expect(secondPage.json().total_without_floor).toBeUndefined()
   })
+
+  it('filters by multiple feed_ids', async () => {
+    const feed1 = seedFeed()
+    const feed2 = seedFeed()
+    const feed3 = seedFeed()
+    seedArticle(feed1.id, { url: 'https://example.com/fids-1' })
+    seedArticle(feed2.id, { url: 'https://example.com/fids-2' })
+    seedArticle(feed3.id, { url: 'https://example.com/fids-3' })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/articles?feed_ids=${feed1.id},${feed2.id}`,
+    })
+
+    expect(res.statusCode).toBe(200)
+    const jsonBody = res.json()
+    expect(jsonBody.total).toBe(2)
+    expect(jsonBody.articles).toHaveLength(2)
+    const returnedFeedIds = jsonBody.articles.map((a: any) => a.feed_id)
+    expect(returnedFeedIds).toContain(feed1.id)
+    expect(returnedFeedIds).toContain(feed2.id)
+    expect(returnedFeedIds).not.toContain(feed3.id)
+  })
 })
 
 describe('POST /api/inbox/topic-cooldowns', () => {
