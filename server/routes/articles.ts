@@ -119,6 +119,7 @@ const coerceOptionalNumber = z.preprocess(
 
 const ArticlesQuery = z.object({
   feed_id: coerceOptionalNumber,
+  feed_ids: z.string().optional(),
   category_id: coerceOptionalNumber,
   feed_view_type: z.enum(['article', 'social']).optional(),
   article_kind: z.enum(['original', 'repost', 'quote']).optional(),
@@ -126,6 +127,8 @@ const ArticlesQuery = z.object({
   bookmarked: z.string().optional(),
   liked: z.string().optional(),
   read: z.string().optional(),
+  since: z.string().optional(),
+  until: z.string().optional(),
   sort: z.enum(['score', 'oldest_unread', 'inbox_score']).optional(),
   no_floor: z.string().optional(),
   exclude_ids: z.string().optional(),
@@ -290,6 +293,15 @@ function parseExcludeIds(raw: string | undefined): number[] | null {
   return [...new Set(values)]
 }
 
+function parseFeedIds(raw: string | undefined): number[] | null {
+  if (raw == null || raw.trim() === '') return []
+  const values = raw.split(',').map((part) => Number(part.trim()))
+  if (values.some((value) => !Number.isInteger(value) || value <= 0)) {
+    return null
+  }
+  return [...new Set(values)]
+}
+
 export async function articleRoutes(api: FastifyInstance): Promise<void> {
   api.get('/api/inbox/summary', async (request, reply) => {
     reply.send(getInboxSummary(getRequestUserId(request)))
@@ -300,6 +312,11 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const limit = Math.min(Math.max(query.limit || DEFAULT_ARTICLE_LIMIT, 1), MAX_ARTICLE_LIMIT)
     const offset = Math.max(query.offset || 0, 0)
     const feedId = query.feed_id ?? undefined
+    const feedIds = parseFeedIds(query.feed_ids)
+    if (feedIds == null) {
+      reply.status(400).send({ error: 'feed_ids must be a comma-separated list of positive integers' })
+      return
+    }
     const categoryId = query.category_id ?? undefined
     const feedViewType = query.feed_view_type as FeedViewType | undefined
     const articleKind = query.article_kind as ArticleKind | undefined
@@ -307,6 +324,8 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const bookmarked = query.bookmarked === '1'
     const liked = query.liked === '1'
     const read = query.read === '1'
+    const since = query.since
+    const until = query.until
     const sort = query.sort
     const noFloor = query.no_floor === '1'
     const excludeIds = parseExcludeIds(query.exclude_ids)
@@ -317,12 +336,13 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
 
     const userId = getRequestUserId(request)
     const isClipFeed = feedId != null && getClipFeed(userId)?.id === feedId
-    const smartFloor = !noFloor && !isClipFeed && !unread && !bookmarked && !liked && !read
+    const smartFloor = !noFloor && !isClipFeed && !unread && !bookmarked && !liked && !read && !since && !until && (!feedIds || feedIds.length === 0)
     const perfStats = process.env.ARTICLES_PERF_LOG === '1' ? { queryCount: 0 } : undefined
     const perfStartedAt = perfStats ? Date.now() : 0
     const includeTotal = offset === 0
     const { articles, total, hasMore: probedHasMore, totalWithoutFloor } = getArticles({
       feedId,
+      feedIds: feedIds.length > 0 ? feedIds : undefined,
       categoryId,
       feedViewType,
       articleKind,
@@ -330,6 +350,8 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       bookmarked,
       liked,
       read,
+      since,
+      until,
       sort,
       excludeIds,
       limit,
