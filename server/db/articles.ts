@@ -1448,6 +1448,41 @@ export function markArticleBookmarked(
   return { bookmarked_at: row.bookmarked_at }
 }
 
+export function markArticlesBookmarked(
+  ids: number[],
+  bookmarked: boolean = true,
+  userId?: number | null,
+): { updated: number } {
+  if (ids.length === 0) return { updated: 0 }
+  const scopedUserId = resolveUserId(userId)
+  const placeholders = ids.map(() => '?').join(',')
+  const updateSql = bookmarked
+    ? `UPDATE articles
+       SET bookmarked_at = datetime('now')
+       WHERE id IN (${placeholders})
+         ${scopedUserId == null ? '' : 'AND user_id = ?'}
+         AND bookmarked_at IS NULL
+       RETURNING id`
+    : `UPDATE articles
+       SET bookmarked_at = NULL
+       WHERE id IN (${placeholders})
+         ${scopedUserId == null ? '' : 'AND user_id = ?'}
+         AND bookmarked_at IS NOT NULL
+       RETURNING id`
+  const args = scopedUserId == null ? ids : [...ids, scopedUserId]
+  const updatedRows = getDb().prepare(updateSql).all(...args) as { id: number }[]
+
+  if (updatedRows.length > 0) {
+    invalidateInboxRankingCaches(scopedUserId)
+    for (const row of updatedRows) {
+      updateScore(row.id)
+    }
+    syncArticleFiltersToSearch(updatedRows.map(row => ({ id: row.id, is_bookmarked: bookmarked })))
+  }
+
+  return { updated: updatedRows.length }
+}
+
 export function getBookmarkCount(userId?: number | null): number {
   const scopedUserId = resolveUserId(userId)
   const row = getDb().prepare(`

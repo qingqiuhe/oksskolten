@@ -37,6 +37,7 @@ import { ArticleInlineActions } from './article-inline-actions'
 import { InboxGroupHeader } from './inbox-group-header'
 import { HighValueSection } from './high-value-section'
 import { useUndoSeen } from '../../hooks/use-undo-seen'
+import { InboxSelectionBar } from './inbox-selection-bar'
 
 interface ArticlesResponse {
   articles: ArticleListItem[]
@@ -260,6 +261,80 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       : articles
   ), [articles, hiddenLoadedArticleCount])
   const allArticleIds = useMemo(() => articles.map(article => article.id), [articles])
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedArticleIds, setSelectedArticleIds] = useState<Set<number>>(() => new Set())
+  const [batchLoading, setBatchLoading] = useState(false)
+
+  const handleToggleSelectArticle = useCallback((id: number) => {
+    setSelectedArticleIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const handleSelectAllVisible = useCallback(() => {
+    setSelectedArticleIds(new Set(renderedArticles.map(a => a.id)))
+  }, [renderedArticles])
+
+  const handleDeselectAll = useCallback(() => {
+    setSelectedArticleIds(new Set())
+  }, [])
+
+  const handleBatchMarkSeen = useCallback(async () => {
+    const ids = [...selectedArticleIds]
+    if (ids.length === 0 || batchLoading) return
+    setBatchLoading(true)
+
+    const previousData = data
+    const optimisticData = data?.map(page => ({
+      ...page,
+      articles: page.articles.map(a => ids.includes(a.id) ? { ...a, seen_at: a.seen_at ?? new Date().toISOString() } : a),
+    }))
+
+    try {
+      if (optimisticData) void mutate(optimisticData, false)
+      await apiPost('/api/articles/batch-seen', { ids })
+      toast.success(`${ids.length} marked as read`)
+      setSelectedArticleIds(new Set())
+      setSelectionMode(false)
+      void mutate()
+      void mutateInboxSummary()
+    } catch {
+      if (previousData) void mutate(previousData, false)
+      toast.error('Failed to mark articles as read')
+    } finally {
+      setBatchLoading(false)
+    }
+  }, [selectedArticleIds, batchLoading, data, mutate, mutateInboxSummary])
+
+  const handleBatchBookmark = useCallback(async () => {
+    const ids = [...selectedArticleIds]
+    if (ids.length === 0 || batchLoading) return
+    setBatchLoading(true)
+
+    const previousData = data
+    const optimisticData = data?.map(page => ({
+      ...page,
+      articles: page.articles.map(a => ids.includes(a.id) ? { ...a, bookmarked_at: a.bookmarked_at ?? new Date().toISOString() } : a),
+    }))
+
+    try {
+      if (optimisticData) void mutate(optimisticData, false)
+      await apiPatch('/api/articles/batch-bookmark', { ids, bookmarked: true })
+      toast.success(`${ids.length} articles bookmarked`)
+      setSelectedArticleIds(new Set())
+      setSelectionMode(false)
+      void mutate()
+    } catch {
+      if (previousData) void mutate(previousData, false)
+      toast.error('Failed to bookmark articles')
+    } finally {
+      setBatchLoading(false)
+    }
+  }, [selectedArticleIds, batchLoading, data, mutate])
+
   const { enqueueUndoSeen, undoSeen, dismissUndoSeen } = useUndoSeen()
 
   useEffect(() => {
@@ -939,6 +1014,8 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
           summary={inboxSummary}
           sort={inboxSort}
           viewFilter={inboxViewFilter}
+          selectionMode={selectionMode}
+          onToggleSelectionMode={() => setSelectionMode(prev => !prev)}
           onSortChange={(nextSort) => {
             setInboxSort(nextSort)
             setNoFloor(false)
@@ -1222,21 +1299,40 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
                 data-article-id={article.id}
                 data-article-unread={article.seen_at == null && !isAutoRead ? '1' : '0'}
                 aria-selected={isKbFocused || undefined}
-                className={`${layout === 'magazine' && index === 0 ? 'col-span-full' : ''} relative group`}
+                className={`${layout === 'magazine' && index === 0 ? 'col-span-full' : ''} relative group ${selectionMode ? 'pl-9' : ''}`}
                 style={isKbFocused ? {
                   borderLeft: '2px solid var(--color-accent)',
                   backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)',
                 } : undefined}
-                onClick={() => {
+                onClick={(e) => {
+                  if (selectionMode) {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    handleToggleSelectArticle(article.id)
+                    return
+                  }
                   if (!isGridLayout) {
                     setFocusedItemId(String(article.id))
                   }
                 }}
               >
+                {selectionMode && (
+                  <div className="absolute left-3 top-4 z-10" onClick={e => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedArticleIds.has(article.id)}
+                      onChange={() => handleToggleSelectArticle(article.id)}
+                      className="w-4 h-4 rounded border-border text-accent focus:ring-accent cursor-pointer"
+                      aria-label={`Select article ${article.title}`}
+                    />
+                  </div>
+                )}
                 {isTouchDevice ? (
                   <SwipeableArticleCard
                     {...cardProps}
+                    onClick={selectionMode ? (e) => { e.preventDefault(); e.stopPropagation(); handleToggleSelectArticle(article.id) } : cardProps.onClick}
                     onSwipeOpen={(swipedArticle) => {
+                      if (selectionMode) return
                       if (articleOpenMode === 'overlay') setOverlayUrl(swipedArticle.url)
                       else void navigate(articleUrlToPath(swipedArticle.url))
                     }}
@@ -1244,7 +1340,10 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
                     onSwipeBookmark={handleToggleBookmark}
                   />
                 ) : (
-                  <ArticleCard {...cardProps} />
+                  <ArticleCard
+                    {...cardProps}
+                    onClick={selectionMode ? (e) => { e.preventDefault(); e.stopPropagation(); handleToggleSelectArticle(article.id) } : cardProps.onClick}
+                  />
                 )}
                 <ArticleInlineActions
                   isSeen={articleWithTranslatedTitle.seen_at != null}
@@ -1316,6 +1415,22 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
           listLabel={listLabel}
           articleIds={allArticleIds}
           sourceFilters={sourceFilters}
+        />
+      )}
+
+      {isInbox && selectionMode && (
+        <InboxSelectionBar
+          selectedCount={selectedArticleIds.size}
+          totalVisibleCount={renderedArticles.length}
+          onSelectAllVisible={handleSelectAllVisible}
+          onDeselectAll={handleDeselectAll}
+          onBatchMarkSeen={handleBatchMarkSeen}
+          onBatchBookmark={handleBatchBookmark}
+          onCancel={() => {
+            setSelectionMode(false)
+            setSelectedArticleIds(new Set())
+          }}
+          loading={batchLoading}
         />
       )}
     </main>

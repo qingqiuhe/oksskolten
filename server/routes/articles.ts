@@ -14,6 +14,7 @@ import {
   markArticlesSeen,
   recordArticleRead,
   markArticleBookmarked,
+  markArticlesBookmarked,
   markArticleLiked,
   updateArticleContent,
   updateScore,
@@ -171,6 +172,10 @@ const BookmarkBody = z.object({ bookmarked: z.boolean({ message: 'bookmarked mus
 const LikeBody = z.object({ liked: z.boolean({ message: 'liked must be a boolean' }) })
 const BatchSeenBody = z.object({
   ids: z.array(z.number()).min(1, 'ids must be a non-empty array').max(MAX_BATCH_SEEN, `Maximum ${MAX_BATCH_SEEN} ids per request`),
+})
+const BatchBookmarkBody = z.object({
+  ids: z.array(z.number()).min(1, 'ids must be a non-empty array').max(MAX_BATCH_SEEN, `Maximum ${MAX_BATCH_SEEN} ids per request`),
+  bookmarked: z.boolean().optional(),
 })
 const TranslateTitlesBody = z.object({
   ids: z.array(z.number()).min(1, 'ids must be a non-empty array').max(MAX_BATCH_SEEN, `Maximum ${MAX_BATCH_SEEN} ids per request`),
@@ -615,6 +620,18 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       const body = parseOrBadRequest(BatchSeenBody, request.body, reply)
       if (!body) return
       const result = markArticlesSeen(body.ids, getRequestUserId(request))
+      reply.send(result)
+    },
+  )
+
+  api.patch(
+    '/api/articles/batch-bookmark',
+    { preHandler: [requireJson] },
+    async (request, reply) => {
+      const body = parseOrBadRequest(BatchBookmarkBody, request.body, reply)
+      if (!body) return
+      const bookmarked = body.bookmarked ?? true
+      const result = markArticlesBookmarked(body.ids, bookmarked, getRequestUserId(request))
       reply.send(result)
     },
   )

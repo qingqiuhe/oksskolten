@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setupTestDb } from '../__tests__/helpers/testDb.js'
 import { buildApp } from '../__tests__/helpers/buildApp.js'
-import { createFeed, createCategory, getDb, insertArticle, markArticleSeen, upsertSetting } from '../db.js'
+import { createFeed, createCategory, getDb, insertArticle, getArticleById, markArticleSeen, upsertSetting } from '../db.js'
 import type { FastifyInstance } from 'fastify'
 
 // ---------------------------------------------------------------------------
@@ -740,6 +740,43 @@ describe('GET /api/articles smart floor metadata', () => {
     expect(secondPage.statusCode).toBe(200)
     expect(secondPage.json().articles).toHaveLength(10)
     expect(secondPage.json().total_without_floor).toBeUndefined()
+  })
+})
+
+describe('PATCH /api/articles/batch-bookmark', () => {
+  it('bookmarks multiple articles by id', async () => {
+    const feed = seedFeed()
+    const id1 = seedArticle(feed.id)
+    const id2 = seedArticle(feed.id)
+    const id3 = seedArticle(feed.id)
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/articles/batch-bookmark',
+      headers: json,
+      payload: { ids: [id1, id2], bookmarked: true },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ updated: 2 })
+
+    const a1 = getArticleById(id1)
+    const a2 = getArticleById(id2)
+    const a3 = getArticleById(id3)
+    expect(a1?.bookmarked_at).not.toBeNull()
+    expect(a2?.bookmarked_at).not.toBeNull()
+    expect(a3?.bookmarked_at).toBeNull()
+  })
+
+  it('validates request payload', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/articles/batch-bookmark',
+      headers: json,
+      payload: { ids: [] },
+    })
+
+    expect(res.statusCode).toBe(400)
   })
 })
 
