@@ -12,7 +12,7 @@ export type ChatSSEEvent =
   | { type: 'tool_use_end'; name: string; tool_use_id: string }
   | { type: 'debug_trace'; trace: ChatDebugTrace }
   | { type: 'done'; usage: { input_tokens: number; output_tokens: number }; elapsed_ms?: number; model?: string }
-  | { type: 'error'; error: string }
+  | { type: 'error'; error: string; error_category?: string }
 
 export interface RunChatTurnResult {
   allMessages: Message[]
@@ -23,6 +23,8 @@ export interface ChatTurnParams {
   messages: Message[]
   system: string
   model: string
+  /** Optional signal used to stop provider streaming when the client aborts. */
+  signal?: AbortSignal
   userId?: number | null
   openaiConfig?: OpenAICompatibleConfig
   timeZone?: string

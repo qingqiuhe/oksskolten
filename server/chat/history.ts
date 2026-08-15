@@ -4,6 +4,7 @@ import type { ChatMessage } from '../db.js'
 interface StoredMessage {
   role: 'user' | 'assistant'
   content: ContentBlock[]
+  metadata?: string | null
 }
 
 function normalizeContent(raw: string): ContentBlock[] {
@@ -34,7 +35,7 @@ export function repairStoredConversation(rawMessages: ChatMessage[]): {
 
   for (const raw of rawMessages) {
     const normalized = normalizeContent(raw.content)
-    const message: StoredMessage = { role: raw.role, content: normalized }
+    const message: StoredMessage = { role: raw.role, content: normalized, metadata: raw.metadata ?? null }
     if (JSON.stringify(normalized) !== raw.content) changed = true
     expanded.push(message)
   }
@@ -126,4 +127,5 @@ export function repairStoredConversation(rawMessages: ChatMessage[]): {
     storedMessages: repaired,
     messages: repaired.map(message => ({ role: message.role, content: message.content })),
   }
+
 }

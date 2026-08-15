@@ -23,6 +23,7 @@ vi.mock('swr', () => ({
 
 vi.mock('../../hooks/use-chat', () => ({
   useChat: (...args: unknown[]) => mockUseChat(...args),
+  draftKeyFor: () => 'draft-test-key',
 }))
 
 vi.mock('../../hooks/use-escape-key', () => ({

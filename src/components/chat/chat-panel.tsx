@@ -4,7 +4,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { Maximize2, Minimize2, X } from 'lucide-react'
 import { IconButton } from '../ui/icon-button'
 import useSWR from 'swr'
-import { useChat, type ChatMessage } from '../../hooks/use-chat'
+import { useChat, draftKeyFor, type ChatMessage } from '../../hooks/use-chat'
 import { fetcher } from '../../lib/fetcher'
 import { useI18n } from '../../lib/i18n'
 import { articleUrlToPath } from '../../lib/url'
@@ -30,7 +30,10 @@ export interface ChatState {
   thinking: boolean
   activeTool: ToolStatus | null
   error: string | null
+  errorCategory?: string | null
   sendMessage: (text: string, opts?: { suggestionKey?: string }) => void
+  stop?: () => void
+  retryLast?: () => void
   loadConversation: (id: string) => Promise<void>
   reset: () => void
 }
@@ -197,10 +200,43 @@ function ChatPanelContent({ variant, chatState: chat, scope, scopeSummary, scope
     if (el) el.scrollTop = el.scrollHeight
   }, [messages, activeTool, variant])
 
+  // Draft management
+  const draftKey = draftKeyFor(scope, resolvedConversationId)
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(draftKey)
+      if (saved) {
+        setInput(saved)
+      } else {
+        setInput('')
+      }
+    } catch {
+      // ignore
+    }
+  }, [draftKey])
+
+  const handleInputChange = (val: string) => {
+    setInput(val)
+    try {
+      if (val.trim()) {
+        localStorage.setItem(draftKey, val)
+      } else {
+        localStorage.removeItem(draftKey)
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const handleSend = () => {
     if (!input.trim() || streaming) return
     void sendMessage(input.trim())
     setInput('')
+    try {
+      localStorage.removeItem(draftKey)
+    } catch {
+      // ignore
+    }
   }
 
   const isInline = variant === 'inline'
@@ -219,6 +255,8 @@ function ChatPanelContent({ variant, chatState: chat, scope, scopeSummary, scope
         thinking={thinking}
         activeTool={activeTool}
         error={error}
+        errorCategory={chat.errorCategory}
+        onRetry={chat.retryLast}
         debugEnabled={debugEnabled}
         endRef={messagesEndRef}
         showEndMarker={!isInline}
@@ -231,8 +269,9 @@ function ChatPanelContent({ variant, chatState: chat, scope, scopeSummary, scope
       variant={isInline ? 'inline' : 'full'}
       input={input}
       streaming={streaming}
-      onInputChange={setInput}
+      onInputChange={handleInputChange}
       onSend={handleSend}
+      onStop={chat.stop}
     />
   )
 

@@ -70,4 +70,5 @@ export interface ChatSSEEvent {
   elapsed_ms?: number
   model?: string
   error?: string
+  error_category?: string
 }

@@ -33,5 +33,6 @@ export interface ChatMessage {
   conversation_id: string
   role: 'user' | 'assistant'
   content: string
+  metadata?: string | null
   created_at: string
 }

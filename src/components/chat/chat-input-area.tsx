@@ -1,5 +1,5 @@
 import { useRef, type KeyboardEvent } from 'react'
-import { Send, Loader2 } from 'lucide-react'
+import { Send, Square } from 'lucide-react'
 import { useI18n } from '../../lib/i18n'
 
 const MAX_HEIGHT_INLINE = 120
@@ -11,9 +11,11 @@ interface ChatInputAreaProps {
   streaming: boolean
   onInputChange: (value: string) => void
   onSend: () => void
+  /** Stops the in-flight generation; shown while streaming. */
+  onStop?: () => void
 }
 
-export function ChatInputArea({ variant, input, streaming, onInputChange, onSend }: ChatInputAreaProps) {
+export function ChatInputArea({ variant, input, streaming, onInputChange, onSend, onStop }: ChatInputAreaProps) {
   const { t } = useI18n()
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -31,18 +33,23 @@ export function ChatInputArea({ variant, input, streaming, onInputChange, onSend
     el.style.height = Math.min(el.scrollHeight, variant === 'full' ? MAX_HEIGHT_FULL : MAX_HEIGHT_INLINE) + 'px'
   }
 
-  const sendButton = (
+  const sendButton = streaming ? (
+    <button
+      onClick={onStop}
+      className="flex items-center justify-center w-9 h-9 rounded-lg bg-accent text-accent-text transition-opacity"
+      aria-label={t('chat.stop')}
+      title={t('chat.stop')}
+    >
+      <Square className="w-3.5 h-3.5 fill-current" />
+    </button>
+  ) : (
     <button
       onClick={onSend}
-      disabled={!input.trim() || streaming}
+      disabled={!input.trim()}
       className="flex items-center justify-center w-9 h-9 rounded-lg bg-accent text-accent-text disabled:opacity-40 transition-opacity"
       aria-label={t('chat.send')}
     >
-      {streaming ? (
-        <Loader2 className="w-4 h-4 animate-spin" />
-      ) : (
-        <Send className="w-4 h-4" />
-      )}
+      <Send className="w-4 h-4" />
     </button>
   )
 

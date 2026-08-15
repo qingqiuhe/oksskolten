@@ -119,6 +119,7 @@ export function insertChatMessage(data: {
   conversation_id: string
   role: 'user' | 'assistant'
   content: string
+  metadata?: string | null
   user_id?: number | null
 }): ChatMessage {
   const scopedUserId = data.user_id
@@ -126,14 +127,15 @@ export function insertChatMessage(data: {
     ?? (getDb().prepare('SELECT user_id FROM conversations WHERE id = ?').get(data.conversation_id) as { user_id: number | null } | undefined)?.user_id
   return getDb().transaction(() => {
     const message = getNamed<ChatMessage>(`
-      INSERT INTO chat_messages (user_id, conversation_id, role, content)
-      VALUES (@user_id, @conversation_id, @role, @content)
+      INSERT INTO chat_messages (user_id, conversation_id, role, content, metadata)
+      VALUES (@user_id, @conversation_id, @role, @content, @metadata)
       RETURNING *
     `, {
       user_id: scopedUserId ?? null,
       conversation_id: data.conversation_id,
       role: data.role,
       content: data.content,
+      metadata: data.metadata ?? null,
     })
     getDb().prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(data.conversation_id)
     return message
@@ -167,7 +169,7 @@ export function deleteChatMessage(id: number, userId?: number | null): boolean {
 
 export function replaceChatMessages(
   conversationId: string,
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  messages: Array<{ role: 'user' | 'assistant'; content: string; metadata?: string | null }>,
   userId?: number | null,
 ): void {
   const scopedUserId = resolveUserId(userId)
@@ -176,13 +178,31 @@ export function replaceChatMessages(
       `DELETE FROM chat_messages WHERE conversation_id = ? ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
     ).run(...(scopedUserId == null ? [conversationId] : [conversationId, scopedUserId]))
     const insertMessage = getDb().prepare(`
-      INSERT INTO chat_messages (user_id, conversation_id, role, content)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO chat_messages (user_id, conversation_id, role, content, metadata)
+      VALUES (?, ?, ?, ?, ?)
     `)
     for (const message of messages) {
-      insertMessage.run(scopedUserId ?? null, conversationId, message.role, message.content)
+      insertMessage.run(scopedUserId ?? null, conversationId, message.role, message.content, message.metadata ?? null)
     }
     getDb().prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(conversationId)
   })
   tx()
+}
+
+/**
+ * Delete every message from `fromId` (inclusive) to the end of the conversation.
+ * Used to replace a failed/interrupted turn when the user retries it.
+ */
+export function deleteChatMessagesFrom(conversationId: string, fromId: number, userId?: number | null): number {
+  const scopedUserId = resolveUserId(userId)
+  const result = getDb().prepare(
+    `DELETE FROM chat_messages
+     WHERE conversation_id = ?
+       AND id >= ?
+       ${scopedUserId == null ? '' : 'AND user_id = ?'}`,
+  ).run(...(scopedUserId == null ? [conversationId, fromId] : [conversationId, fromId, scopedUserId]))
+  if (result.changes > 0) {
+    getDb().prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(conversationId)
+  }
+  return result.changes
 }

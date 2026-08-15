@@ -121,13 +121,15 @@ export async function fetchOpmlBlob(): Promise<Blob> {
 
 export async function streamPostChat(
   url: string,
-  body: { message: string; conversation_id?: string; article_id?: number; context?: 'home'; scope?: ChatScope; suggestion_key?: string; timeZone?: string },
+  body: { message: string; retry?: boolean; conversation_id?: string; article_id?: number; context?: 'home'; scope?: ChatScope; suggestion_key?: string; timeZone?: string },
   onEvent: (event: import('./api-base').ChatSSEEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
+    signal,
   })
   if (!res.ok) return handleResponseError(res, url)
 

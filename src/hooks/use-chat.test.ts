@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useChat } from './use-chat'
+import { useChat, draftKeyFor } from './use-chat'
 import { buildArticleScope } from '../lib/chat-scope'
 import type { ChatDebugTrace } from '../../shared/types'
 
@@ -282,5 +282,48 @@ describe('useChat', () => {
     })
 
     expect(result.current.messages).toEqual([])
+  })
+
+  it('draftKeyFor generates scoped draft keys', () => {
+    expect(draftKeyFor({ type: 'global' }, 'c-1')).toBe('chat:draft:global:c-1')
+    expect(draftKeyFor(buildArticleScope(42), null)).toBe('chat:draft:article:42:new')
+  })
+
+  it('loadConversation restores turn metadata when present', async () => {
+    const mockMessages = {
+      messages: [
+        { role: 'user', content: JSON.stringify([{ type: 'text', text: 'hello' }]) },
+        {
+          role: 'assistant',
+          content: JSON.stringify([{ type: 'text', text: 'world' }]),
+          metadata: {
+            status: 'complete',
+            model: 'claude-3-haiku',
+            elapsed_ms: 500,
+            usage: { input_tokens: 10, output_tokens: 20 },
+            tool_summary: [{ name: 'search_articles', count: 1 }],
+          },
+        },
+      ],
+    }
+    mockFetcher.mockResolvedValue(mockMessages)
+
+    const { result } = renderHook(() => useChat())
+
+    await act(async () => {
+      await result.current.loadConversation('conv-meta')
+    })
+
+    expect(result.current.messages[1]).toEqual({
+      role: 'assistant',
+      text: 'world',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 20,
+        elapsed_ms: 500,
+        model: 'claude-3-haiku',
+      },
+      toolSummary: [{ name: 'search_articles', count: 1 }],
+    })
   })
 })

@@ -48,6 +48,7 @@ const ChatScopeSchema = z.union([
 const ChatBody = z.object({
   message: z.string().min(1, 'message is required'),
   conversation_id: z.string().optional(),
+  retry: z.boolean().optional(),
   article_id: z.number().optional(),
   context: z.literal('home').optional(),
   scope: ChatScopeSchema.optional(),
@@ -65,14 +66,16 @@ import {
   getConversations,
   getConversationById,
   deleteConversation,
-  deleteChatMessage,
   insertChatMessage,
   getChatMessages,
   replaceChatMessages,
+  deleteChatMessagesFrom,
   updateConversation,
   getArticleById,
 } from './db.js'
 import { runChatTurn } from './chat/adapter.js'
+import { normalizeChatError } from './chat/errors.js'
+import { buildToolSummary, serializeTurnMetadata, parseTurnMetadata, type TurnStatus } from './chat/turn-metadata.js'
 import { repairStoredConversation } from './chat/history.js'
 import { buildSystemPrompt, appendArticleContext, getUserLanguage } from './chat/system-prompt.js'
 import { generateConversationTitle } from './chat/title-generator.js'
@@ -134,6 +137,21 @@ export function registerChatApi(app: FastifyInstance): void {
         }
       }
 
+      // Retry: replace the last failed/interrupted turn instead of appending a duplicate
+      if (body.retry) {
+        const existingMessages = getChatMessages(conversationId)
+        let lastUserIndex = -1
+        for (let i = existingMessages.length - 1; i >= 0; i--) {
+          if (existingMessages[i].role === 'user') {
+            lastUserIndex = i
+            break
+          }
+        }
+        if (lastUserIndex >= 0) {
+          deleteChatMessagesFrom(conversationId, existingMessages[lastUserIndex].id)
+        }
+      }
+
       // Restore and repair previous messages so both backends see a valid history.
       const dbMessages = getChatMessages(conversationId)
       const backend = resolvedTask.provider
@@ -144,6 +162,7 @@ export function registerChatApi(app: FastifyInstance): void {
           repairedHistory.storedMessages.map(message => ({
             role: message.role,
             content: JSON.stringify(message.content),
+            metadata: message.metadata ?? null,
           })),
         )
       }
@@ -152,7 +171,7 @@ export function registerChatApi(app: FastifyInstance): void {
       // Add new user message
       const userContent: TextBlock[] = [{ type: 'text', text: body.message }]
       normalizedMessages.push({ role: 'user', content: userContent })
-      const insertedUserMessage = insertChatMessage({
+      insertChatMessage({
         conversation_id: conversationId,
         role: 'user',
         content: JSON.stringify(userContent),
@@ -184,6 +203,11 @@ export function registerChatApi(app: FastifyInstance): void {
 
       const startTime = Date.now()
 
+      // Detect client abort so an interrupted turn is persisted (not saved as complete)
+      const abortController = new AbortController()
+      const markClientAborted = () => abortController.abort()
+      reply.raw.once('close', markClientAborted)
+
       try {
         const result = await runChatTurn(backend, {
           messages: normalizedMessages,
@@ -195,6 +219,7 @@ export function registerChatApi(app: FastifyInstance): void {
           scope,
           userLanguage,
           debugCollector,
+          signal: abortController.signal,
           onEvent: (event) => {
             if (event.type === 'done') {
               sse.send({ ...event, elapsed_ms: Date.now() - startTime, model })
@@ -222,12 +247,24 @@ export function registerChatApi(app: FastifyInstance): void {
         // The result.allMessages starts from our full messages array,
         // so new messages are those after our original count
         const originalCount = normalizedMessages.length
-        for (let i = originalCount; i < result.allMessages.length; i++) {
-          const msg = result.allMessages[i]
+        const turnMessages = result.allMessages.slice(originalCount)
+        const turnStatus: TurnStatus = abortController.signal.aborted ? 'interrupted' : 'complete'
+        for (let i = 0; i < turnMessages.length; i++) {
+          const msg = turnMessages[i]
+          const isLastAssistant = msg.role === 'assistant'
+            && turnMessages.slice(i + 1).every(m => m.role !== 'assistant')
           insertChatMessage({
             conversation_id: conversationId,
             role: msg.role as 'user' | 'assistant',
             content: JSON.stringify(msg.content),
+            metadata: isLastAssistant ? serializeTurnMetadata({
+              provider: backend,
+              model,
+              status: turnStatus,
+              elapsed_ms: Date.now() - startTime,
+              usage: result.usage,
+              tool_summary: buildToolSummary(turnMessages),
+            }) : null,
           })
         }
 
@@ -251,17 +288,37 @@ export function registerChatApi(app: FastifyInstance): void {
           }
         }
       } catch (err) {
+        const normalized = normalizeChatError(err)
+        const aborted = abortController.signal.aborted
         sse.send({
           type: 'debug_trace',
           trace: debugCollector.finalize({
             elapsed_ms: Date.now() - startTime,
             text: '',
-            error: err instanceof Error ? err.message : String(err),
+            error: normalized.message,
           }),
         })
-        deleteChatMessage(insertedUserMessage.id)
-        const errorMsg = err instanceof Error ? err.message : String(err)
-        sse.send({ type: 'error', error: errorMsg })
+        // Persist the failed/interrupted turn (keeping the user message) so the
+        // conversation can be retried and reloads show the turn outcome.
+        const status: TurnStatus = aborted ? 'interrupted' : 'error'
+        insertChatMessage({
+          conversation_id: conversationId,
+          role: 'assistant',
+          content: '[]',
+          metadata: serializeTurnMetadata({
+            provider: backend,
+            model,
+            status,
+            elapsed_ms: Date.now() - startTime,
+            error_category: aborted ? 'network_interrupted' : normalized.category,
+            error_message: normalized.message,
+          }),
+        })
+        sse.send({
+          type: 'error',
+          error: normalized.message,
+          error_category: aborted ? 'network_interrupted' : normalized.category,
+        })
       }
 
       sse.end()
@@ -331,12 +388,14 @@ export function registerChatApi(app: FastifyInstance): void {
           repairedHistory.storedMessages.map(message => ({
             role: message.role,
             content: JSON.stringify(message.content),
+            metadata: message.metadata ?? null,
           })),
         )
       }
       const messages = repairedHistory.storedMessages.map(message => ({
         role: message.role,
         content: JSON.stringify(message.content),
+        metadata: parseTurnMetadata(message.metadata),
       }))
       reply.send({ messages })
     })
