@@ -347,3 +347,35 @@ describe('POST /api/settings/image-storage/test', () => {
     expect(preparedSql.filter(sql => sql.includes('SELECT value FROM instance_settings WHERE key = ?'))).toHaveLength(0)
   })
 })
+
+describe('GET /api/settings/image-storage/stats and purge-orphans', () => {
+  it('returns storage usage statistics', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/settings/image-storage/stats',
+    })
+
+    expect(res.statusCode).toBe(200)
+    const json = res.json()
+    expect(json).toHaveProperty('total_count')
+    expect(json).toHaveProperty('total_size_bytes')
+    expect(json).toHaveProperty('orphan_count')
+    expect(json).toHaveProperty('orphan_size_bytes')
+    expect(Array.isArray(json.by_feed)).toBe(true)
+  })
+
+  it('supports dry-run orphan purge', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/settings/image-storage/purge-orphans',
+      headers: json,
+      payload: { dry_run: true },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const jsonBody = res.json()
+    expect(jsonBody.dry_run).toBe(true)
+    expect(jsonBody).toHaveProperty('orphan_count')
+    expect(jsonBody).toHaveProperty('orphan_size_bytes')
+  })
+})

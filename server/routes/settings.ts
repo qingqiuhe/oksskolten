@@ -30,7 +30,7 @@ import {
 import { requireJson, getAuthUser, getRequestIdentity, getRequestUserId, requireRoles } from '../auth.js'
 import { getAllModelValues, getModelValues } from '../../shared/models.js'
 import { assertSafeUrl } from '../fetcher/ssrf.js'
-import { extractByDotPath } from '../fetcher/article-images.js'
+import { extractByDotPath, getImageStorageUsage, purgeOrphanImages } from '../fetcher/article-images.js'
 import { getMonthlyUsage } from '../providers/translate/google-translate.js'
 import { getDeeplMonthlyUsage } from '../providers/translate/deepl.js'
 import { NumericIdParams, parseOrBadRequest } from '../lib/validation.js'
@@ -1136,6 +1136,24 @@ export async function settingsRoutes(api: FastifyInstance): Promise<void> {
       reply.status(502).send({ error: `Healthcheck failed: ${message}` })
     }
   })
+
+  // --- Image storage usage & orphan purge (issue #14) ---
+
+  api.get('/api/settings/image-storage/stats', async (_request, reply) => {
+    const stats = getImageStorageUsage()
+    reply.send(stats)
+  })
+
+  api.post(
+    '/api/settings/image-storage/purge-orphans',
+    { preHandler: [requireJson] },
+    async (request, reply) => {
+      const body = request.body as { dry_run?: boolean } | undefined
+      const dryRun = body?.dry_run ?? true
+      const result = purgeOrphanImages({ dryRun })
+      reply.send(result)
+    },
+  )
 
   // --- Retention policy ---
 

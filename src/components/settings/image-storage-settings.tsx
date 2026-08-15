@@ -19,6 +19,29 @@ interface ImageStorageData {
   'images.max_size_mb': string | null
 }
 
+interface ImageStorageFeedUsage {
+  feed_id: number
+  feed_name: string
+  count: number
+  size_bytes: number
+}
+
+interface ImageStorageStats {
+  total_count: number
+  total_size_bytes: number
+  orphan_count: number
+  orphan_size_bytes: number
+  orphan_files: string[]
+  by_feed: ImageStorageFeedUsage[]
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
 // Note: This component intentionally does NOT use useSettings / Prefs.
 // Other preferences (theme, dateMode, etc.) use localStorage as a fast cache
 // with automatic debounce-save to DB. Image storage settings differ in that:
@@ -51,6 +74,7 @@ function writeCache(values: CachedImageStorage) {
 export function ImageStorageSettings() {
   const { t } = useI18n()
   const { data, mutate } = useSWR<ImageStorageData>('/api/settings/image-storage', fetcher)
+  const { data: statsData, mutate: mutateStats } = useSWR<ImageStorageStats>('/api/settings/image-storage/stats', fetcher)
 
   const cached = readCache()
   const [enabled, setEnabled] = useState(cached?.enabled ?? false)
@@ -72,6 +96,9 @@ export function ImageStorageSettings() {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [healthchecking, setHealthchecking] = useState(false)
   const [healthResult, setHealthResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  const [purging, setPurging] = useState(false)
+  const [dryRunResult, setDryRunResult] = useState<{ orphan_count: number; orphan_size_bytes: number; candidates?: string[] } | null>(null)
 
   useEffect(() => {
     if (data) {
@@ -113,6 +140,41 @@ export function ImageStorageSettings() {
       setError(null)
     }
     setTimeout(() => { setError(null); setSuccess(null) }, 3000)
+  }
+
+  async function handleScanOrphans() {
+    setPurging(true)
+    setError(null)
+    try {
+      const res = await apiPost('/api/settings/image-storage/purge-orphans', { dry_run: true }) as {
+        orphan_count: number
+        orphan_size_bytes: number
+        candidates?: string[]
+      }
+      setDryRunResult(res)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Scan failed')
+    } finally {
+      setPurging(false)
+    }
+  }
+
+  async function handlePurgeOrphans() {
+    setPurging(true)
+    setError(null)
+    try {
+      const res = await apiPost('/api/settings/image-storage/purge-orphans', { dry_run: false }) as {
+        purged_count: number
+        reclaimed_bytes: number
+      }
+      setDryRunResult(null)
+      showMessage(`${res.purged_count} ${t('imageStorage.purgeSuccess')} (${formatBytes(res.reclaimed_bytes)})`, 'success')
+      void mutateStats()
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Purge failed')
+    } finally {
+      setPurging(false)
+    }
   }
 
   async function handleSave() {
@@ -430,6 +492,78 @@ export function ImageStorageSettings() {
         {/* Messages */}
         {error && <p className="text-sm text-error">{error}</p>}
         {success && <p className="text-sm text-accent">{success}</p>}
+
+        {/* Storage usage dashboard & orphan cleanup (issue #14) */}
+        <div className="mt-6 pt-6 border-t border-border space-y-4">
+          <label className="block text-sm font-medium text-text select-none">
+            {t('imageStorage.dashboard')}
+          </label>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="p-3 rounded-lg border border-border bg-bg-subtle">
+              <div className="text-xs text-muted">{t('imageStorage.totalImages')}</div>
+              <div className="text-lg font-semibold text-text mt-1">{statsData?.total_count ?? 0}</div>
+            </div>
+            <div className="p-3 rounded-lg border border-border bg-bg-subtle">
+              <div className="text-xs text-muted">{t('imageStorage.totalSize')}</div>
+              <div className="text-lg font-semibold text-text mt-1">{formatBytes(statsData?.total_size_bytes ?? 0)}</div>
+            </div>
+            <div className="p-3 rounded-lg border border-border bg-bg-subtle col-span-2 md:col-span-1">
+              <div className="text-xs text-muted">{t('imageStorage.orphanCount')}</div>
+              <div className="text-lg font-semibold text-text mt-1">
+                {statsData?.orphan_count ?? 0} ({formatBytes(statsData?.orphan_size_bytes ?? 0)})
+              </div>
+            </div>
+          </div>
+
+          {statsData?.by_feed && statsData.by_feed.length > 0 && (
+            <div className="space-y-2">
+              <span className="text-xs font-medium text-muted">{t('imageStorage.byFeed')}</span>
+              <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                {statsData.by_feed.map(f => (
+                  <div key={f.feed_id} className="flex justify-between items-center text-xs py-1 px-2.5 rounded bg-bg-subtle border border-border/50">
+                    <span className="truncate max-w-[60%] text-text">{f.feed_name}</span>
+                    <span className="text-muted">{f.count} images · {formatBytes(f.size_bytes)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-2">
+            <button
+              type="button"
+              onClick={handleScanOrphans}
+              disabled={purging}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-border text-text hover:bg-hover transition-colors disabled:opacity-50 select-none"
+            >
+              {purging ? t('imageStorage.testing') : t('imageStorage.scanOrphans')}
+            </button>
+            <button
+              type="button"
+              onClick={handlePurgeOrphans}
+              disabled={purging}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-error/50 text-error hover:bg-error/10 transition-colors disabled:opacity-50 select-none"
+            >
+              {purging ? t('imageStorage.testing') : t('imageStorage.purgeOrphans')}
+            </button>
+          </div>
+
+          {dryRunResult && (
+            <div className="p-3 rounded-lg border border-border bg-bg-subtle text-xs space-y-1">
+              <div className="font-medium text-text">
+                Scan result: {dryRunResult.orphan_count} orphan candidate(s) ({formatBytes(dryRunResult.orphan_size_bytes)})
+              </div>
+              {dryRunResult.candidates && dryRunResult.candidates.length > 0 && (
+                <div className="text-muted max-h-24 overflow-y-auto text-[11px] font-mono mt-1">
+                  {dryRunResult.candidates.map(file => (
+                    <div key={file}>{file}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </section>
   )
