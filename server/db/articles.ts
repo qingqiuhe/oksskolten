@@ -451,8 +451,51 @@ function deleteCurrentDbCacheEntries<T extends { db: ReturnType<typeof getDb> }>
   }
 }
 
+const SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000 // 6 hours
+
+function readPersistedRankingSnapshot<T>(scopedUserId: number | null, snapshotType: string): T | null {
+  try {
+    const row = scopedUserId == null
+      ? getDb().prepare("SELECT data, updated_at FROM inbox_ranking_snapshots WHERE user_id IS NULL AND snapshot_type = ?").get(snapshotType) as { data: string; updated_at: string } | undefined
+      : getDb().prepare("SELECT data, updated_at FROM inbox_ranking_snapshots WHERE user_id = ? AND snapshot_type = ?").get(scopedUserId, snapshotType) as { data: string; updated_at: string } | undefined
+
+    if (!row?.data) return null
+    const updatedAt = new Date(row.updated_at).getTime()
+    if (isNaN(updatedAt) || Date.now() - updatedAt > SNAPSHOT_MAX_AGE_MS) return null
+    return JSON.parse(row.data) as T
+  } catch {
+    return null
+  }
+}
+
+function writePersistedRankingSnapshot(scopedUserId: number | null, snapshotType: string, data: unknown): void {
+  try {
+    const json = JSON.stringify(data)
+    getDb().prepare(`
+      INSERT INTO inbox_ranking_snapshots (user_id, snapshot_type, data, updated_at)
+      VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(user_id, snapshot_type) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+    `).run(scopedUserId ?? null, snapshotType, json)
+  } catch {
+    // ignore
+  }
+}
+
+function deletePersistedRankingSnapshots(scopedUserId?: number | null): void {
+  try {
+    if (scopedUserId == null) {
+      getDb().prepare("DELETE FROM inbox_ranking_snapshots WHERE snapshot_type IN ('inbox_history', 'feed_frequency')").run()
+    } else {
+      getDb().prepare("DELETE FROM inbox_ranking_snapshots WHERE snapshot_type IN ('inbox_history', 'feed_frequency') AND (user_id = ? OR user_id IS NULL)").run(scopedUserId)
+    }
+  } catch {
+    // ignore
+  }
+}
+
 function invalidateInboxRankingCaches(scopedUserId?: number | null): void {
   const currentDb = getDb()
+  deletePersistedRankingSnapshots(scopedUserId)
   if (scopedUserId == null) {
     deleteCurrentDbCacheEntries(inboxHistoryCache, currentDb)
     deleteCurrentDbCacheEntries(feedFrequencyCache, currentDb)
@@ -477,6 +520,19 @@ function getInboxHistorySnapshot(
     return cached
   }
   if (cached) inboxHistoryCache.delete(key)
+
+  // Check persisted snapshot before running expensive history aggregation (issue #15)
+  const persisted = readPersistedRankingSnapshot<{ feedRows: InboxHistoryStatsRow[]; categoryRows: InboxHistoryStatsRow[] }>(scopedUserId, 'inbox_history')
+  if (persisted) {
+    const snapshot = {
+      db: getDb(),
+      expiresAt: Date.now() + INBOX_HISTORY_CACHE_TTL_MS,
+      feedRows: persisted.feedRows,
+      categoryRows: persisted.categoryRows,
+    }
+    inboxHistoryCache.set(key, snapshot)
+    return snapshot
+  }
 
   const params = scopedUserId == null ? {} : { userId: scopedUserId }
   onQuery?.()
@@ -512,6 +568,8 @@ function getInboxHistorySnapshot(
     GROUP BY h.category_id
   `, params)
 
+  writePersistedRankingSnapshot(scopedUserId, 'inbox_history', { feedRows, categoryRows })
+
   const snapshot = {
     db: getDb(),
     expiresAt: Date.now() + INBOX_HISTORY_CACHE_TTL_MS,
@@ -539,6 +597,18 @@ function getFeedFrequencySnapshot(
   }
   if (cached) feedFrequencyCache.delete(key)
 
+  // Check persisted snapshot before querying (issue #15)
+  const persisted = readPersistedRankingSnapshot<{ rows: FeedFrequencyRow[] }>(scopedUserId, 'feed_frequency')
+  if (persisted) {
+    const snapshot = {
+      db: getDb(),
+      expiresAt: Date.now() + FEED_FREQUENCY_CACHE_TTL_MS,
+      rows: persisted.rows,
+    }
+    feedFrequencyCache.set(key, snapshot)
+    return snapshot
+  }
+
   onQuery?.()
   const rows = allNamed<FeedFrequencyRow>(`
     SELECT
@@ -555,6 +625,8 @@ function getFeedFrequencySnapshot(
       ${scopedUserId == null ? '' : 'AND f.user_id = @userId'}
     GROUP BY f.id
   `, scopedUserId == null ? {} : { userId: scopedUserId })
+
+  writePersistedRankingSnapshot(scopedUserId, 'feed_frequency', { rows })
 
   const snapshot = {
     db: getDb(),
