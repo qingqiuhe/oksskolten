@@ -1100,6 +1100,19 @@ describe('score persistence', () => {
     const { articles: scoreSorted } = getArticles({ liked: true, sort: 'score', limit: 100, offset: 0 })
     expect(scoreSorted[0].url).toBe('https://example.com/s8')
   })
+
+  it('recalculateScores with dirtyIds processes only the requested dirty ids', () => {
+    const feed = seedFeed()
+    const id1 = seedArticle(feed.id, { url: 'https://example.com/dirty-1' })
+    const id2 = seedArticle(feed.id, { url: 'https://example.com/dirty-2' })
+
+    getDb().prepare("UPDATE articles SET liked_at = datetime('now') WHERE id IN (?, ?)").run(id1, id2)
+
+    // Recalculate with only id1 marked dirty
+    const result = recalculateScores({ dirtyIds: [id1] })
+    expect(result.updated).toBe(1)
+    expect(result.ids).toEqual([id1])
+  })
 })
 
 describe('inbox_score sorting', () => {

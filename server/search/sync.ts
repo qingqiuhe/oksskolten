@@ -5,6 +5,42 @@ import { logger } from '../logger.js'
 
 const log = logger.child('search')
 
+// --- Metrics ---
+
+export interface SearchSyncMetrics {
+  lastRebuildDurationMs: number | null
+  lastRebuildPeakRssMb: number | null
+  lastRebuildAt: string | null
+  dirtyScoreSyncCount: number
+  fullScoreSyncCount: number
+  incrementalUpsertCount: number
+  incrementalDeleteCount: number
+}
+
+const syncMetrics: SearchSyncMetrics = {
+  lastRebuildDurationMs: null,
+  lastRebuildPeakRssMb: null,
+  lastRebuildAt: null,
+  dirtyScoreSyncCount: 0,
+  fullScoreSyncCount: 0,
+  incrementalUpsertCount: 0,
+  incrementalDeleteCount: 0,
+}
+
+export function getSearchSyncMetrics(): SearchSyncMetrics {
+  return { ...syncMetrics }
+}
+
+export function resetSearchSyncMetricsForTest(): void {
+  syncMetrics.lastRebuildDurationMs = null
+  syncMetrics.lastRebuildPeakRssMb = null
+  syncMetrics.lastRebuildAt = null
+  syncMetrics.dirtyScoreSyncCount = 0
+  syncMetrics.fullScoreSyncCount = 0
+  syncMetrics.incrementalUpsertCount = 0
+  syncMetrics.incrementalDeleteCount = 0
+}
+
 // --- State ---
 
 let searchReady = false
@@ -136,8 +172,13 @@ export async function rebuildSearchIndex(): Promise<void> {
     }
 
     searchReady = true
-    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1)
-    log.info(`Index rebuild complete: ${indexedCount} articles in ${elapsed}s`)
+    const duration = Date.now() - startedAt
+    const peakRss = Math.round((process.memoryUsage().rss / (1024 * 1024)) * 10) / 10
+    syncMetrics.lastRebuildDurationMs = duration
+    syncMetrics.lastRebuildPeakRssMb = peakRss
+    syncMetrics.lastRebuildAt = new Date().toISOString()
+    const elapsed = (duration / 1000).toFixed(1)
+    log.info(`Index rebuild complete: ${indexedCount} articles in ${elapsed}s (peak RSS ${peakRss}MB)`)
   } catch (err) {
     // On failure: keep searchReady as-is (true if previously built, false if first time)
     log.error('Index rebuild failed:', err)
@@ -151,6 +192,7 @@ export async function rebuildSearchIndex(): Promise<void> {
 
 export function syncArticleToSearch(doc: MeiliArticleDoc): void {
   try {
+    syncMetrics.incrementalUpsertCount += 1
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.addDocuments([doc]).catch((err) => {
@@ -167,6 +209,7 @@ export function syncArticleToSearch(doc: MeiliArticleDoc): void {
 
 export function deleteArticleFromSearch(id: number): void {
   try {
+    syncMetrics.incrementalDeleteCount += 1
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.deleteDocument(id).catch((err) => {
@@ -226,6 +269,7 @@ export async function syncArticleScoreUpdatesToSearch(updates: ArticleScoreUpdat
     synced += batch.length
   }
 
+  syncMetrics.dirtyScoreSyncCount += synced
   return synced
 }
 
@@ -254,6 +298,7 @@ export async function syncArticleScoresToSearch(articleIds: number[]): Promise<n
     synced += rows.length
   }
 
+  syncMetrics.dirtyScoreSyncCount += synced
   return synced
 }
 
@@ -273,6 +318,7 @@ export function syncArticleFiltersToSearch(updates: { id: number; is_unread?: bo
 export function deleteArticlesFromSearch(articleIds: number[]): void {
   if (articleIds.length === 0) return
   try {
+    syncMetrics.incrementalDeleteCount += articleIds.length
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.deleteDocuments({ filter: `id IN [${articleIds.join(',')}]` }).catch((err) => {
@@ -319,12 +365,14 @@ export async function syncAllScoredArticlesToSearch(): Promise<number> {
     synced += batch.length
   }
 
+  syncMetrics.fullScoreSyncCount += synced
   return synced
 }
 
 export function syncArticlesByFeedToSearch(docs: MeiliArticleDoc[]): void {
   if (docs.length === 0) return
   try {
+    syncMetrics.incrementalUpsertCount += docs.length
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.addDocuments(docs).catch((err) => {
@@ -338,5 +386,33 @@ export function syncArticlesByFeedToSearch(docs: MeiliArticleDoc[]): void {
     }
   } catch (err) {
     log.error('Failed to batch sync articles:', err)
+  }
+}
+
+/**
+ * Health check for search index.
+ * Verifies reachability and checks if document counts between SQLite and Meilisearch are consistent.
+ */
+export async function checkSearchIndexHealth(): Promise<{ healthy: boolean; reason?: string; dbCount?: number; searchCount?: number }> {
+  try {
+    const client = getSearchClient()
+    const index = client.index(ARTICLES_INDEX)
+    const stats = await index.getStats()
+    const dbRow = getDb().prepare('SELECT COUNT(*) as count FROM active_articles').get() as { count: number } | undefined
+    const dbCount = dbRow?.count ?? 0
+    const searchCount = stats.numberOfDocuments
+    // If count difference is larger than 50 and 5% of active articles, mark unhealthy
+    const diff = Math.abs(dbCount - searchCount)
+    if (diff > Math.max(50, dbCount * 0.05)) {
+      return {
+        healthy: false,
+        reason: `Document count mismatch (DB: ${dbCount}, Search: ${searchCount})`,
+        dbCount,
+        searchCount,
+      }
+    }
+    return { healthy: true, dbCount, searchCount }
+  } catch (err) {
+    return { healthy: false, reason: err instanceof Error ? err.message : String(err) }
   }
 }

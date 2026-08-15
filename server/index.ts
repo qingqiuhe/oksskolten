@@ -18,7 +18,7 @@ import { authRoutes } from './authRoutes.js'
 import { passkeyRoutes } from './passkeyRoutes.js'
 import { oauthRoutes } from './oauthRoutes.js'
 import { fetchAllFeeds } from './fetcher.js'
-import { rebuildSearchIndex, isSearchReady, syncArticleScoreUpdatesToSearch } from './search/sync.js'
+import { rebuildSearchIndex, isSearchReady, syncArticleScoreUpdatesToSearch, checkSearchIndexHealth } from './search/sync.js'
 import { CONTENT_SECURITY_POLICY } from './security.js'
 import { runNotificationChecks } from './notifications/runner.js'
 
@@ -221,15 +221,34 @@ void (async () => {
       log.error(`[search] Index rebuild attempt failed (next retry in ${retries[retries.indexOf(delay) + 1] ?? 'none'}ms):`, err)
     }
   }
-  log.error('[search] All initial rebuild attempts failed, will retry on next 6h cron')
+  log.error('[search] All initial rebuild attempts failed, will retry on next maintenance cron')
 })()
 
-cronTasks.push(cron.schedule('0 */6 * * *', async () => {
-  log.info('[cron] Search index rebuild triggered')
+// Periodic search maintenance (issue #9):
+// Demoted from unconditional 6h full rebuild to health-gated check.
+// If index is healthy (reachable and doc counts align), skip rebuild.
+// If desynced or error occurs, trigger a recovery rebuild.
+const SEARCH_MAINTENANCE_SCHEDULE = process.env.SEARCH_MAINTENANCE_SCHEDULE || '0 */6 * * *'
+const SEARCH_FORCE_CRON_REBUILD = process.env.SEARCH_FORCE_CRON_REBUILD === 'true'
+
+cronTasks.push(cron.schedule(SEARCH_MAINTENANCE_SCHEDULE, async () => {
+  log.info('[cron] Search index maintenance check triggered')
   try {
-    await rebuildSearchIndex()
+    if (SEARCH_FORCE_CRON_REBUILD) {
+      log.info('[cron] SEARCH_FORCE_CRON_REBUILD is enabled, executing full rebuild')
+      await rebuildSearchIndex()
+      return
+    }
+
+    const health = await checkSearchIndexHealth()
+    if (!health.healthy) {
+      log.warn(`[cron] Search index health check failed (${health.reason}), triggering recovery rebuild`)
+      await rebuildSearchIndex()
+    } else {
+      log.info(`[cron] Search index is healthy (DB: ${health.dbCount}, Search: ${health.searchCount}), skipping full rebuild`)
+    }
   } catch (err) {
-    log.error('[cron] Search index rebuild error:', err)
+    log.error('[cron] Search index maintenance error:', err)
   }
 }))
 
