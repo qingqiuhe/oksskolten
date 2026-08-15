@@ -5,6 +5,7 @@ import { safeFetch } from './ssrf.js'
 import { USER_AGENT } from './http.js'
 import { getSetting, getSettings } from '../db/settings.js'
 import { updateArticleContent, markImagesArchived, clearImagesArchived } from '../db/articles.js'
+import { getDb } from '../db/connection.js'
 import { logger } from '../logger.js'
 import { dataPath } from '../paths.js'
 
@@ -248,4 +249,186 @@ export function deleteArticleImages(articleId: number): number {
     fs.unlinkSync(path.join(imagesDir, file))
   }
   return files.length
+}
+
+export interface ImageStorageFeedUsage {
+  feed_id: number
+  feed_name: string
+  count: number
+  size_bytes: number
+}
+
+export interface ImageStorageUsageStats {
+  total_count: number
+  total_size_bytes: number
+  orphan_count: number
+  orphan_size_bytes: number
+  orphan_files: string[]
+  by_feed: ImageStorageFeedUsage[]
+}
+
+/**
+ * Extract all local image filenames currently referenced by active articles.
+ */
+export function getReferencedLocalImageFilenames(): Set<string> {
+  const referenced = new Set<string>()
+  const rows = getDb().prepare(`
+    SELECT full_text, og_image FROM active_articles
+    WHERE (full_text LIKE '%/api/articles/images/%' OR og_image LIKE '%/api/articles/images/%')
+  `).all() as { full_text: string | null; og_image: string | null }[]
+
+  const filenameRegex = /\/api\/articles\/images\/([a-zA-Z0-9_\.-]+)/g
+
+  for (const row of rows) {
+    if (row.full_text) {
+      let m: RegExpExecArray | null
+      while ((m = filenameRegex.exec(row.full_text)) !== null) {
+        if (m[1]) referenced.add(m[1])
+      }
+    }
+    if (row.og_image) {
+      let m: RegExpExecArray | null
+      while ((m = filenameRegex.exec(row.og_image)) !== null) {
+        if (m[1]) referenced.add(m[1])
+      }
+    }
+  }
+
+  return referenced
+}
+
+/**
+ * Get detailed image storage usage breakdown and orphan statistics.
+ */
+export function getImageStorageUsage(settings?: Pick<ArticleImageSettings, 'images.storage_path'>): ImageStorageUsageStats {
+  const imagesDir = getImagesDir(settings)
+  if (!fs.existsSync(imagesDir)) {
+    return {
+      total_count: 0,
+      total_size_bytes: 0,
+      orphan_count: 0,
+      orphan_size_bytes: 0,
+      orphan_files: [],
+      by_feed: [],
+    }
+  }
+
+  const referencedSet = getReferencedLocalImageFilenames()
+  const feedMap = new Map<number, { feed_name: string; count: number; size_bytes: number }>()
+
+  const articleFeedRows = getDb().prepare(`
+    SELECT a.id as article_id, a.feed_id, f.name as feed_name
+    FROM active_articles a
+    JOIN feeds f ON a.feed_id = f.id
+  `).all() as { article_id: number; feed_id: number; feed_name: string }[]
+
+  const articleToFeed = new Map<number, { feed_id: number; feed_name: string }>()
+  for (const row of articleFeedRows) {
+    articleToFeed.set(row.article_id, { feed_id: row.feed_id, feed_name: row.feed_name })
+  }
+
+  const allFiles = fs.readdirSync(imagesDir)
+  let totalCount = 0
+  let totalSizeBytes = 0
+  let orphanCount = 0
+  let orphanSizeBytes = 0
+  const orphanFiles: string[] = []
+
+  for (const file of allFiles) {
+    if (file.startsWith('.')) continue
+    const filepath = path.join(imagesDir, file)
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(filepath)
+      if (!stat.isFile()) continue
+    } catch {
+      continue
+    }
+
+    const size = stat.size
+    totalCount += 1
+    totalSizeBytes += size
+
+    const isReferenced = referencedSet.has(file)
+    if (!isReferenced) {
+      orphanCount += 1
+      orphanSizeBytes += size
+      orphanFiles.push(file)
+    } else {
+      const articleId = Number(file.split('_')[0])
+      if (articleId && articleToFeed.has(articleId)) {
+        const info = articleToFeed.get(articleId)!
+        const existing = feedMap.get(info.feed_id) ?? { feed_name: info.feed_name, count: 0, size_bytes: 0 }
+        existing.count += 1
+        existing.size_bytes += size
+        feedMap.set(info.feed_id, existing)
+      }
+    }
+  }
+
+  const byFeed: ImageStorageFeedUsage[] = [...feedMap.entries()]
+    .map(([feed_id, { feed_name, count, size_bytes }]) => ({
+      feed_id,
+      feed_name,
+      count,
+      size_bytes,
+    }))
+    .sort((a, b) => b.size_bytes - a.size_bytes)
+
+  return {
+    total_count: totalCount,
+    total_size_bytes: totalSizeBytes,
+    orphan_count: orphanCount,
+    orphan_size_bytes: orphanSizeBytes,
+    orphan_files: orphanFiles,
+    by_feed: byFeed,
+  }
+}
+
+/**
+ * Purge orphan images with dry run or real delete.
+ */
+export function purgeOrphanImages(opts?: { dryRun?: boolean; settings?: Pick<ArticleImageSettings, 'images.storage_path'> }): {
+  dry_run: boolean
+  orphan_count: number
+  orphan_size_bytes: number
+  purged_count?: number
+  reclaimed_bytes?: number
+  candidates?: string[]
+} {
+  const dryRun = opts?.dryRun ?? true
+  const usage = getImageStorageUsage(opts?.settings)
+  const imagesDir = getImagesDir(opts?.settings)
+
+  if (dryRun) {
+    return {
+      dry_run: true,
+      orphan_count: usage.orphan_count,
+      orphan_size_bytes: usage.orphan_size_bytes,
+      candidates: usage.orphan_files,
+    }
+  }
+
+  let purgedCount = 0
+  let reclaimedBytes = 0
+
+  for (const file of usage.orphan_files) {
+    try {
+      const filepath = path.join(imagesDir, file)
+      const stat = fs.statSync(filepath)
+      fs.unlinkSync(filepath)
+      purgedCount += 1
+      reclaimedBytes += stat.size
+    } catch (err) {
+      log.warn(`Failed to delete orphan image ${file}:`, err)
+    }
+  }
+
+  return {
+    dry_run: false,
+    orphan_count: usage.orphan_count,
+    orphan_size_bytes: usage.orphan_size_bytes,
+    purged_count: purgedCount,
+    reclaimed_bytes: reclaimedBytes,
+  }
 }

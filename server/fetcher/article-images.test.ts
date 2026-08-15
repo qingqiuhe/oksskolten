@@ -7,13 +7,20 @@ import fs from 'node:fs'
 // Mocks
 // ---------------------------------------------------------------------------
 
-const { mockSafeFetch, mockGetSetting, mockGetSettings, mockUpdateArticleContent, mockMarkImagesArchived, mockClearImagesArchived } = vi.hoisted(() => ({
+const { mockSafeFetch, mockGetSetting, mockGetSettings, mockUpdateArticleContent, mockMarkImagesArchived, mockClearImagesArchived, mockPrepare } = vi.hoisted(() => ({
   mockSafeFetch: vi.fn(),
   mockGetSetting: vi.fn(),
   mockGetSettings: vi.fn(),
   mockUpdateArticleContent: vi.fn(),
   mockMarkImagesArchived: vi.fn(),
   mockClearImagesArchived: vi.fn(),
+  mockPrepare: vi.fn(),
+}))
+
+vi.mock('../db/connection.js', () => ({
+  getDb: () => ({
+    prepare: mockPrepare,
+  }),
 }))
 
 vi.mock('./ssrf.js', () => ({
@@ -36,7 +43,14 @@ vi.mock('../db/articles.js', () => ({
 // Module under test (loaded after mocks)
 // ---------------------------------------------------------------------------
 
-import { extractByDotPath, isImageArchivingEnabled, deleteArticleImages, archiveArticleImages } from './article-images.js'
+import {
+  extractByDotPath,
+  isImageArchivingEnabled,
+  deleteArticleImages,
+  archiveArticleImages,
+  getImageStorageUsage,
+  purgeOrphanImages,
+} from './article-images.js'
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -234,5 +248,49 @@ describe('archiveArticleImages', () => {
     expect(result.rewrittenText).toBe(fullText)
     expect(mockClearImagesArchived).toHaveBeenCalledWith(4)
     expect(mockSafeFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('getImageStorageUsage and purgeOrphanImages', () => {
+  it('correctly identifies orphan images and supports dry-run and purge', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'img-storage-test-'))
+    const file1 = path.join(tmpDir, '10_abc.jpg')
+    const file2 = path.join(tmpDir, '11_orphan.jpg')
+    fs.writeFileSync(file1, 'referenced content')
+    fs.writeFileSync(file2, 'orphan content')
+
+    mockPrepare.mockImplementation((sql: string) => {
+      if (sql.includes('active_articles a') && sql.includes('JOIN feeds f')) {
+        return { all: () => [{ article_id: 10, feed_id: 1, feed_name: 'Feed 1' }] }
+      }
+      if (sql.includes('FROM active_articles')) {
+        return {
+          all: () => [{ full_text: '![alt](/api/articles/images/10_abc.jpg)', og_image: null }],
+        }
+      }
+      return { all: () => [] }
+    })
+
+    const usage = getImageStorageUsage({ 'images.storage_path': tmpDir })
+    expect(usage.total_count).toBe(2)
+    expect(usage.orphan_count).toBe(1)
+    expect(usage.orphan_files).toEqual(['11_orphan.jpg'])
+    expect(usage.by_feed).toHaveLength(1)
+    expect(usage.by_feed[0].feed_name).toBe('Feed 1')
+
+    // Dry run
+    const dryRunResult = purgeOrphanImages({ dryRun: true, settings: { 'images.storage_path': tmpDir } })
+    expect(dryRunResult.dry_run).toBe(true)
+    expect(dryRunResult.orphan_count).toBe(1)
+    expect(fs.existsSync(file2)).toBe(true) // Still exists
+
+    // Real purge
+    const purgeResult = purgeOrphanImages({ dryRun: false, settings: { 'images.storage_path': tmpDir } })
+    expect(purgeResult.dry_run).toBe(false)
+    expect(purgeResult.purged_count).toBe(1)
+    expect(fs.existsSync(file1)).toBe(true) // Referenced remains
+    expect(fs.existsSync(file2)).toBe(false) // Orphan deleted
+
+    fs.rmSync(tmpDir, { recursive: true })
   })
 })
