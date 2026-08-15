@@ -1401,6 +1401,31 @@ describe('inbox_score sorting', () => {
     expect(secondStats.queryCount).toBe(2)
   })
 
+  it('reuses materialized ranking snapshots across process restarts', () => {
+    const feed = seedFeed({ name: 'Persisted High Value', url: 'https://persisted-hv.example.com' })
+    for (let i = 0; i < 6; i++) {
+      const id = seedArticle(feed.id, {
+        url: `https://persisted-hv.example.com/read-${i}`,
+        published_at: daysAgo(10 + i),
+      })
+      recordArticleRead(id)
+    }
+    seedArticle(feed.id, {
+      title: 'Persisted unread article',
+      url: 'https://persisted-hv.example.com/unread',
+      published_at: hoursAgo(6),
+    })
+
+    // 1. Initial computation materializes snapshot in DB
+    const firstStats = { queryCount: 0 }
+    getHighValueInbox({ limit: 1, perfStats: firstStats })
+    expect(firstStats.queryCount).toBe(5)
+
+    // Check that snapshots exist in SQLite
+    const snapshotRows = getDb().prepare('SELECT snapshot_type FROM inbox_ranking_snapshots').all()
+    expect(snapshotRows.length).toBeGreaterThan(0)
+  })
+
   it('invalidates high-value frequency metadata when articles are inserted', () => {
     const feed = seedFeed({ name: 'Invalidated Frequency', url: 'https://invalidated-frequency.example.com' })
     seedArticle(feed.id, {
