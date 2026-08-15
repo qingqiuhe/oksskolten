@@ -15,7 +15,7 @@ import {
 } from './db.js'
 
 import { CONCURRENCY, errorMessage } from './fetcher/util.js'
-import { enqueueSimilarityDetection } from './similarity.js'
+import { enqueueSimilarityDetection, enqueueSimilarityBatch, type SimilarityDetectionTask } from './similarity.js'
 import { type FetchProgressEvent, emitProgress, markFeedDone } from './fetcher/progress.js'
 import { fetchFullText, isBotBlockPage, convertHtmlToMarkdown, markdownToExcerpt, extractFirstVideoPoster, MIN_EXTRACTED_LENGTH } from './fetcher/content.js'
 import { fetchAndTransformJsonApiFeed, parseJsonApiSourceConfig, type JsonApiItem } from './fetcher/json-api.js'
@@ -172,7 +172,10 @@ interface RetryArticle {
 type ArticleTask = NewArticle | RetryArticle
 
 /** Returns true if the retry article still has an error after processing. */
-async function processArticle(task: ArticleTask): Promise<boolean> {
+async function processArticle(
+  task: ArticleTask,
+  onInserted?: (similarityTask: SimilarityDetectionTask) => void,
+): Promise<boolean> {
   const articleUrl = task.kind === 'new' ? task.url : task.article.url
 
   const content = await fetchArticleContent(articleUrl, {
@@ -214,12 +217,17 @@ async function processArticle(task: ArticleTask): Promise<boolean> {
         notification_media_extracted_at: notificationPreview.notification_media_extracted_at,
         last_error: content.lastError,
       })
-      enqueueSimilarityDetection({
+      const similarityTask: SimilarityDetectionTask = {
         articleId,
         title: task.title,
         feedId: task.feed_id,
         publishedAt: task.published_at,
-      })
+      }
+      if (onInserted) {
+        onInserted(similarityTask)
+      } else {
+        enqueueSimilarityDetection(similarityTask)
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (!msg.includes('UNIQUE constraint failed')) {
@@ -402,6 +410,7 @@ export async function fetchSingleFeed(
 
   const total = tasks.length
   let fetched = 0
+  const newlyInsertedArticles: SimilarityDetectionTask[] = []
 
   const foundEvent: FetchProgressEvent = { type: 'feed-articles-found', feed_id: feed.id, total }
   emitProgress(foundEvent)
@@ -410,7 +419,9 @@ export async function fetchSingleFeed(
   log.info(`Feed ${feed.name}: processing ${total} articles`)
   await runLimited(tasks, CONCURRENCY, async (task) => {
     try {
-      await processArticle(task)
+      await processArticle(task, (similarityTask) => {
+        newlyInsertedArticles.push(similarityTask)
+      })
       if (task.kind === 'new') {
         fetched++
         const doneEvent: FetchProgressEvent = { type: 'article-done', feed_id: feed.id, fetched, total }
@@ -427,6 +438,10 @@ export async function fetchSingleFeed(
       }
     }
   })
+
+  if (newlyInsertedArticles.length > 0) {
+    enqueueSimilarityBatch(newlyInsertedArticles)
+  }
 
   const completeEvent: FetchProgressEvent = { type: 'feed-complete', feed_id: feed.id }
   markFeedDone(feed.id)

@@ -19,6 +19,7 @@ import {
   _resetSimilarityQueueForTests,
   computeTitleSimilarity,
   enqueueSimilarityDetection,
+  enqueueSimilarityBatch,
 } from './similarity.js'
 
 beforeEach(() => {
@@ -121,5 +122,25 @@ describe('enqueueSimilarityDetection', () => {
 
     expect(mockMeiliSearch).toHaveBeenCalledTimes(6)
     expect(maxInFlight).toBe(2)
+  })
+
+  it('batches candidate detection for multi-article refreshes', async () => {
+    let queryCount = 0
+    mockMeiliSearch.mockImplementation(async () => {
+      queryCount += 1
+      return { hits: [], estimatedTotalHits: 0 }
+    })
+
+    const tasks = [
+      { articleId: 101, title: 'Batch item 1', feedId: 2, publishedAt: '2026-01-01T00:00:00.000Z' },
+      { articleId: 102, title: 'Batch item 2', feedId: 2, publishedAt: '2026-01-01T00:00:00.000Z' },
+      { articleId: 103, title: 'Batch item 3', feedId: 2, publishedAt: '2026-01-01T00:00:00.000Z' },
+    ]
+
+    enqueueSimilarityBatch(tasks)
+
+    await _awaitSimilarityQueueIdle()
+
+    expect(queryCount).toBe(3)
   })
 })
