@@ -37,6 +37,7 @@ import {
   markArticlesSeen,
   markAllSeenByFeed,
   markArticleBookmarked,
+  markArticlesBookmarked,
   markArticleLiked,
   recordArticleRead,
   getHighValueInbox,
@@ -231,6 +232,29 @@ describe('getArticles read filter', () => {
     expect(articles).toHaveLength(1)
     expect(total).toBe(1)
     expect(articles[0].liked_at).not.toBeNull()
+  })
+
+  it('batch bookmarks only requested articles', () => {
+    const feed = seedFeed()
+    const id1 = seedArticle(feed.id, { url: 'https://example.com/bm1' })
+    const id2 = seedArticle(feed.id, { url: 'https://example.com/bm2' })
+    const id3 = seedArticle(feed.id, { url: 'https://example.com/bm3' })
+
+    const result = markArticlesBookmarked([id1, id2], true)
+    expect(result.updated).toBe(2)
+
+    const a1 = getArticleById(id1)
+    const a2 = getArticleById(id2)
+    const a3 = getArticleById(id3)
+
+    expect(a1?.bookmarked_at).not.toBeNull()
+    expect(a2?.bookmarked_at).not.toBeNull()
+    expect(a3?.bookmarked_at).toBeNull()
+
+    // Unbookmark batch
+    const unbookmarkResult = markArticlesBookmarked([id1], false)
+    expect(unbookmarkResult.updated).toBe(1)
+    expect(getArticleById(id1)?.bookmarked_at).toBeNull()
   })
 
   it('filters by article kind', () => {

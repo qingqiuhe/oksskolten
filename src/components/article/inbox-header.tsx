@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Sparkles, CalendarDays, Layers3, Clock3 } from 'lucide-react'
+import { Sparkles, CalendarDays, Layers3, Clock3, CheckSquare } from 'lucide-react'
 import type { InboxSummary } from '../../../shared/types'
 import type { FeedViewType } from '../../../shared/article-kind'
 
@@ -12,9 +12,11 @@ interface InboxHeaderProps {
   sort: InboxSort
   groupMode: InboxGroupMode
   viewFilter: InboxViewFilter
+  selectionMode?: boolean
   onSortChange: (sort: InboxSort) => void
   onGroupModeChange: (mode: InboxGroupMode) => void
   onViewFilterChange: (filter: InboxViewFilter) => void
+  onToggleSelectionMode?: () => void
   chatTrigger: ReactNode
   labels: {
     unreadTotal: string
@@ -85,9 +87,11 @@ export function InboxHeader({
   sort,
   groupMode,
   viewFilter,
+  selectionMode = false,
   onSortChange,
   onGroupModeChange,
   onViewFilterChange,
+  onToggleSelectionMode,
   chatTrigger,
   labels,
 }: InboxHeaderProps) {
@@ -136,6 +140,21 @@ export function InboxHeader({
         </div>
 
         <div className="flex items-center gap-2">
+          {onToggleSelectionMode && (
+            <button
+              type="button"
+              onClick={onToggleSelectionMode}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                selectionMode
+                  ? 'border-accent bg-accent text-accent-text'
+                  : 'border-border bg-bg text-muted hover:text-text'
+              }`}
+              title="Toggle selection mode"
+            >
+              <CheckSquare className="w-3.5 h-3.5" />
+              <span>{selectionMode ? 'Done' : 'Select'}</span>
+            </button>
+          )}
           {chatTrigger}
         </div>
       </div>
