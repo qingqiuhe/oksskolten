@@ -131,6 +131,7 @@ const ArticlesQuery = z.object({
   exclude_ids: z.string().optional(),
   limit: coerceOptionalNumber,
   offset: coerceOptionalNumber,
+  cursor: z.string().optional(),
 })
 
 const SearchQuery = z.object({
@@ -298,7 +299,8 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
   api.get('/api/articles', async (request, reply) => {
     const query = ArticlesQuery.parse(request.query)
     const limit = Math.min(Math.max(query.limit || DEFAULT_ARTICLE_LIMIT, 1), MAX_ARTICLE_LIMIT)
-    const offset = Math.max(query.offset || 0, 0)
+    const cursor = query.cursor
+    const offset = cursor ? 0 : Math.max(query.offset || 0, 0)
     const feedId = query.feed_id ?? undefined
     const categoryId = query.category_id ?? undefined
     const feedViewType = query.feed_view_type as FeedViewType | undefined
@@ -320,8 +322,8 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const smartFloor = !noFloor && !isClipFeed && !unread && !bookmarked && !liked && !read
     const perfStats = process.env.ARTICLES_PERF_LOG === '1' ? { queryCount: 0 } : undefined
     const perfStartedAt = perfStats ? Date.now() : 0
-    const includeTotal = offset === 0
-    const { articles, total, hasMore: probedHasMore, totalWithoutFloor } = getArticles({
+    const includeTotal = !cursor && offset === 0
+    const { articles, total, hasMore: probedHasMore, nextCursor, totalWithoutFloor } = getArticles({
       feedId,
       categoryId,
       feedViewType,
@@ -334,9 +336,10 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       excludeIds,
       limit,
       offset,
+      cursor,
       smartFloor,
       includeTotal,
-      includeTotalWithoutFloor: offset === 0,
+      includeTotalWithoutFloor: !cursor && offset === 0,
       perfStats,
       userId,
     })
@@ -345,7 +348,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     // When unread filter yields 0 results, return total article count (without unread filter)
     // so the UI can distinguish "no articles" from "all read"
     let totalAll: number | undefined
-    if (unread && total === 0 && offset === 0) {
+    if (unread && total === 0 && offset === 0 && !cursor) {
       const allResult = getArticles({
         feedId,
         categoryId,
@@ -367,6 +370,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
         elapsedMs: Date.now() - perfStartedAt,
         limit,
         offset,
+        cursor,
         smartFloor,
         sort,
         unread,
@@ -376,7 +380,14 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       })
     }
 
-    reply.send({ articles, total, has_more: hasMore, ...(totalWithoutFloor != null ? { total_without_floor: totalWithoutFloor } : {}), ...(totalAll != null ? { total_all: totalAll } : {}) })
+    reply.send({
+      articles,
+      total,
+      has_more: hasMore,
+      next_cursor: nextCursor ?? null,
+      ...(totalWithoutFloor != null ? { total_without_floor: totalWithoutFloor } : {}),
+      ...(totalAll != null ? { total_all: totalAll } : {}),
+    })
   })
 
   api.get('/api/articles/search', async (request, reply) => {

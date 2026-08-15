@@ -741,6 +741,49 @@ describe('GET /api/articles smart floor metadata', () => {
     expect(secondPage.json().articles).toHaveLength(10)
     expect(secondPage.json().total_without_floor).toBeUndefined()
   })
+
+  it('supports cursor pagination across page boundaries', async () => {
+    const feed = seedFeed()
+    for (let i = 0; i < 25; i++) {
+      const d = new Date(Date.now() - i * 60_000).toISOString()
+      seedArticle(feed.id, { url: `https://example.com/cursor-${i}`, published_at: d })
+    }
+
+    const page1 = await app.inject({
+      method: 'GET',
+      url: `/api/articles?feed_id=${feed.id}&limit=10`,
+    })
+    expect(page1.statusCode).toBe(200)
+    const json1 = page1.json()
+    expect(json1.articles).toHaveLength(10)
+    expect(json1.has_more).toBe(true)
+    expect(json1.next_cursor).toBeTruthy()
+
+    const page2 = await app.inject({
+      method: 'GET',
+      url: `/api/articles?feed_id=${feed.id}&limit=10&cursor=${encodeURIComponent(json1.next_cursor)}`,
+    })
+    expect(page2.statusCode).toBe(200)
+    const json2 = page2.json()
+    expect(json2.articles).toHaveLength(10)
+    expect(json2.has_more).toBe(true)
+    expect(json2.next_cursor).toBeTruthy()
+    // No duplicate IDs between page 1 and page 2
+    const ids1 = new Set(json1.articles.map((a: any) => a.id))
+    for (const a of json2.articles) {
+      expect(ids1.has(a.id)).toBe(false)
+    }
+
+    const page3 = await app.inject({
+      method: 'GET',
+      url: `/api/articles?feed_id=${feed.id}&limit=10&cursor=${encodeURIComponent(json2.next_cursor)}`,
+    })
+    expect(page3.statusCode).toBe(200)
+    const json3 = page3.json()
+    expect(json3.articles).toHaveLength(5)
+    expect(json3.has_more).toBe(false)
+    expect(json3.next_cursor).toBeNull()
+  })
 })
 
 describe('POST /api/inbox/topic-cooldowns', () => {
