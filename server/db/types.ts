@@ -11,6 +11,8 @@ export type {
   HighValueItem,
   HighValueResponse,
   InboxReasonCode,
+  SimilarArticleSummary,
+  SimilarGroup,
   ChatScope,
   ListChatScope,
   ListChatScopeFilters,

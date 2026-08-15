@@ -741,6 +741,26 @@ describe('GET /api/articles smart floor metadata', () => {
     expect(secondPage.json().articles).toHaveLength(10)
     expect(secondPage.json().total_without_floor).toBeUndefined()
   })
+
+  it('supports collapse_similar=1 parameter', async () => {
+    const feed1 = seedFeed()
+    const feed2 = seedFeed()
+    const a1 = seedArticle(feed1.id, { url: 'https://example.com/cs1' })
+    const a2 = seedArticle(feed2.id, { url: 'https://example.com/cs2' })
+    getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(a1, a2, 0.9)
+    getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(a2, a1, 0.9)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/articles?collapse_similar=1',
+    })
+
+    expect(res.statusCode).toBe(200)
+    const jsonBody = res.json()
+    expect(jsonBody.articles).toHaveLength(1)
+    expect(jsonBody.articles[0].similar_group).toBeDefined()
+    expect(jsonBody.articles[0].similar_group.count).toBe(2)
+  })
 })
 
 describe('POST /api/inbox/topic-cooldowns', () => {

@@ -1,5 +1,5 @@
 import { getDb, runNamed, getNamed, allNamed } from './connection.js'
-import type { Article, ArticleListItem, ArticleDetail, InboxSummary, HighValueArticle, HighValueResponse, InboxReasonCode } from './types.js'
+import type { Article, ArticleListItem, ArticleDetail, InboxSummary, HighValueArticle, HighValueResponse, InboxReasonCode, SimilarGroup } from './types.js'
 import type { MeiliArticleDoc } from '../search/client.js'
 import { syncArticleToSearch, deleteArticleFromSearch, deleteArticlesFromSearch, syncArticleScoreToSearch, syncArticleFiltersToSearch } from '../search/sync.js'
 import { RETRY_MAX_ATTEMPTS, RETRY_BATCH_LIMIT } from '../fetcher/util.js'
@@ -729,6 +729,108 @@ function writeSmartFloorCache(key: string, floor: string | null): void {
   }
 }
 
+function collapseSimilarArticles(
+  articles: ArticleListItem[],
+  requestedLimit: number,
+): { articles: ArticleListItem[]; hasMore?: boolean } {
+  if (articles.length === 0) return { articles: [] }
+
+  const ids = articles.map(a => a.id)
+  const placeholders = ids.map(() => '?').join(',')
+  const similarityRows = getDb().prepare(`
+    SELECT article_id, similar_to_id
+    FROM article_similarities
+    WHERE article_id IN (${placeholders})
+      AND similar_to_id IN (${placeholders})
+  `).all(...ids, ...ids) as { article_id: number; similar_to_id: number }[]
+
+  const adjacency = new Map<number, Set<number>>()
+  for (const id of ids) adjacency.set(id, new Set())
+  for (const row of similarityRows) {
+    adjacency.get(row.article_id)?.add(row.similar_to_id)
+    adjacency.get(row.similar_to_id)?.add(row.article_id)
+  }
+
+  const articleMap = new Map(articles.map(a => [a.id, a]))
+  const visited = new Set<number>()
+  const groups: ArticleListItem[][] = []
+
+  for (const article of articles) {
+    if (visited.has(article.id)) continue
+
+    const component: ArticleListItem[] = []
+    const queue = [article.id]
+    visited.add(article.id)
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!
+      const currentArticle = articleMap.get(currentId)
+      if (currentArticle) component.push(currentArticle)
+
+      for (const neighborId of adjacency.get(currentId) ?? []) {
+        if (!visited.has(neighborId)) {
+          visited.add(neighborId)
+          queue.push(neighborId)
+        }
+      }
+    }
+
+    groups.push(component)
+  }
+
+  const collapsed: ArticleListItem[] = groups.map(group => {
+    if (group.length === 1) return group[0]
+
+    const sorted = [...group].sort((a, b) => {
+      const aUnread = a.seen_at == null ? 1 : 0
+      const bUnread = b.seen_at == null ? 1 : 0
+      if (aUnread !== bUnread) return bUnread - aUnread
+
+      const aEngaged = (a.bookmarked_at != null || a.liked_at != null) ? 1 : 0
+      const bEngaged = (b.bookmarked_at != null || b.liked_at != null) ? 1 : 0
+      if (aEngaged !== bEngaged) return bEngaged - aEngaged
+
+      const aScore = a.inbox_score ?? a.score ?? 0
+      const bScore = b.inbox_score ?? b.score ?? 0
+      if (aScore !== bScore) return bScore - aScore
+
+      const aTime = a.published_at ? new Date(a.published_at).getTime() : 0
+      const bTime = b.published_at ? new Date(b.published_at).getTime() : 0
+      if (aTime !== bTime) return bTime - aTime
+
+      return b.id - a.id
+    })
+
+    const primary = sorted[0]
+    const secondary = sorted.slice(1)
+
+    const similar_group: SimilarGroup = {
+      count: group.length,
+      articles: secondary.map(a => ({
+        id: a.id,
+        feed_id: a.feed_id,
+        feed_name: a.feed_name,
+        feed_icon_url: a.feed_icon_url,
+        title: a.title,
+        url: a.url,
+        published_at: a.published_at,
+        seen_at: a.seen_at,
+        read_at: a.read_at,
+        bookmarked_at: a.bookmarked_at,
+        liked_at: a.liked_at,
+        score: a.score,
+      })),
+    }
+
+    return { ...primary, similar_group }
+  })
+
+  const hasMore = collapsed.length > requestedLimit
+  const resultArticles = hasMore ? collapsed.slice(0, requestedLimit) : collapsed
+
+  return { articles: resultArticles, hasMore }
+}
+
 export function getArticles(opts: {
   feedId?: number
   categoryId?: number
@@ -744,6 +846,7 @@ export function getArticles(opts: {
   excludeIds?: number[]
   limit: number
   offset: number
+  collapseSimilar?: boolean
   smartFloor?: boolean
   includeTotal?: boolean
   includeTotalWithoutFloor?: boolean
@@ -923,7 +1026,9 @@ export function getArticles(opts: {
 
   countQuery()
   const requestedLimit = Number(opts.limit)
-  const pageLimit = shouldIncludeTotal ? requestedLimit : requestedLimit + 1
+  const sqlLimit = opts.collapseSimilar
+    ? (shouldIncludeTotal ? requestedLimit * 2 : requestedLimit * 2 + 1)
+    : (shouldIncludeTotal ? requestedLimit : requestedLimit + 1)
   const pageRows = allNamed<ArticleListItem>(`
     ${inboxHistoryCtes}
     SELECT a.id, a.feed_id, f.name AS feed_name, f.icon_url AS feed_icon_url,
@@ -939,9 +1044,20 @@ export function getArticles(opts: {
     ${where}
     ORDER BY ${orderBy}
     LIMIT @_limit OFFSET @_offset
-  `, { ...params, _limit: pageLimit, _offset: Number(opts.offset) }).map((row) => mapArticleListItem(row as ArticleListItemRow))
-  const hasMore = shouldIncludeTotal ? undefined : pageRows.length > requestedLimit
-  const articles = hasMore ? pageRows.slice(0, requestedLimit) : pageRows
+  `, { ...params, _limit: sqlLimit, _offset: Number(opts.offset) }).map((row) => mapArticleListItem(row as ArticleListItemRow))
+
+  let articles: ArticleListItem[]
+  let hasMore: boolean | undefined
+
+  if (opts.collapseSimilar) {
+    const collapsed = collapseSimilarArticles(pageRows, requestedLimit)
+    articles = collapsed.articles
+    hasMore = shouldIncludeTotal ? undefined : collapsed.hasMore
+  } else {
+    hasMore = shouldIncludeTotal ? undefined : pageRows.length > requestedLimit
+    articles = hasMore ? pageRows.slice(0, requestedLimit) : pageRows
+  }
+
   if (!shouldIncludeTotal) {
     total = Number(opts.offset) + articles.length + (hasMore ? 1 : 0)
   }

@@ -77,6 +77,26 @@ export interface Article {
   created_at: string
 }
 
+export interface SimilarArticleSummary {
+  id: number
+  feed_id: number
+  feed_name: string
+  feed_icon_url?: string | null
+  title: string
+  url: string
+  published_at: string | null
+  seen_at: string | null
+  read_at: string | null
+  bookmarked_at: string | null
+  liked_at: string | null
+  score?: number
+}
+
+export interface SimilarGroup {
+  count: number
+  articles: SimilarArticleSummary[]
+}
+
 export interface ArticleListItem {
   id: number
   feed_id: number
@@ -99,6 +119,7 @@ export interface ArticleListItem {
   score?: number
   inbox_score?: number
   similar_count?: number
+  similar_group?: SimilarGroup
 }
 
 export interface ArticleDetail extends ArticleListItem {

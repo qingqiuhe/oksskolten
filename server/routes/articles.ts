@@ -127,6 +127,7 @@ const ArticlesQuery = z.object({
   liked: z.string().optional(),
   read: z.string().optional(),
   sort: z.enum(['score', 'oldest_unread', 'inbox_score']).optional(),
+  collapse_similar: z.string().optional(),
   no_floor: z.string().optional(),
   exclude_ids: z.string().optional(),
   limit: coerceOptionalNumber,
@@ -308,6 +309,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
     const liked = query.liked === '1'
     const read = query.read === '1'
     const sort = query.sort
+    const collapseSimilar = query.collapse_similar === '1'
     const noFloor = query.no_floor === '1'
     const excludeIds = parseExcludeIds(query.exclude_ids)
     if (excludeIds == null) {
@@ -331,6 +333,7 @@ export async function articleRoutes(api: FastifyInstance): Promise<void> {
       liked,
       read,
       sort,
+      collapseSimilar,
       excludeIds,
       limit,
       offset,
