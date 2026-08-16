@@ -40,6 +40,7 @@ import { HighValueSection } from './high-value-section'
 import { useUndoSeen } from '../../hooks/use-undo-seen'
 import { InboxSelectionBar } from './inbox-selection-bar'
 import { useScrollVirtualizer } from '../../hooks/use-scroll-virtualizer'
+import { SimilarGroupView } from './similar-group'
 
 interface ArticlesResponse {
   articles: ArticleListItem[]
@@ -248,6 +249,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       const excludeIds = highValueData?.represented_article_ids ?? []
       if (excludeIds.length > 0) params.set('exclude_ids', excludeIds.join(','))
     }
+    if (isInbox) params.set('collapse_similar', '1')
     if (noFloor) params.set('no_floor', '1')
     params.set('limit', String(PAGE_SIZE))
     if (pageIndex > 0 && previousPageData?.next_cursor) {
@@ -1445,6 +1447,14 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
                     openOverlay: t('inbox.openOverlay'),
                   }}
                 />
+                {article.similar_group && (
+                  <SimilarGroupView
+                    group={article.similar_group}
+                    onOpenOverlay={(url) => setOverlayUrl(url)}
+                    onToggleSeen={(secArt) => handleToggleSeen(secArt as any)}
+                    onToggleBookmark={(secArt) => handleToggleBookmark(secArt as any)}
+                  />
+                )}
               </div>
             </Fragment>
           )

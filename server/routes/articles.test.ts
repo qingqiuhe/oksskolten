@@ -765,6 +765,26 @@ describe('GET /api/articles smart floor metadata', () => {
     expect(returnedFeedIds).not.toContain(feed3.id)
   })
 
+  it('supports collapse_similar=1 parameter', async () => {
+    const feed1 = seedFeed()
+    const feed2 = seedFeed()
+    const a1 = seedArticle(feed1.id, { url: 'https://example.com/cs1' })
+    const a2 = seedArticle(feed2.id, { url: 'https://example.com/cs2' })
+    getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(a1, a2, 0.9)
+    getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(a2, a1, 0.9)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/articles?collapse_similar=1',
+    })
+
+    expect(res.statusCode).toBe(200)
+    const jsonBody = res.json()
+    expect(jsonBody.articles).toHaveLength(1)
+    expect(jsonBody.articles[0].similar_group).toBeDefined()
+    expect(jsonBody.articles[0].similar_group.count).toBe(2)
+  })
+
   it('supports cursor pagination across page boundaries', async () => {
     const feed = seedFeed()
     for (let i = 0; i < 25; i++) {
@@ -843,8 +863,6 @@ describe('PATCH /api/articles/batch-bookmark', () => {
     })
 
     expect(res.statusCode).toBe(400)
-  })
-})
   })
 })
 

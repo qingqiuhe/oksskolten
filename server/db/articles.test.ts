@@ -1181,6 +1181,27 @@ describe('inbox_score sorting', () => {
     expect(baseArticle?.similar_count).toBe(2)
   })
 
+  it('collapses similar articles into groups when collapseSimilar is enabled', () => {
+    const feed1 = seedFeed({ name: 'Feed 1', url: 'https://feed1.example.com' })
+    const feed2 = seedFeed({ name: 'Feed 2', url: 'https://feed2.example.com' })
+    const a1 = seedArticle(feed1.id, { title: 'Story A source 1', url: 'https://f1.com/a', published_at: hoursAgo(2) })
+    const a2 = seedArticle(feed2.id, { title: 'Story A source 2', url: 'https://f2.com/a', published_at: hoursAgo(3) })
+    seedArticle(feed1.id, { title: 'Unrelated Story', url: 'https://f1.com/b', published_at: hoursAgo(1) })
+
+    // Link a1 and a2 as similar
+    getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(a1, a2, 0.95)
+    getDb().prepare('INSERT INTO article_similarities (article_id, similar_to_id, score) VALUES (?, ?, ?)').run(a2, a1, 0.95)
+
+    const result = getArticles({ collapseSimilar: true, limit: 10, offset: 0 })
+    expect(result.articles).toHaveLength(2)
+
+    const grouped = result.articles.find(a => a.id === a1 || a.id === a2)
+    expect(grouped).toBeDefined()
+    expect(grouped?.similar_group).toBeDefined()
+    expect(grouped?.similar_group?.count).toBe(2)
+    expect(grouped?.similar_group?.articles).toHaveLength(1)
+  })
+
   it('favors unread articles from historically preferred feeds', () => {
     const preferredFeed = seedFeed({ name: 'Preferred', url: 'https://preferred.example.com' })
     const otherFeed = seedFeed({ name: 'Other', url: 'https://other.example.com' })
