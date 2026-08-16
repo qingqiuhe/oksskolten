@@ -383,7 +383,7 @@ describe('POST /api/chat — auto-title', () => {
 // POST /api/chat — error handling
 // ---------------------------------------------------------------------------
 describe('POST /api/chat — error handling', () => {
-  it('sends error event and removes user message on adapter failure', async () => {
+  it('sends error event and persists failed turn metadata for recovery', async () => {
     seedUser()
     const token = getToken()
 
@@ -402,10 +402,13 @@ describe('POST /api/chat — error handling', () => {
     expect(errorEvent).toBeDefined()
     expect(errorEvent.error).toBe('LLM API failed')
 
-    // User message should have been deleted
+    // Failed turn is persisted with error status for retry and recovery
     const convId = events.find((e: any) => e.type === 'conversation_id')!.conversation_id
     const messages = getChatMessages(convId)
-    expect(messages).toHaveLength(0)
+    expect(messages).toHaveLength(2)
+    expect(messages[0].role).toBe('user')
+    expect(messages[1].role).toBe('assistant')
+    expect(messages[1].metadata).toContain('error')
   })
 })
 

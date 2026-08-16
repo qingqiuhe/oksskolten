@@ -211,6 +211,15 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
       : null,
     fetcher,
   )
+  const [inboxFilters, setInboxFilters] = useState<InboxFilters>(readStoredInboxFilters)
+
+  useEffect(() => {
+    if (!isInbox || typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(INBOX_FILTERS_STORAGE_KEY, JSON.stringify(inboxFilters))
+    } catch {}
+  }, [inboxFilters, isInbox])
+
   const getKey = (pageIndex: number, previousPageData: ArticlesResponse | null) => {
     if (previousPageData && !previousPageData.has_more) return null
     const params = new URLSearchParams()
@@ -280,14 +289,6 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
 
   const articles = useMemo(() => data ? data.flatMap(page => page.articles) : [], [data])
   const [renderWindowExtra, setRenderWindowExtra] = useState(0)
-  const [inboxFilters, setInboxFilters] = useState<InboxFilters>(readStoredInboxFilters)
-
-  useEffect(() => {
-    if (!isInbox || typeof window === 'undefined') return
-    try {
-      window.localStorage.setItem(INBOX_FILTERS_STORAGE_KEY, JSON.stringify(inboxFilters))
-    } catch {}
-  }, [inboxFilters, isInbox])
   const [translateTitlesEnabled, setTranslateTitlesEnabled] = useState(false)
   const [translateTitlesStatus, setTranslateTitlesStatus] = useState<TranslateTitlesStatus>('idle')
   const [translatedTitles, setTranslatedTitles] = useState<Record<number, string>>({})

@@ -1245,7 +1245,7 @@ export function getArticles(opts: {
     ${where}
     ORDER BY ${orderBy}
     LIMIT @_limit OFFSET @_offset
-  }, { ...params, _limit: sqlLimit, _offset: Number(opts.offset) }).map((row) => mapArticleListItem(row as ArticleListItemRow))
+  `, { ...params, _limit: sqlLimit, _offset: Number(opts.offset) }).map((row) => mapArticleListItem(row as ArticleListItemRow))
 
   let articles: ArticleListItem[]
   let hasMore: boolean | undefined
