@@ -39,6 +39,7 @@ import { InboxGroupHeader } from './inbox-group-header'
 import { HighValueSection } from './high-value-section'
 import { useUndoSeen } from '../../hooks/use-undo-seen'
 import { InboxSelectionBar } from './inbox-selection-bar'
+import { useScrollVirtualizer } from '../../hooks/use-scroll-virtualizer'
 
 interface ArticlesResponse {
   articles: ArticleListItem[]
@@ -297,11 +298,25 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     : 0
   const renderedArticleLimit = ARTICLE_RENDER_WINDOW_SIZE + renderWindowExtra
   const hiddenLoadedArticleCount = Math.max(0, articles.length - renderedArticleLimit)
-  const renderedArticles = useMemo(() => (
+  const windowArticles = useMemo(() => (
     hiddenLoadedArticleCount > 0
       ? articles.slice(hiddenLoadedArticleCount)
       : articles
   ), [articles, hiddenLoadedArticleCount])
+
+  const listContainerRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useScrollVirtualizer({
+    totalCount: windowArticles.length,
+    estimateItemHeight: isGridLayout ? 220 : 90,
+    containerRef: listContainerRef,
+  })
+
+  const renderedArticles = useMemo(() => {
+    if (typeof window !== 'undefined' && window.scrollY > 0 && virtualizer.isVirtualizing) {
+      return windowArticles.slice(virtualizer.startIndex, virtualizer.endIndex)
+    }
+    return windowArticles
+  }, [windowArticles, virtualizer.isVirtualizing, virtualizer.startIndex, virtualizer.endIndex])
   const allArticleIds = useMemo(() => articles.map(article => article.id), [articles])
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedArticleIds, setSelectedArticleIds] = useState<Set<number>>(() => new Set())
@@ -1296,7 +1311,7 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
         )
       )}
 
-      <div className={isGridLayout ? 'grid grid-cols-1 md:grid-cols-2 gap-4 px-4 md:px-6' : ''}>
+      <div ref={listContainerRef} className={isGridLayout ? 'grid grid-cols-1 md:grid-cols-2 gap-4 px-4 md:px-6' : ''}>
         {hiddenLoadedArticleCount > 0 && (
           <div
             data-testid="article-render-window-placeholder"
@@ -1316,8 +1331,16 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
             </button>
           </div>
         )}
+        {virtualizer.isVirtualizing && virtualizer.topSpacerHeight > 0 && (
+          <div
+            data-testid="virtual-top-spacer"
+            className={isGridLayout ? 'col-span-full' : ''}
+            style={{ height: `${virtualizer.topSpacerHeight}px` }}
+            aria-hidden="true"
+          />
+        )}
         {renderedArticles.map((article, relativeIndex) => {
-          const index = hiddenLoadedArticleCount + relativeIndex
+          const index = hiddenLoadedArticleCount + (typeof window !== 'undefined' && window.scrollY > 0 && virtualizer.isVirtualizing ? virtualizer.startIndex : 0) + relativeIndex
           const isAutoRead = autoReadIds.has(article.id)
           const effectiveArticle = isAutoRead
             ? { ...article, seen_at: article.seen_at ?? new Date().toISOString() }
@@ -1421,6 +1444,14 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
             </Fragment>
           )
         })}
+        {virtualizer.isVirtualizing && virtualizer.bottomSpacerHeight > 0 && (
+          <div
+            data-testid="virtual-bottom-spacer"
+            className={isGridLayout ? 'col-span-full' : ''}
+            style={{ height: `${virtualizer.bottomSpacerHeight}px` }}
+            aria-hidden="true"
+          />
+        )}
       </div>
 
       {hasMore && (
