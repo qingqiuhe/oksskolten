@@ -45,6 +45,7 @@ interface ArticlesResponse {
   articles: ArticleListItem[]
   total: number
   has_more: boolean
+  next_cursor?: string | null
   total_without_floor?: number
   total_all?: number
 }
@@ -249,7 +250,11 @@ export const ArticleList = forwardRef<ArticleListHandle, ArticleListProps>(funct
     }
     if (noFloor) params.set('no_floor', '1')
     params.set('limit', String(PAGE_SIZE))
-    params.set('offset', String(pageIndex * PAGE_SIZE))
+    if (pageIndex > 0 && previousPageData?.next_cursor) {
+      params.set('cursor', previousPageData.next_cursor)
+    } else {
+      params.set('offset', String(pageIndex * PAGE_SIZE))
+    }
     return `/api/articles?${params.toString()}`
   }
 

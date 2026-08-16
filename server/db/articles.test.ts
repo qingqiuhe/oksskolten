@@ -1871,6 +1871,91 @@ describe('getArticles smartFloor', () => {
   })
 })
 
+describe('getArticles cursor pagination', () => {
+  it('returns nextCursor and seamlessly fetches subsequent pages', () => {
+    const feed = seedFeed()
+    for (let i = 0; i < 15; i++) {
+      seedArticle(feed.id, {
+        url: `https://example.com/cur-test-${i}`,
+        published_at: new Date(Date.now() - i * 10_000).toISOString(),
+      })
+    }
+
+    const page1 = getArticles({
+      feedId: feed.id,
+      limit: 5,
+      offset: 0,
+    })
+    expect(page1.articles).toHaveLength(5)
+    expect(page1.hasMore).toBe(true)
+    expect(page1.nextCursor).toBeTruthy()
+
+    const page2 = getArticles({
+      feedId: feed.id,
+      limit: 5,
+      offset: 0,
+      cursor: page1.nextCursor!,
+    })
+    expect(page2.articles).toHaveLength(5)
+    expect(page2.hasMore).toBe(true)
+    expect(page2.nextCursor).toBeTruthy()
+
+    const p1Ids = page1.articles.map(a => a.id)
+    const p2Ids = page2.articles.map(a => a.id)
+    for (const id of p2Ids) {
+      expect(p1Ids).not.toContain(id)
+    }
+
+    const page3 = getArticles({
+      feedId: feed.id,
+      limit: 5,
+      offset: 0,
+      cursor: page2.nextCursor!,
+    })
+    expect(page3.articles).toHaveLength(5)
+    expect(page3.hasMore).toBe(false)
+    expect(page3.nextCursor).toBeNull()
+  })
+
+  it('supports cursor pagination with oldest_unread sort', () => {
+    const feed = seedFeed()
+    for (let i = 0; i < 10; i++) {
+      seedArticle(feed.id, {
+        url: `https://example.com/cur-oldest-${i}`,
+        published_at: new Date(Date.now() - (10 - i) * 60_000).toISOString(),
+      })
+    }
+
+    const page1 = getArticles({
+      feedId: feed.id,
+      unread: true,
+      sort: 'oldest_unread',
+      limit: 4,
+      offset: 0,
+    })
+    expect(page1.articles).toHaveLength(4)
+    expect(page1.hasMore).toBe(true)
+    expect(page1.nextCursor).toBeTruthy()
+
+    const page2 = getArticles({
+      feedId: feed.id,
+      unread: true,
+      sort: 'oldest_unread',
+      limit: 4,
+      offset: 0,
+      cursor: page1.nextCursor!,
+    })
+    expect(page2.articles).toHaveLength(4)
+    expect(page2.hasMore).toBe(true)
+
+    const p1Ids = page1.articles.map(a => a.id)
+    const p2Ids = page2.articles.map(a => a.id)
+    for (const id of p2Ids) {
+      expect(p1Ids).not.toContain(id)
+    }
+  })
+})
+
 // --- getRetryArticles ---
 
 describe('getRetryArticles', () => {

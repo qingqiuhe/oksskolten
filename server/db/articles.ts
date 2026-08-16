@@ -850,6 +850,31 @@ function writeSmartFloorCache(key: string, floor: string | null): void {
   }
 }
 
+export interface ArticleCursor {
+  id: number
+  published_at?: string | null
+  date?: string | null
+  score?: number | null
+  sort?: string
+}
+
+export function encodeArticleCursor(cursor: ArticleCursor): string {
+  return Buffer.from(JSON.stringify(cursor)).toString('base64url')
+}
+
+export function decodeArticleCursor(raw: string): ArticleCursor | null {
+  try {
+    const json = Buffer.from(raw, 'base64url').toString('utf-8')
+    const parsed = JSON.parse(json)
+    if (parsed && typeof parsed === 'object' && typeof parsed.id === 'number') {
+      return parsed as ArticleCursor
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export function getArticles(opts: {
   feedId?: number
   feedIds?: number[]
@@ -866,12 +891,13 @@ export function getArticles(opts: {
   excludeIds?: number[]
   limit: number
   offset: number
+  cursor?: string
   smartFloor?: boolean
   includeTotal?: boolean
   includeTotalWithoutFloor?: boolean
   perfStats?: { queryCount: number }
   userId?: number | null
-}): { articles: ArticleListItem[]; total: number; hasMore?: boolean; totalWithoutFloor?: number } {
+}): { articles: ArticleListItem[]; total: number; hasMore?: boolean; nextCursor?: string | null; totalWithoutFloor?: number } {
   const conditions: string[] = []
   const params: Record<string, unknown> = {}
   const scopedUserId = resolveUserId(opts.userId)
@@ -933,6 +959,52 @@ export function getArticles(opts: {
     opts.excludeIds.forEach((id, index) => {
       params[`excludeId_${index}`] = id
     })
+  }
+
+  // Cursor condition for keyset pagination (issue #13)
+  const decodedCursor = opts.cursor ? decodeArticleCursor(opts.cursor) : null
+  if (decodedCursor) {
+    if (opts.sort === 'oldest_unread') {
+      const cursorDate = decodedCursor.date ?? decodedCursor.published_at
+      if (cursorDate) {
+        conditions.push(`(
+          COALESCE(a.published_at, a.fetched_at) > @cursorDate
+          OR (COALESCE(a.published_at, a.fetched_at) = @cursorDate AND a.id > @cursorId)
+        )`)
+        params.cursorDate = cursorDate
+        params.cursorId = decodedCursor.id
+      } else {
+        conditions.push('a.id > @cursorId')
+        params.cursorId = decodedCursor.id
+      }
+    } else if (opts.sort === 'score') {
+      if (decodedCursor.score != null) {
+        conditions.push(`(
+          a.score < @cursorScore
+          OR (a.score = @cursorScore AND (a.published_at < @cursorPublishedAt OR (a.published_at = @cursorPublishedAt AND a.id < @cursorId)))
+        )`)
+        params.cursorScore = decodedCursor.score
+        params.cursorPublishedAt = decodedCursor.published_at ?? null
+        params.cursorId = decodedCursor.id
+      } else {
+        conditions.push('a.id < @cursorId')
+        params.cursorId = decodedCursor.id
+      }
+    } else {
+      // Default: published_at DESC, id DESC (newest)
+      const cursorDate = decodedCursor.published_at ?? decodedCursor.date
+      if (cursorDate) {
+        conditions.push(`(
+          COALESCE(a.published_at, a.fetched_at) < @cursorDate
+          OR (COALESCE(a.published_at, a.fetched_at) = @cursorDate AND a.id < @cursorId)
+        )`)
+        params.cursorDate = cursorDate
+        params.cursorId = decodedCursor.id
+      } else {
+        conditions.push('a.id < @cursorId')
+        params.cursorId = decodedCursor.id
+      }
+    }
   }
 
   // Smart floor: limit the displayed range to keep lists manageable.
@@ -1069,13 +1141,31 @@ export function getArticles(opts: {
     ORDER BY ${orderBy}
     LIMIT @_limit OFFSET @_offset
   `, { ...params, _limit: pageLimit, _offset: Number(opts.offset) }).map((row) => mapArticleListItem(row as ArticleListItemRow))
-  const hasMore = shouldIncludeTotal ? undefined : pageRows.length > requestedLimit
-  const articles = hasMore ? pageRows.slice(0, requestedLimit) : pageRows
+  const hasMore = shouldIncludeTotal ? (requestedLimit > 0 && pageRows.length > 0 && opts.offset + pageRows.length < total) : pageRows.length > requestedLimit
+  const articles = hasMore && !shouldIncludeTotal ? pageRows.slice(0, requestedLimit) : pageRows
   if (!shouldIncludeTotal) {
     total = Number(opts.offset) + articles.length + (hasMore ? 1 : 0)
   }
 
-  return { articles, total, ...(hasMore != null ? { hasMore } : {}), ...(totalWithoutFloor != null && totalWithoutFloor > total ? { totalWithoutFloor } : {}) }
+  let nextCursor: string | null = null
+  if (hasMore && articles.length > 0) {
+    const last = articles[articles.length - 1]
+    nextCursor = encodeArticleCursor({
+      id: last.id,
+      published_at: last.published_at,
+      date: last.published_at ?? null,
+      score: last.score ?? null,
+      sort: opts.sort,
+    })
+  }
+
+  return {
+    articles,
+    total,
+    ...(hasMore != null ? { hasMore } : {}),
+    nextCursor: nextCursor ?? null,
+    ...(totalWithoutFloor != null && totalWithoutFloor > total ? { totalWithoutFloor } : {}),
+  }
 }
 
 export function getInboxSummary(userId?: number | null): InboxSummary {
